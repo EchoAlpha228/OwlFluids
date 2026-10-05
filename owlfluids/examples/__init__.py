@@ -47,8 +47,60 @@ def lox_feed() -> System:
     return s
 
 
+def ln2_wet_dress() -> System:
+    """LN2 stand-in for LOX: loaded run tank, line chilldown through a bleed, then flow."""
+    s = System("LN2 wet dress")
+    s.add("K-N2", "tank", fluid="nitrogen", volume="49 L", pressure="3000 psi", temperature="20 C", at=[0, -220])
+    s.add("REG", "regulator", cv=0.3, setpoint="250 psi", droop="20 psi", at=[150, -220])
+    s.add("V-P", "valve", cv=0.3, at=[300, -220])
+    s.add("L-P", "pipe", length="2 m", diameter="6 mm", at=[300, -120])
+    s.add("TK", "pressurized_tank", liquid="nitrogen", pressurant="nitrogen", volume="100 L", fill=0.85,
+          pressure="40 psi", liquid_temperature="78 K", diameter="0.4 m", at=[0, 0])
+    s.add("V-V", "valve", cv=0.3, at=[150, -80])
+    s.add("ATM-V", "boundary", fluid="nitrogen", at=[300, -40])
+    s.add("V-M", "valve", cv=4, open_time="200 ms", at=[150, 160])
+    s.add("L-F", "pipe", length="4 m", diameter="0.5 in", wall_thickness="0.049 in", segments=4, at=[300, 160])
+    s.add("TEE", "tee", at=[450, 160])
+    s.add("V-B", "valve", cv=0.2, at=[450, 260])
+    s.add("ATM-B", "boundary", fluid="nitrogen", at=[600, 260])
+    s.add("INJ", "orifice", cda="25 mm2", at=[600, 160])
+    s.add("ATM", "boundary", fluid="nitrogen", at=[750, 160])
+    for a, b in [("K-N2.port", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "L-P.in"), ("L-P.out", "TK.gas"),
+                 ("TK.gas", "V-V.in"), ("V-V.out", "ATM-V.port"), ("TK.liquid", "V-M.in"), ("V-M.out", "L-F.in"),
+                 ("L-F.out", "TEE.a"), ("TEE.b", "INJ.in"), ("INJ.out", "ATM.port"), ("TEE.d", "V-B.in"),
+                 ("V-B.out", "ATM-B.port")]:
+        s.connect(a, b)
+    s.sense("PT-TK", "pressure", "TK.gas", units="psi")
+    s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
+    s.sense("TC-INJ", "temperature", "INJ.in", units="K")
+    s.sense("TC-LINE", "wall_temperature", "L-F.s2", units="K")
+    s.sense("FM-LN2", "mass_flow", "V-M", units="kg/s")
+    s.sense("M-LN2", "mass", "TK", units="kg")
+    return s
+
+
+def n2o_blowdown() -> System:
+    """Self-pressurizing nitrous run tank drained through a valve and injector."""
+    s = System("Nitrous blowdown")
+    s.add("K", "tank", fluid="nitrous", volume="10 L", fill=0.8, temperature="20 C", at=[0, 0])
+    s.add("V", "valve", cv=0.3, open_time="20 ms", at=[150, 50])
+    s.add("INJ", "orifice", cda="10 mm2", at=[300, 50])
+    s.add("ATM", "boundary", fluid="nitrous", at=[450, 50])
+    s.connect("K.bottom", "V.in")
+    s.connect("V.out", "INJ.in")
+    s.connect("INJ.out", "ATM.port")
+    s.sense("PT-K", "pressure", "K.port", units="psi")
+    s.sense("TC-K", "temperature", "K.port", units="C")
+    s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
+    s.sense("FM-N2O", "mass_flow", "INJ", units="kg/s")
+    s.sense("M-N2O", "mass", "K", units="kg")
+    return s
+
+
 EXAMPLES = {
     "gn2-blowdown": gn2_blowdown,
     "lox-feed": lox_feed,
+    "ln2-wet-dress": ln2_wet_dress,
+    "n2o-blowdown": n2o_blowdown,
     "test-stand": engine_test_stand,
 }

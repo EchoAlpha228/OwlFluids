@@ -65,7 +65,7 @@ class Simulation:
         self.fl = self.net.fluids.arrays()
         self.step_budget = self._step_budget()
 
-    def _step_budget(self, share: float = 0.6) -> float:
+    def _step_budget(self, share: float = 0.35) -> float:
         """Work one step may spend, in right-hand-side evaluations.
 
         Sized so a step uses at most ``share`` of dt on a typical desktop CPU

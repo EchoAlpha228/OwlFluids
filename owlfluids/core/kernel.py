@@ -267,18 +267,31 @@ def _draw(i, d, NI, W, fl):
 
 
 @inl
+def _soft_unit(o):
+    """Clamp to [0, 1] with rounded corners (C1), so pressure-actuated valves don't chatter in Newton."""
+    w = 0.02
+    if o <= -w:
+        return 0.0
+    if o < w:
+        return (o + w) * (o + w) / (4.0 * w)
+    if o <= 1.0 - w:
+        return o
+    if o < 1.0 + w:
+        return 1.0 - (1.0 + w - o) * (1.0 + w - o) / (4.0 * w)
+    return 1.0
+
+
+@inl
 def _opening(k, LI, LF, LV, pa, pb):
     c = LI[k, L_CTRL]
     if c == CTRL_VALVE:
         return LV[k, V_POS]
     if c == CTRL_CHECK or c == CTRL_RELIEF:
-        o = (pa - pb - LF[k, LF_P1]) / LF[k, LF_P2]
-        return min(max(o, 0.0), 1.0)
+        return _soft_unit((pa - pb - LF[k, LF_P1]) / LF[k, LF_P2])
     if c == CTRL_REGULATOR:
         if pa <= pb:
             return 0.0
-        o = (LF[k, LF_P1] - pb) / LF[k, LF_P2]
-        return min(max(o, 0.0), 1.0)
+        return _soft_unit((LF[k, LF_P1] - pb) / LF[k, LF_P2])
     return 1.0
 
 

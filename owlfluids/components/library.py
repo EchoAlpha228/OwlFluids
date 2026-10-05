@@ -263,8 +263,11 @@ class Pipe(ComponentType):
         wall = None
         thick = cls.param(comp, "wall_thickness")
         if thick:
+            # walls sit on the interior volumes, so a walled line needs at least two
+            # segments; the whole line's wall is shared among the interior volumes
+            n = max(n, 2)
             mat = MATERIALS[cls.param(comp, "wall_material")]
-            seg_len = length / n
+            seg_len = length / (n - 1)
             d_out = d + 2 * thick
             m_wall = mat["density"] * math.pi / 4 * (d_out**2 - d**2) * seg_len
             wall = (m_wall * mat["cp"],

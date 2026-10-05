@@ -39,6 +39,7 @@ class _Node:
     area: float = 0.0
     bp: float = 0.0
     bt: float = 0.0
+    primed: bool = False  # initial state copied from the volume it is open to
 
 
 @dataclass
@@ -353,11 +354,15 @@ class NetworkBuilder:
 
         adj = defaultdict(list)
         for lk in self.links:
+            if lk.kind == L.LINK_ORIFICE and lk.ctrl == L.CTRL_REGULATOR:
+                # a regulated line sits locked up at its setpoint (gas sources only)
+                adj[lk.a].append((lk.b, lk.draw_a, lk.p1))
+                continue
             if lk.kind == L.LINK_ORIFICE and lk.ctrl != L.CTRL_FIXED:
                 if lk.ctrl != L.CTRL_VALVE or not lk.valve or lk.valve[0] <= 0.0:
                     continue
-            adj[lk.a].append((lk.b, lk.draw_a))
-            adj[lk.b].append((lk.a, lk.draw_b))
+            adj[lk.a].append((lk.b, lk.draw_a, None))
+            adj[lk.b].append((lk.a, lk.draw_b, None))
         state: dict[int, tuple] = {}
         q = deque()
         for i, n in enumerate(self.nodes):
@@ -365,13 +370,19 @@ class NetworkBuilder:
                 q.append((i, None))
         while q:
             i, st = q.popleft()
-            for j, draw in adj[i]:
+            for j, draw, setpoint in adj[i]:
                 if j in state or explicit(self.nodes[j]):
                     continue
-                state[j] = st if st is not None else source_state(i, draw)
-                q.append((j, state[j]))
+                new = st if st is not None else source_state(i, draw)
+                if setpoint is not None:
+                    if new[0] != "pt" or new[1] is None:
+                        continue
+                    new = ("pt", min(new[1], setpoint), new[2])
+                state[j] = new
+                q.append((j, new))
         for j, st in state.items():
             self.nodes[j].init = st
+            self.nodes[j].primed = True
 
     def _compile(self) -> Network:
         sysm = self.system
@@ -434,7 +445,8 @@ class NetworkBuilder:
                 NF[i, L.NF_HA] = ha_in
                 NF[i, L.NF_HAAMB] = ha_out
                 NF[i, L.NF_TAMB] = t_amb
-                x0.append(t_amb)
+                # a line primed from a tank has been sitting full: its wall is at the fluid's temperature
+                x0.append(t0 if n.primed else t_amb)
                 xscale.append(100.0)
         # ullage nodes need the liquid reference density of their partner
         LI = np.zeros((nl, L.N_LI), dtype=np.int64)
