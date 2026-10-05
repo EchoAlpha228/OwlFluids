@@ -214,7 +214,8 @@ def cmd_bench(args) -> int:
     t0 = time.perf_counter()
     sim = Simulation(engine_test_stand())
     print(f"build + compile: {time.perf_counter() - t0:.1f} s; {len(sim.system.components)} components, "
-          f"{sim.net.n_states} states")
+          f"{sim.net.n_states} states; step budget {sim.step_budget:.0f} evaluations "
+          f"({sim.rhs_seconds * 1e6:.1f} us each)")
     sim.run(0.1)
     phases = [("pressurize", ["V-OXP", "V-FUP"], [], 1.0), ("lock up", [], ["V-OXV", "V-FUV"], 1.0),
               ("main valves open", ["V-OXM", "V-FUM"], [], 0.5), ("steady flow", [], [], 1.5),

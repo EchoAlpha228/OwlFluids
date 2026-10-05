@@ -36,3 +36,32 @@ def test_engine_stand_runs_faster_than_real_time():
     assert t.mean() < 0.5
     assert t.max() < 1.5
     assert sim.read("FM-OX") == pytest.approx(0.0, abs=0.05)
+
+
+def _feed_transient(budget):
+    """Injector pressure every 10 ms for 1 s after the main valves open."""
+    sim = Simulation(engine_test_stand(), step_budget=budget)
+    sim.run(0.1)
+    sim.open("V-OXP", "V-FUP")
+    sim.run(1.0)
+    sim.close("V-OXV", "V-FUV")
+    sim.run(0.5)
+    sim.open("V-OXM", "V-FUM")
+    out = []
+    for _ in range(100):
+        sim.run(0.01)
+        out.append(sim.read("PT-OXI"))
+    return np.array(out), sim.solver_stats()["forced_steps"]
+
+
+@pytest.mark.slow
+def test_small_budget_keeps_the_valve_transient():
+    """A slow machine gets a small work budget; the LOX feed transient must still match."""
+    ref, forced_ref = _feed_transient(200)
+    small, forced_small = _feed_transient(12)
+    assert forced_ref < 10
+    assert forced_small < 300
+    arrival = [np.argmax(p > 100 * 6894.757) for p in (ref, small)]  # liquid reaches the injector
+    assert ref[arrival[0]] > 100 * 6894.757 and small[arrival[1]] > 100 * 6894.757
+    assert abs(arrival[0] - arrival[1]) <= 3  # within 30 ms
+    assert np.mean(small[-30:]) == pytest.approx(np.mean(ref[-30:]), rel=0.03)

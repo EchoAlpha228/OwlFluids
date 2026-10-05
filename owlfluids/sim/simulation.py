@@ -68,6 +68,7 @@ class Simulation:
         self._empty_h = np.zeros((0, max(nn, 1)))
         self._empty_l = np.zeros((0, max(nl, 1)))
         self.fl = self.net.fluids.arrays()
+        self.rhs_seconds = 0.0
         self.step_budget = float(self._fixed_budget) if self._fixed_budget else self._step_budget()
         # nodes whose fluid uses the property tables, which stop at tables.T_MAX
         from ..fluids import tables
@@ -96,7 +97,7 @@ class Simulation:
             runs.append((time.perf_counter() - t0) / 20)
         # the median, not the best: leaves margin when other threads (GUI, Synnax) share the CPU
         self.rhs_seconds = cost = sorted(runs)[len(runs) // 2]
-        return float(min(max(share * self.dt / (1.5 * max(cost, 1e-9)), 8.0), 1000.0))
+        return float(min(max(share * self.dt / (1.5 * max(cost, 1e-9)), 12.0), 1000.0))
 
     def reset(self) -> None:
         """Back to the initial conditions of the system."""
@@ -106,7 +107,7 @@ class Simulation:
         self.NF = net.NF.copy()
         self.t = 0.0
         self.steps = 0
-        self.ctl = np.zeros(10)
+        self.ctl = np.zeros(12)
         self.ctl[1] = -1.0
         self.ctl[4] = 1.0
         self.ctl[9] = self.step_budget

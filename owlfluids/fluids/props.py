@@ -48,7 +48,7 @@ from .tables import (
     X,
 )
 
-jit = nb.njit(cache=True, fastmath=False, nogil=True, _nrt=False)
+jit = nb.njit(cache=True, fastmath=False, nogil=True, _nrt=False, error_model="numpy")
 
 
 @jit

@@ -88,7 +88,9 @@ from .layout import (
 # Compiled without Numba's reference counting: nothing here allocates, and the
 # counting otherwise costs more than the physics in the small per-node and
 # per-link helpers.
-jit = nb.njit(cache=True, nogil=True, _nrt=False)
+# error_model="numpy": a division by zero in a wild Newton iterate gives inf/nan,
+# which the finiteness checks reject, instead of raising out of the time loop
+jit = nb.njit(cache=True, nogil=True, _nrt=False, error_model="numpy")
 inl = jit
 
 G0 = 9.80665
@@ -582,6 +584,8 @@ def _chop(xk, bvec, iperm, NI, NF, fl):
             continue
         sx = NI[i, N_SX]
         m0 = xk[sx]
+        if not m0 > 0.0:
+            continue  # the step will be rejected as non-physical
         dm = bvec[iperm[sx]]
         du = bvec[iperm[sx + 1]]
         a = 1.0
@@ -686,11 +690,12 @@ def _factor(h, NI, jvals, col_ptr, col_rows, iperm, kl, ku, ab, piv):
 # fixed work budget (see ``advance``).
 NEWTON_MAX = 8
 NEWTON_TOL = 1e-4  # scaled Newton update that counts as converged
-NEWTON_REJAC = 1e-2  # update size above which the Jacobian is rebuilt at the iterate
+NEWTON_REJAC = 1.0  # first-update size above which the Jacobian is rebuilt at the iterate
 ACCEPT_TOL = 1e-2  # an unconverged step is still taken if its last update was this small
 JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickly
 JAC_COST = 5.0  # a Jacobian plus factorization, in right-hand-side evaluations
 MIN_SUBSTEP = 1.0 / 16.0  # smallest retry, as a fraction of dt
+WORK_BANK = 4.0  # unspent budget carried to later steps, in step budgets
 
 
 @jit
@@ -698,10 +703,11 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl):
     """One backward-Euler step of size h from x into xk by damped modified Newton.
 
-    ``ctl``: [jac_fresh, lu_h, iterations of last solve, jac_age, need_jac, clamped mass, stalls,
-    argmax state, work used, work budget]. Every iterate is a whole (possibly uniformly damped)
-    Newton update, so each flux's mass and energy leave one node and enter the next: any
-    iterate conserves like a converged one and is safe to force when the budget runs out.
+    ``ctl``: [jac_fresh, lu_h, iterations of last solve, jac_age, need_jac, Jacobians made, stalls,
+    argmax state, work used, work budget, banked work, this step's allowance]. Every iterate is
+    a whole (possibly uniformly damped) Newton update, so each flux's mass and energy leave one
+    node and enter the next: any iterate conserves like a converged one and is safe to force
+    when the budget runs out.
     Returns success.
     """
     n = x.shape[0]
@@ -711,6 +717,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
         _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
         ctl[0] = 1.0
+        ctl[5] += 1.0
         ctl[3] = 0.0
         ctl[4] = 0.0
         ctl[1] = -1.0
@@ -723,7 +730,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     err_prev = 1e30
     for it in range(NEWTON_MAX):
         ctl[8] += 1.0
-        if ctl[8] > ctl[9]:
+        if ctl[8] > ctl[11]:
             return False
         rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
         for i in range(n):
@@ -748,12 +755,13 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             # stalled on a kink of the interpolated tables, already close: take it
             ctl[6] += 1.0
             break
-        if it + 1 < NEWTON_MAX and (err > NEWTON_REJAC or (it >= 1 and ctl[0] == 0.0 and err > 0.1 * err_prev)):
-            # large or slow correction: re-linearize at the current iterate
+        if it + 1 < NEWTON_MAX and ((it == 0 and err > NEWTON_REJAC) or (it >= 1 and err > 0.25 * err_prev)):
+            # a huge first update, or slow convergence: re-linearize at the current iterate
             ctl[8] += JAC_COST + 1.0
             rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
             _jacobian(xk, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
             ctl[0] = 1.0
+            ctl[5] += 1.0
             ctl[3] = 0.0
             if not _factor(h, NI, jvals, st[0], st[1], iperm, kl, ku, ab, piv):
                 return False
@@ -794,8 +802,9 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
 
     A step whose Newton iteration does not converge is retried as smaller
     sub-steps with a fresh Jacobian; simulated time stays on the fixed grid.
-    Each step has a work budget (``ctl[9]``, in right-hand-side evaluations) so one hard step
-    cannot stall real time: when it runs out, the last Newton iterate is taken if
+    Each step has a work budget (``ctl[9]``, in right-hand-side evaluations, plus up to
+    ``WORK_BANK`` budgets that earlier easy steps left unspent, banked in ``ctl[10]``)
+    so one hard step cannot stall real time: when it runs out, the last Newton iterate is taken if
     it is physical (every iterate is a whole, uniformly damped update, so it
     conserves mass and energy like a converged one), otherwise the state is held
     for the rest of the step. ``stats`` accumulates [sub-steps,
@@ -820,26 +829,39 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
         remaining = dt
         h = dt
         ctl[8] = 0.0
+        # this step may spend its own budget plus what easy steps saved: a hard
+        # transient gets a few times the budget while the average stays bounded
+        ctl[11] = ctl[9] + ctl[10]
         while remaining > 1e-15:
             h = min(h, remaining)
             ok = _newton(x, h, xnew, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                          st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl)
             stats[1] += ctl[2]
-            if ctl[0] > 0.0:
-                stats[2] += 1.0
+            stats[2] += ctl[5]
+            ctl[5] = 0.0
             if not ok:
                 stats[3] += 1.0
-                if h > dt * MIN_SUBSTEP and ctl[8] < ctl[9]:
+                if h > dt * MIN_SUBSTEP and ctl[8] < ctl[11]:
                     h *= 0.5
-                    ctl[4] = 1.0
-                    ctl[0] = 0.0
+                    if ctl[0] == 0.0:  # retry on a fresh Jacobian unless this step already made one
+                        ctl[4] = 1.0
                     continue
-                # out of budget: take the iterate if it is physical, else hold
+                # out of budget: take the iterate if it is physical, else hold. The
+                # Jacobian is kept: a forced step must not make the next one pay for
+                # a new Jacobian too, or a small budget never catches up
                 stats[4] += 1.0
                 if _physical(xnew, NI):
                     for i in range(x.shape[0]):
                         x[i] = xnew[i]
-                ctl[4] = 1.0
+                break
+            if not _physical(xnew, NI):  # converged onto a non-physical state: retry smaller
+                stats[3] += 1.0
+                if h > dt * MIN_SUBSTEP and ctl[8] < ctl[11]:
+                    h *= 0.5
+                    if ctl[0] == 0.0:
+                        ctl[4] = 1.0
+                    continue
+                stats[4] += 1.0
                 break
             for i in range(x.shape[0]):
                 x[i] = xnew[i]
@@ -849,6 +871,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
             stats[0] += 1.0
             if h < dt:
                 h = min(2.0 * h, dt)
+        ctl[10] = min(max(ctl[10] + ctl[9] - ctl[8], 0.0), WORK_BANK * ctl[9])
         if hist_every > 0 and (s + 1) % hist_every == 0 and hrow < hist_p.shape[0]:
             rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
             for i in range(NI.shape[0]):
