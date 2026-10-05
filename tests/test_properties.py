@@ -48,3 +48,21 @@ def test_liquid_cavitates_smoothly_at_vapor_pressure():
     ps = [props.state(0, rho0 * (1 - e), 0.0, *arrs)[0] for e in np.linspace(0, 1e-3, 200)]
     assert min(ps) > 0.99 * fs.par[0, 5]  # never below vapor pressure
     assert np.all(np.diff(ps) <= 0)  # monotonic in density
+
+
+def test_no_two_phase_quality_above_the_critical_temperature():
+    fs = FluidSet(["oxygen"], ["table"])
+    arrs = fs.arrays()[:7]
+    st = CP.AbstractState("HEOS", "Oxygen")
+    for p_psi, t in ((1309, 174.6), (800, 160.0), (2000, 156.0)):
+        st.update(CP.PT_INPUTS, p_psi * 6894.76, t)
+        x = props.state(0, st.rhomass(), st.umass(), *arrs)[2]
+        assert not 0.0 <= x <= 1.0
+
+
+def test_near_full_saturated_tanks_stay_two_phase():
+    fs = FluidSet(["nitrogen"], ["table"])
+    arrs = fs.arrays()[:7]
+    for t in np.linspace(70.0, 120.0, 40):
+        rho, u = fs.rho_u_saturated(0, t, 0.99)
+        assert 0.0 <= props.state(0, rho, u, *arrs)[2] <= 1.0

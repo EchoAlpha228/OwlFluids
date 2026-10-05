@@ -9,7 +9,7 @@ real controller reports in HITL tests.
 
 Everything that touches the ``synnax`` package lives in ``SynnaxLink``; when the
 client API changes, that class is the only one to update. The driver itself talks
-to any object with the same five methods, which is how it is tested without a
+to any object with the same methods, which is how it is tested without a
 Synnax server.
 
 Config (a ``synnax:`` section in the system file, or its own YAML file)::
@@ -102,6 +102,9 @@ class SynnaxLink:
                                 secure=cfg.secure)
         self.writer = None
         self.streamer = None
+        self._t0 = 0
+        self._p0 = 0.0
+        self._last = 0
 
     def ensure_channels(self, index: str, data: list[str], commands: list[str], create: bool) -> None:
         sy = self.sy
@@ -112,6 +115,12 @@ class SynnaxLink:
         if index in missing:
             self.client.channels.create(name=index, is_index=True, data_type=sy.DataType.TIMESTAMP)
         idx = self.client.channels.retrieve(index)
+        if not idx.is_index:
+            raise RuntimeError(f"Synnax channel {index} exists but is not an index channel")
+        present = [n for n in data if n not in missing]
+        wrong = [c.name for c in self.client.channels.retrieve(present) if c.index != idx.key] if present else []
+        if wrong:
+            raise RuntimeError(f"Synnax channels {', '.join(wrong)} exist but are not indexed by {index}")
         for n in data:
             if n in missing:
                 self.client.channels.create(name=n, index=idx.key, data_type=sy.DataType.FLOAT32)
@@ -121,12 +130,30 @@ class SynnaxLink:
 
     def open(self, write: list[str], read: list[str]) -> None:
         sy = self.sy
-        self.writer = self.client.open_writer(start=sy.TimeStamp.now(), channels=write, name="OwlFluids",
+        self._t0 = int(sy.TimeStamp.now())
+        self._p0 = time.perf_counter()
+        self._last = self._t0 - 1
+        self.writer = self.client.open_writer(start=sy.TimeStamp(self._t0), channels=write, name="OwlFluids",
                                               enable_auto_commit=True)
         self.streamer = self.client.open_streamer(read) if read else None
 
+    def latest(self, names: list[str]) -> dict[str, float]:
+        """Last stored value of each channel that has one (virtual channels have none)."""
+        out = {}
+        for n in names:
+            try:
+                series = self.client.read_latest(n, 1)
+                if len(series):
+                    out[n] = float(series[-1])
+            except Exception:  # no data yet, or a virtual channel
+                pass
+        return out
+
     def write(self, values: dict[str, float], index: str) -> None:
-        self.writer.write({index: self.sy.TimeStamp.now(), **values})
+        # stamps from a monotonic clock, so a wall-clock step (NTP) never sends time backwards
+        stamp = max(self._t0 + int((time.perf_counter() - self._p0) * 1e9), self._last + 1)
+        self._last = stamp
+        self.writer.write({index: self.sy.TimeStamp(stamp), **values})
 
     def read(self, timeout: float) -> dict[str, float]:
         """Latest value of each streamed channel that changed, by channel name."""
@@ -148,10 +175,17 @@ class SynnaxLink:
         return self.client.channels.retrieve(ch).name
 
     def close(self) -> None:
-        if self.writer is not None:
-            self.writer.close()
-        if self.streamer is not None:
-            self.streamer.close()
+        """Close both ends; the writer re-raises any error it hit, after the streamer is closed."""
+        err = None
+        for obj in (self.writer, self.streamer):
+            if obj is None:
+                continue
+            try:
+                obj.close()
+            except Exception as e:
+                err = err or e
+        if err is not None:
+            raise err
 
 
 class SynnaxDriver:
@@ -171,6 +205,9 @@ class SynnaxDriver:
                                   list(self.read_to_valve), cfg.create_channels)
         self.link.open([cfg.index, *self.sensors.values(), *(w for _r, w in self.valves.values())],
                        list(self.read_to_valve))
+        # a streamer only sees new writes: start from what the valve channels already say
+        latest = getattr(self.link, "latest", None)
+        self.initial = latest(list(self.read_to_valve)) if latest else {}
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self.writes = 0
@@ -179,16 +216,22 @@ class SynnaxDriver:
 
     def start(self) -> None:
         self._stop.clear()
+        for ch, value in self.initial.items():
+            self.apply(self.read_to_valve[ch], value)
         self._threads = [threading.Thread(target=self._guard(self._write_loop), name="synnax-write", daemon=True),
                          threading.Thread(target=self._guard(self._read_loop), name="synnax-read", daemon=True)]
         for t in self._threads:
             t.start()
 
     def stop(self) -> None:
+        """Stop and disconnect. Never raises: a close error is kept in ``error``."""
         self._stop.set()
         for t in self._threads:
             t.join(2.0)
-        self.link.close()
+        try:
+            self.link.close()
+        except Exception as e:
+            self.error = self.error or e
 
     def _guard(self, fn):
         def run():

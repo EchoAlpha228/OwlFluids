@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from .. import units
 from ..components import get_type
+from ..core import layout as L
 from ..core.network import BuildError
 from ..examples import EXAMPLES
 from ..io.logger import open_logger, read_log
@@ -46,6 +47,8 @@ class MainWindow(QMainWindow):
         self.driver = None
         self._building = False
         self._build_result = None
+        self._build_token = None
+        self._warned = 0
 
         self.scene = Scene()
         self.view = View(self.scene)
@@ -298,30 +301,34 @@ class MainWindow(QMainWindow):
             return
         self._building = True
         self._build_result = None
+        token = self._build_token = object()
         self.status_time.setText("building network and loading property tables…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         system = System.from_dict(self.scene.system.to_dict())
 
         def build():
             try:
-                self._build_result = Simulation(system)
+                res = Simulation(system)
             except BuildError as e:
-                self._build_result = e
+                res = e
             except Exception as e:  # noqa: BLE001
-                self._build_result = RuntimeError(traceback.format_exc(limit=3) + str(e))
+                res = RuntimeError(traceback.format_exc(limit=3) + str(e))
+            if self._build_token is token:  # a build cancelled by Stop or Open is dropped
+                self._build_result = (token, res)
 
         threading.Thread(target=build, daemon=True).start()
 
     def _finish_build(self) -> None:
         self._building = False
         QApplication.restoreOverrideCursor()
-        res = self._build_result
+        _token, res = self._build_result
         if isinstance(res, Exception):
             self.status_time.setText("stopped")
             QMessageBox.critical(self, "Cannot run this system", str(res))
             return
         sim: Simulation = res
         self.runner = Runner(sim, rate=self.rate_box.currentData())
+        self._warned = 0
         throttles = {v: get_type(sim.system.component(v).type).type_name == "throttle_valve" for v in sim.valves()}
         self.valves.set_valves(sim.valves(), throttles)
         self.plots.configure(sim.system, sim.valves())
@@ -344,6 +351,10 @@ class MainWindow(QMainWindow):
             self.a_pause.setText("▶ Resume")
 
     def stop(self) -> None:
+        if self._building:  # forget a build in progress; its result is dropped when it lands
+            self._building = False
+            self._build_token = None
+            QApplication.restoreOverrideCursor()
         if self.driver is not None:
             self.toggle_synnax(False)
         if self.log is not None:
@@ -415,7 +426,7 @@ class MainWindow(QMainWindow):
             self.a_synnax.setChecked(False)
 
     def _tick(self) -> None:
-        if self._building and self._build_result is not None:
+        if self._building and self._build_result is not None and self._build_result[0] is self._build_token:
             self._finish_build()
         r = self.runner
         if r is None:
@@ -429,6 +440,9 @@ class MainWindow(QMainWindow):
             err = self.driver.error
             self.toggle_synnax(False)
             QMessageBox.warning(self, "Synnax", f"Synnax link stopped: {err}")
+        for w in r.warnings[self._warned:]:
+            self.statusBar().showMessage(w, 8000)
+        self._warned = len(r.warnings)
         f = r.frame
         self.valves.show_frame(f)
         self.scene.show_values(self._component_values(r.sim, f))
@@ -454,7 +468,7 @@ class MainWindow(QMainWindow):
             if ct.is_valve or ct.type_name in ("check_valve", "relief_valve", "regulator"):
                 if links:
                     k = links[0]
-                    state["position"] = f.valves.get(c.id, sim.lout[k, 1])
+                    state["position"] = f.valves.get(c.id, f.link_open[k])
                     text = f"{f.link_mdot[k]:.3g} kg/s"
             elif ct.type_name in ("orifice", "fitting"):
                 if links:
@@ -469,8 +483,8 @@ class MainWindow(QMainWindow):
                 text = f"{p:.0f} psi  {f.node_t[i]:.0f} K"
                 if ct.type_name == "pressurized_tank" and len(nodes) > 1:
                     liq = nodes[1]
-                    vol = sim.NF[nodes[0], 0]
-                    state["fill"] = min(max(sim.nout[liq, 5] / max(sim.nout[liq, 3], 1e-9) / vol, 0.0), 1.0)
+                    vol = net.NF[nodes[0], L.NF_VOL]
+                    state["fill"] = min(max(f.node_m[liq] / max(f.node_rho[liq], 1e-9) / vol, 0.0), 1.0)
                     state["liquid_colour"] = symbols.CRYO if f.node_t[liq] < 150 else symbols.LIQUID
                     text = f"{p:.0f} psi  {f.node_t[liq]:.0f} K liq"
                 elif ct.type_name == "pipe" and links:

@@ -66,6 +66,11 @@ class ComponentType:
         raw = comp.params.get(name, spec.default)
         if raw is None:
             return None
+        if spec.dimension is None and isinstance(raw, str):
+            try:  # plain numbers written as text, e.g. YAML reads "5e-2" as a string
+                return float(raw)
+            except ValueError:
+                return raw  # keywords such as segments: auto
         if spec.dimension in (None, "text", "choice", "bool"):
             return raw
         try:
@@ -161,7 +166,9 @@ class PressurizedTank(ComponentType):
         Param("volume", "volume", None, "internal volume"),
         Param("fill", None, 0.8, "initial liquid volume fraction 0-1"),
         Param("pressure", "pressure", None, "initial ullage pressure"),
-        Param("liquid_temperature", "temperature", "293.15 K", "initial liquid temperature"),
+        Param("liquid_temperature", "temperature", None,
+              "initial liquid temperature (default: system initial temperature, or just below the boiling "
+              "point at the tank pressure if that is colder)"),
         Param("gas_temperature", "temperature", None,
               "initial ullage temperature (default: system initial temperature)"),
         Param("diameter", "length", None, "inner diameter, for liquid head at the outlet (optional)"),

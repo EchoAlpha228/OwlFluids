@@ -47,7 +47,10 @@ class Frame:
     node_p: np.ndarray | None = None  # every node's pressure, Pa
     node_t: np.ndarray | None = None  # every node's temperature, K
     node_x: np.ndarray | None = None  # every node's quality code
+    node_rho: np.ndarray | None = None  # every node's density, kg/m3
+    node_m: np.ndarray | None = None  # every node's mass, kg
     link_mdot: np.ndarray | None = None  # every flow element's mass flow, kg/s
+    link_open: np.ndarray | None = None  # every flow element's opening 0-1
 
 
 class History:
@@ -99,6 +102,9 @@ class Runner:
         self._paused = threading.Event()
         self._tick = threading.Condition()
         self.error: BaseException | None = None
+        self.warnings: list[str] = []  # failed commands, dropped listeners, model limits; newest last
+        self._rebase = False
+        self._notices = 0
         self.slips = 0  # times the runner fell behind by more than max_lag and let the clock slip
         names = list(sim.sensors()) + [f"valve:{v}" for v in sim.valves()]
         self.history = History(names, history_seconds, history_interval)
@@ -118,7 +124,8 @@ class Runner:
         self._paused.clear()
         if self._thread is not None:
             self._thread.join(timeout)
-        self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
 
     @property
     def running(self) -> bool:
@@ -136,11 +143,17 @@ class Runner:
 
     def set_rate(self, rate: float) -> None:
         """1.0 = real time, 0.5 = half speed, 0 = as fast as the CPU allows."""
-        self.submit(lambda sim: setattr(self, "rate", float(rate)))
+        rate = float(rate)
+
+        def do(sim: Simulation) -> None:
+            self.rate = rate
+            self._rebase = True  # pace from here on; the old anchors belong to the old rate
+        self.submit(do)
 
     def reset(self) -> None:
         def do(sim: Simulation) -> None:
             sim.reset()
+            self._notices = 0
             self.history.clear()
             self._next_record = 0.0
         self.submit(do)
@@ -169,7 +182,8 @@ class Runner:
         self.submit(lambda sim: sim.command(valve, position))
 
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
-        self.submit(lambda sim: sim.set_boundary(comp, pressure, temperature))
+        state = self.sim.boundary_state(comp, pressure, temperature)  # fail now, in the caller
+        self.submit(lambda sim: sim.apply_boundary(state))
 
     def add_listener(self, fn: Callable[[Frame], None]) -> None:
         """Call ``fn(frame)`` on the runner thread after every chunk (loggers, drivers)."""
@@ -202,28 +216,45 @@ class Runner:
                 self._tick.wait(0.1)
 
     # ------------------------------------------------------------------ loop
-    def _apply_commands(self) -> None:
+    def _warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+        del self.warnings[:-50]
+
+    def _apply_commands(self) -> bool:
+        """Run queued commands; a failing command is reported, not fatal. True if any ran."""
+        ran = False
         while True:
             try:
                 fn = self._cmds.get_nowait()
             except queue.Empty:
-                return
-            fn(self.sim)
+                return ran
+            ran = True
+            try:
+                fn(self.sim)
+            except Exception as e:
+                self._warn(f"command failed: {type(e).__name__}: {e}")
 
     def _run(self) -> None:
         _high_resolution_timer(True)
         try:
             sim = self.sim
-            wall0 = time.perf_counter()
+            wall0 = wall_start = time.perf_counter()
             sim_t0 = sim.t
             busy = 0.0
             load = 0.0
             while not self._stop.is_set():
-                self._apply_commands()
-                if self._paused.is_set():
-                    time.sleep(0.01)
+                ran = self._apply_commands()
+                if self._paused.is_set() or self._rebase:
                     wall0 = time.perf_counter()
                     sim_t0 = sim.t
+                    self._rebase = False
+                if self._paused.is_set():
+                    if ran:  # show valve clicks and resets made while paused (time stands still,
+                        # so loggers and the history get nothing new)
+                        self.frame = self._make_frame(self.frame.wall, 0.0, load)
+                        with self._tick:
+                            self._tick.notify_all()
+                    self._stop.wait(0.01)
                     continue
                 t_start = time.perf_counter()
                 sim.step(self.chunk_steps)
@@ -241,16 +272,18 @@ class Runner:
                         self.slips += 1
                         wall0 = t_end - (sim.t - sim_t0) / self.rate
                         lag = 0.0
-                frame = self._make_frame(t_end - wall0, lag, load)
+                frame = self._make_frame(t_end - wall_start, lag, load)
                 self._publish(frame)
                 if self.rate > 0:
                     ahead = (sim.t - sim_t0) / self.rate - (time.perf_counter() - wall0)
-                    _sleep(ahead)
+                    _sleep(ahead, self._stop)
         except BaseException as e:  # surfaced to waiters and the GUI
             self.error = e
             with self._tick:
                 self._tick.notify_all()
         finally:
+            # commands queued just before stop (closing a log, say) still run
+            self._apply_commands()
             _high_resolution_timer(False)
 
     def _make_frame(self, wall: float, lag: float, load: float) -> Frame:
@@ -260,26 +293,42 @@ class Runner:
                      commands={v: sim.valve_command(v) for v in sim.valves()}, lag=lag, load=load,
                      stats=sim.solver_stats(), node_p=sim.nout[:, L.O_P].copy(),
                      node_t=sim.nout[:, L.O_T].copy(), node_x=sim.nout[:, L.O_X].copy(),
-                     link_mdot=sim.lout[:, L.LO_MDOT].copy())
+                     node_rho=sim.nout[:, L.O_RHO].copy(), node_m=sim.nout[:, L.O_M].copy(),
+                     link_mdot=sim.lout[:, L.LO_MDOT].copy(), link_open=sim.lout[:, L.LO_OPEN].copy())
 
     def _publish(self, frame: Frame) -> None:
         self.frame = frame
+        while self._notices < len(self.sim.notices):
+            self._warn(self.sim.notices[self._notices])
+            self._notices += 1
         if frame.t + 1e-12 >= self._next_record:
             self.history.add(frame.t, list(frame.sensors.values()) + list(frame.valves.values()))
             self._next_record = frame.t + self.history.interval
         for fn in list(self._listeners):
-            fn(frame)
+            try:
+                fn(frame)
+            except Exception as e:
+                self.remove_listener(fn)
+                self._warn(f"listener {getattr(fn, '__qualname__', fn)} removed after {type(e).__name__}: {e}")
         with self._tick:
             self._tick.notify_all()
 
 
-def _sleep(seconds: float) -> None:
-    """Sleep precisely: coarse sleep, then spin for the last fraction of a millisecond."""
+def _sleep(seconds: float, stop: threading.Event | None = None) -> None:
+    """Sleep precisely: coarse sleep in short slices, then spin for the last fraction of a millisecond.
+
+    Returns early once ``stop`` is set.
+    """
     if seconds <= 0:
         return
     end = time.perf_counter() + seconds
-    if seconds > 0.002:
-        time.sleep(seconds - 0.0015)
+    while True:
+        left = end - time.perf_counter()
+        if left <= 0.002:
+            break
+        if stop is not None and stop.is_set():
+            return
+        time.sleep(min(left - 0.0015, 0.05))
     while time.perf_counter() < end:
         pass
 

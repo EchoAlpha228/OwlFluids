@@ -78,3 +78,25 @@ def test_driver_publishes_sensors_and_applies_valve_commands():
     assert last["v_m_state"] == pytest.approx(1.0)
     assert 100 < last["pt_tk"] < 400  # psi, the sensor's display unit
     assert last["fm_lox"] > 0.5
+
+
+class StoredLink(FakeLink):
+    """A link whose valve channel already holds a value, and whose writer fails on close."""
+
+    def latest(self, names):
+        return {n: 1.0 for n in names if n == "v_m_cmd"}
+
+    def close(self):
+        raise RuntimeError("writer lost its connection")
+
+
+def test_driver_syncs_valves_at_connect_and_stops_cleanly():
+    runner = Runner(Simulation(lox_feed()), rate=0)
+    vp = runner.sim.valve_command("V-P")
+    assert runner.sim.valve_command("V-M") == 0.0
+    drv = SynnaxDriver(runner, SynnaxConfig(rate=50), link_factory=StoredLink)
+    drv.start()  # runner not started: commands apply at once
+    assert runner.sim.valve_command("V-M") == 1.0
+    assert runner.sim.valve_command("V-P") == vp  # no stored value: left alone
+    drv.stop()  # must not raise
+    assert isinstance(drv.error, RuntimeError)

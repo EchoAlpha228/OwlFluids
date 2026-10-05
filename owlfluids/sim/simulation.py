@@ -64,6 +64,12 @@ class Simulation:
         self._empty_l = np.zeros((0, max(nl, 1)))
         self.fl = self.net.fluids.arrays()
         self.step_budget = self._step_budget()
+        # nodes whose fluid uses the property tables, which stop at tables.T_MAX
+        from ..fluids import tables
+        from ..fluids.registry import MODEL_TABLE
+
+        table_node = (net.fluids.model[net.NI[:, L.N_FLUID]] == MODEL_TABLE) & (net.NI[:, L.N_KIND] != L.NODE_BOUNDARY)
+        self._t_limit = np.where(table_node, tables.T_MAX - 1.0, np.inf)
 
     def _step_budget(self, share: float = 0.35) -> float:
         """Work one step may spend, in right-hand-side evaluations.
@@ -88,6 +94,8 @@ class Simulation:
         self.ctl[4] = 1.0
         self.ctl[9] = self.step_budget
         self.stats = np.zeros(6)
+        self.notices: list[str] = []  # physics the model cannot represent, newest last
+        self._limited = np.zeros(self.net.NI.shape[0], dtype=bool)
         self._sensors = {}
         for s in self.system.sensors:
             self._sensors[s.id] = _SensorState(s, self._sensor_source(s))
@@ -127,6 +135,13 @@ class Simulation:
                        self._empty_h, self._empty_h, self._empty_l, 0)
         self.t = (self.steps + n) * self.dt
         self.steps += n
+        hot = self.nout[:, L.O_T] >= self._t_limit
+        if hot.any() and (hot & ~self._limited).any():
+            for i in np.nonzero(hot & ~self._limited)[0]:
+                self.notices.append(f"{self.net.node_names[i]} reached the {self._t_limit[i] + 1:.0f} K limit of the "
+                                    "property tables at t = {:.3f} s; hotter gas reads too cold and at too low a "
+                                    "pressure".format(self.t))
+            self._limited |= hot
         if n:
             for st in self._sensors.values():
                 st.update(self._raw(st), n * self.dt, self.t)
@@ -169,13 +184,21 @@ class Simulation:
 
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
         """Change a pressure boundary during a run (a supply regulator setting, say)."""
+        self.apply_boundary(self.boundary_state(comp, pressure, temperature))
+
+    def boundary_state(self, comp: str, pressure=None, temperature=None) -> tuple:
+        """Validate a boundary change and work out its state, without applying it."""
         nodes = self.net.comp_nodes.get(comp, [])
         i = next((i for i in nodes if self.net.NI[i, L.N_KIND] == L.NODE_BOUNDARY), None)
         if i is None:
             raise KeyError(f"{comp} is not a pressure boundary")
-        p = units.parse(pressure, "pressure") if pressure is not None else self.NF[i, L.NF_BP]
-        t = units.parse(temperature, "temperature") if temperature is not None else self.NF[i, L.NF_BT]
+        p = units.parse(pressure, "pressure") if pressure is not None else float(self.NF[i, L.NF_BP])
+        t = units.parse(temperature, "temperature") if temperature is not None else float(self.NF[i, L.NF_BT])
         rho, u = self.net.fluids.rho_u_from_pt(int(self.net.NI[i, L.N_FLUID]), p, t)
+        return i, p, t, rho, u
+
+    def apply_boundary(self, state: tuple) -> None:
+        i, p, t, rho, u = state
         self.NF[i, L.NF_BP], self.NF[i, L.NF_BT], self.NF[i, L.NF_BRHO], self.NF[i, L.NF_BU] = p, t, rho, u
 
     def _valve(self, valve: str) -> int:

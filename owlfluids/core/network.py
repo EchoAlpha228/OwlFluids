@@ -286,9 +286,55 @@ class NetworkBuilder:
             if n.owner == "":
                 n.volume = max(self.net_volume.get(net, 0.0), self.junction_volume)
         self._assign_fluids()
+        fs = self._fluid_set()
+        self._resolve_tank_liquids(fs)
         if self.system.setting("prime_lines"):
             self._prime_lines()
-        return self._compile()
+        return self._compile(fs)
+
+    def _fluid_set(self) -> FluidSet:
+        sysm = self.system
+        models_cfg = {canonical(k): v for k, v in (sysm.setting("fluid_models") or {}).items()}
+        used = sorted({n.fluid for n in self.nodes})
+        models = []
+        for f in used:
+            m = models_cfg.get(f, FLUIDS[f][1])
+            if m not in FLUIDS[f][2]:
+                raise BuildError(f"{f} cannot use the {m} model; allowed: {', '.join(FLUIDS[f][2])}")
+            models.append(m)
+        return FluidSet(used, models, backend=sysm.setting("backend"))
+
+    def _resolve_tank_liquids(self, fs: FluidSet) -> None:
+        """Fix each tank liquid's starting temperature, and check it is a liquid there.
+
+        Without a ``liquid_temperature`` the liquid starts at the system's initial
+        temperature, or at its boiling point at the tank pressure if that is colder
+        (a cryogen just loaded and pressurized).
+        """
+        for n in self.nodes:
+            if not n.init or n.init[0] != "tank_liquid":
+                continue
+            _, p, t, fill = n.init
+            f = fs.names.index(n.fluid)
+            if fs.models[f] != "table":
+                n.init = ("tank_liquid", p, self.t_init if t is None else t, fill)
+                continue
+            tc, t_boil = fs.critical_temperature(f), None
+            if p < fs.critical_pressure(f):
+                t_boil = fs.saturation_temperature(f, p)
+            t_max = min(tc - 1.0, t_boil - 0.5 if t_boil is not None else tc)
+            if t is None:
+                t = self.t_init
+                if t > t_max:
+                    t = t_max
+                    self.warnings.append(f"{n.owner}: {n.fluid} starts at {t:.1f} K, just below its boiling point "
+                                         "at the tank pressure; set liquid_temperature to choose")
+            if t > t_max:
+                limit = f"boils at {t_boil:.1f} K at this pressure" if t_boil is not None else \
+                    f"has no liquid above {tc:.1f} K"
+                raise BuildError(f"{n.owner}: {n.fluid} at {t:.1f} K is not a liquid ({n.fluid} {limit}); "
+                                 "lower liquid_temperature or raise the pressure")
+            n.init = ("tank_liquid", p, t, fill)
 
     def _assign_fluids(self) -> None:
         adj = defaultdict(list)
@@ -384,17 +430,9 @@ class NetworkBuilder:
             self.nodes[j].init = st
             self.nodes[j].primed = True
 
-    def _compile(self) -> Network:
+    def _compile(self, fs: FluidSet) -> Network:
         sysm = self.system
-        models_cfg = {canonical(k): v for k, v in (sysm.setting("fluid_models") or {}).items()}
-        used = sorted({n.fluid for n in self.nodes})
-        models = []
-        for f in used:
-            m = models_cfg.get(f, FLUIDS[f][1])
-            if m not in FLUIDS[f][2]:
-                raise BuildError(f"{f} cannot use the {m} model; allowed: {', '.join(FLUIDS[f][2])}")
-            models.append(m)
-        fs = FluidSet(used, models, backend=sysm.setting("backend"))
+        used = fs.names
 
         nn, nl = len(self.nodes), len(self.links)
         NI = np.zeros((nn, L.N_NI), dtype=np.int64)
@@ -497,18 +535,10 @@ class NetworkBuilder:
             _, p, t, _fill = init
             rho, u = fs.rho_u_from_pt(f, p, t)
             if fs.models[f] == "table":
-                # take the liquid's energy at its own temperature on the liquid side
-                import CoolProp.CoolProp as CP
-                st = fs._backend_state(FLUIDS[fs.names[f]][0])
-                tc = st.T_critical()
-                t_use = min(t, tc - 1.0)
-                try:
-                    st.update(CP.PT_INPUTS, max(p, 1.0), t_use)
-                    if st.Q() >= 0 or st.rhomass() < st.rhomass_critical():
-                        raise ValueError
-                except ValueError:
-                    st.update(CP.QT_INPUTS, 0.0, t_use)
-                rho, u = st.rhomass(), st.umass()
+                # the tank liquid is held at the saturated-liquid density for its temperature,
+                # so its energy must be the saturated-liquid energy at that temperature too;
+                # otherwise (rho, u) lands inside the dome at a lower temperature
+                rho, u = fs.rho_u_saturated(f, t, 1.0)
             return rho, u, t
         _, p, t = init
         p = self.p_init if p is None else p

@@ -36,7 +36,7 @@ N_PROP = 5
 S_PSAT, S_RHOL, S_RHOV, S_HL, S_HV, S_MUL, S_MUV, S_GAMV = range(8)
 N_SATPROP = 8
 
-TABLE_VERSION = 2
+TABLE_VERSION = 3
 P_MIN = 500.0  # Pa, lowest pressure the table must reach (vacuum-ish vent lines)
 P_MAX = 400e5  # Pa, about 5,800 psi, covers 3,000 psi with margin
 T_MAX = 500.0  # K
@@ -210,13 +210,27 @@ def build_table(coolprop_name: str, backend: str = "HEOS") -> dict[str, np.ndarr
         for prop in range(N_PROP):
             tab[prop, i] = _interp_extrap(u_grid, u_c[order], cols[i, prop][order])
 
+    # Quality at two-phase points comes straight from the saturation relations.
+    # Re-gridding a column on u blends the last two-phase sample with the first
+    # compressed-liquid one, which would give near-full saturated tanks a liquid
+    # code (x < 0), so they would vent liquid from their top port.
+    #
+    # Pressure and temperature there keep the blended values on purpose. Within
+    # about one grid cell of saturated liquid (tank fills above ~98 %) pressure
+    # reads a few percent high, and that slope is what keeps Newton stable in
+    # small flashing junctions; exact, flat two-phase pressures there made the
+    # LOX feed of the test stand fail most steps.
+    #
     # Main-table points inside the compressed-liquid region are only used when a
-    # two-phase state sits in a cell next to the boundary. Fill them with the
-    # two-phase relations continued past saturated liquid, so those cells
+    # two-phase state sits in a cell next to the boundary, so they get the
+    # two-phase relations continued past saturated liquid; those cells then
     # interpolate smoothly instead of blending in liquid pressures.
+    rho_v_min = rho_v_f.min()
     for i, rho in enumerate(rhos):
+        if rho < rho_v_min:
+            continue  # thinner than any saturated vapor: never two-phase
         for j, u in enumerate(u_grid):
-            if u >= u_l_hi or rho <= rho_l_u(u):
+            if u >= u_l_hi and rho > rho_l_u(u_l_hi):
                 continue
 
             def g(t, rho=rho, u=u):
@@ -230,6 +244,11 @@ def build_table(coolprop_name: str, backend: str = "HEOS") -> dict[str, np.ndarr
                 continue
             rl, ul, rv, uv = sat_at(t_c)
             x = (1 / rho - 1 / rl) / (1 / rv - 1 / rl)
+            if x > 1.0 or (x < 0.0 and rho <= rho_l_u(u)):
+                continue  # vapor, or a liquid-side root on the wrong side of the boundary
+            if x >= 0.0:
+                tab[X, i, j] = x
+                continue
             ks = min(max(np.searchsorted(t_sat, t_c), 0), N_SAT - 1)
             tab[P, i, j] = np.interp(t_c, t_fine, fine[4])
             tab[T, i, j] = t_c

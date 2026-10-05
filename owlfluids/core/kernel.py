@@ -197,8 +197,10 @@ def _node_one(i, x, NI, NF, fl, W):
             vol = vol - max(x[NI[pt, N_SX]], 0.0) / NF[pt, NF_RHOREF]
             vol = max(vol, 1e-4 * NF[i, NF_VOL])
         rho = m / vol
-        # outflow throttle near vacuum (see NF_MREF)
-        W[i, W_S] = m / (m + NF[i, NF_MREF])
+        # outflow throttle near vacuum (see NF_MREF); the squared ratio keeps it off
+        # (under 0.01 %) at ordinary pressures and only bites close to vacuum
+        r = max(m, 0.0) / NF[i, NF_MREF]
+        W[i, W_S] = r * r / (1.0 + r * r)
     p, t, xq, g, mu = state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol)
     W[i, W_P] = p
     W[i, W_T] = t
@@ -564,15 +566,17 @@ def _liquid_margin(f, rho, u, model, grid, lgrid, rhol):
 
 @jit
 def _chop(xk, bvec, iperm, NI, NF, fl):
-    """Limit each volume node's Newton update (Appleyard-style chop).
+    """Damp the Newton update (Appleyard-style chop).
 
     A node may not lose more than 80% of its mass in one iteration, and an update
     that crosses the saturated-liquid boundary stops a little past it, so the next
-    iteration is linearized on the right side of the kink. Scaling m and U together
-    keeps the update's direction. Returns True if anything was chopped.
+    iteration is linearized on the right side of the kink. The most restrictive
+    node sets one factor for the whole update: scaling every state together keeps
+    each flux's mass and energy leaving one node equal to what enters the next,
+    so a damped iterate conserves like a full one. Returns True if anything was chopped.
     """
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
-    chopped = False
+    amin = 1.0
     for i in range(NI.shape[0]):
         if NI[i, N_KIND] != NODE_VOLUME or NI[i, N_PARTNER] >= 0:
             continue
@@ -594,11 +598,13 @@ def _chop(xk, bvec, iperm, NI, NF, fl):
             c = l0 / (l0 - l1)
             c = c + 0.1 * (1.0 - c)
             a *= c
-        if a < 1.0:
-            bvec[iperm[sx]] = a * dm
-            bvec[iperm[sx + 1]] = a * du
-            chopped = True
-    return chopped
+        if a < amin:
+            amin = a
+    if amin >= 1.0:
+        return False
+    for i in range(bvec.shape[0]):
+        bvec[i] *= amin
+    return True
 
 
 @jit
@@ -692,7 +698,11 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl):
     """One backward-Euler step of size h from x into xk by damped modified Newton.
 
-    ``ctl``: [jac_fresh, lu_h, iterations of last solve, jac_age, need_jac, clamped mass]. Returns success.
+    ``ctl``: [jac_fresh, lu_h, iterations of last solve, jac_age, need_jac, clamped mass, stalls,
+    argmax state, work used, work budget]. Every iterate is a whole (possibly uniformly damped)
+    Newton update, so each flux's mass and energy leave one node and enter the next: any
+    iterate conserves like a converged one and is safe to force when the budget runs out.
+    Returns success.
     """
     n = x.shape[0]
     nn = NI.shape[0]
@@ -719,12 +729,13 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         for i in range(n):
             bvec[iperm[i]] = -(xk[i] - x[i] - h * fk[i])
         _band_solve(ab, piv, bvec, kl, ku, n)
+        for i in range(n):
+            if not math.isfinite(bvec[i]):
+                return False  # before touching xk, so it is never left half-updated
         chopped = _chop(xk, bvec, iperm, NI, NF, fl)
         err = 0.0
         for i in range(n):
             d = bvec[iperm[i]]
-            if not math.isfinite(d):
-                return False
             xk[i] += d
             e = abs(d) / xscale[i]
             if e > err:
@@ -785,8 +796,9 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
     sub-steps with a fresh Jacobian; simulated time stays on the fixed grid.
     Each step has a work budget (``ctl[9]``, in right-hand-side evaluations) so one hard step
     cannot stall real time: when it runs out, the last Newton iterate is taken if
-    it is physical (it conserves mass and energy like a converged one), otherwise
-    the state is held for the rest of the step. ``stats`` accumulates [sub-steps,
+    it is physical (every iterate is a whole, uniformly damped update, so it
+    conserves mass and energy like a converged one), otherwise the state is held
+    for the rest of the step. ``stats`` accumulates [sub-steps,
     Newton iterations, Jacobians, failed sub-steps, forced steps, steps taken
     without converging]. History rows are written every ``hist_every`` steps.
     """

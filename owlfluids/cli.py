@@ -68,8 +68,15 @@ def cmd_run(args) -> int:
             exec(compile(code, args.script, "exec"), ns)
             if "main" in ns:
                 ns["main"](runner)
-        if args.duration:
-            runner.wait_until(lambda f: f.t >= args.duration - 1e-9)
+        # with a duration, run to it; without one (and no script), run until Ctrl-C
+        warned = 0
+        while args.duration or not args.script:
+            if args.duration and runner.frame.t >= args.duration - 1e-9:
+                break
+            if runner.error or (driver and driver.error) or not runner.running:
+                break
+            warned = _print_warnings(runner, warned)
+            time.sleep(0.05)
     except KeyboardInterrupt:
         pass
     finally:
@@ -78,9 +85,28 @@ def cmd_run(args) -> int:
         runner.stop()
         if log:
             log.close()
+    _print_warnings(runner, 0)
     st = sim.solver_stats()
     print(f"done: t={sim.t:.3f}s, {st['steps']} steps, {runner.slips} clock slips, {st['forced_steps']} forced steps")
-    return 1 if runner.error else 0
+    return _report_errors(runner, driver)
+
+
+def _print_warnings(runner, shown: int) -> int:
+    """Print runner warnings not shown yet; returns how many there are now."""
+    for w in runner.warnings[shown:]:
+        print("warning:", w, file=sys.stderr)
+    return len(runner.warnings)
+
+
+def _report_errors(runner, driver) -> int:
+    code = 0
+    if runner.error:
+        print("simulation error:", repr(runner.error), file=sys.stderr)
+        code = 1
+    if driver and driver.error:
+        print("Synnax driver error:", repr(driver.error), file=sys.stderr)
+        code = 1
+    return code
 
 
 def _start_driver(args, runner):
@@ -114,6 +140,15 @@ def cmd_console(args) -> int:
     if driver:
         driver.start()
     log = None
+    warned = 0
+
+    def stop_log():
+        nonlocal log
+        if log:
+            old, log = log, None
+            runner.remove_listener(old)
+            runner.submit(lambda sim: old.close())  # on the runner thread, never mid-write
+
     print(f"{sim.system.name}: running in real time. Valves: {', '.join(sim.valves()) or 'none'}")
     print(CONSOLE_HELP)
     try:
@@ -152,16 +187,16 @@ def cmd_console(args) -> int:
                 elif cmd == "reset":
                     runner.reset()
                 elif cmd == "log":
+                    stop_log()
                     log = open_logger(rest[0], runner)
-                elif cmd == "stoplog" and log:
-                    log.close()
-                    log = None
+                elif cmd == "stoplog":
+                    stop_log()
                 else:
                     print(CONSOLE_HELP)
             except (KeyError, ValueError, IndexError) as e:
                 print("error:", e)
-            if runner.error:
-                print("simulation error:", runner.error)
+            warned = _print_warnings(runner, warned)
+            if runner.error or (driver and driver.error):
                 break
     finally:
         if driver:
@@ -169,7 +204,7 @@ def cmd_console(args) -> int:
         runner.stop()
         if log:
             log.close()
-    return 0
+    return _report_errors(runner, driver)
 
 
 def cmd_bench(args) -> int:

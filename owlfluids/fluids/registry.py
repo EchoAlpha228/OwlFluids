@@ -89,7 +89,7 @@ class FluidSet:
         self.ltab = np.zeros((nf, tables.N_PROP, shape_ul, shape_eta))
         self.lgrid = np.ones((nf, 3))
         self.rhol = np.ones((nf, tables.N_UL))
-        self.grid = np.ones((nf, 5))
+        self.grid = np.full((nf, 6), 1e9)  # rho_min, rho_crit, rho_max, u_min, u_max, T_crit
         self.sat = np.zeros((nf, tables.N_SATPROP, tables.N_SAT))
         self.satg = np.ones((nf, 4))
         self._states = {}
@@ -100,7 +100,8 @@ class FluidSet:
             if mdl == "table":
                 data = tables.load_or_build(cp_name, self.backend, verbose=True)
                 self.tab[i] = data["tab"]
-                self.grid[i] = data["grid"]
+                self.grid[i, :5] = data["grid"]
+                self.grid[i, 5] = data["sat_grid"][2]
                 self.sat[i] = data["sat"]
                 self.satg[i] = data["sat_grid"]
                 self.ltab[i] = data["ltab"]
@@ -181,6 +182,12 @@ class FluidSet:
         rho = a * rl + (1 - a) * rv
         u = (a * rl * ul + (1 - a) * rv * uv) / rho
         return rho, u
+
+    def critical_temperature(self, f: int) -> float:
+        return float(self._backend_state(FLUIDS[self.names[f]][0]).T_critical())
+
+    def critical_pressure(self, f: int) -> float:
+        return float(self._backend_state(FLUIDS[self.names[f]][0]).p_critical())
 
     def saturation_temperature(self, f: int, p: float) -> float:
         import CoolProp.CoolProp as CP

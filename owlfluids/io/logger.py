@@ -57,7 +57,8 @@ class CsvLogger:
 
     def close(self) -> None:
         self.runner.remove_listener(self)
-        self._f.close()
+        if not self._f.closed:
+            self._f.close()
 
 
 class Hdf5Logger:
@@ -100,8 +101,9 @@ class Hdf5Logger:
 
     def close(self) -> None:
         self.runner.remove_listener(self)
-        self.flush()
-        self._h.close()
+        if self._h:
+            self.flush()
+            self._h.close()
 
 
 def open_logger(path: str | Path, runner, interval: float = 0.01):

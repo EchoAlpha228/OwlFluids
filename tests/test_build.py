@@ -70,3 +70,28 @@ def test_valve_commands_and_stroke_time(gas_blowdown):
     assert sim.valve_position("V") == pytest.approx(0.25)
     with pytest.raises(KeyError):
         sim.open("NOPE")
+
+
+def _tank_system(liquid, pressure, **kw):
+    s = System("tank")
+    s.add("TK", "pressurized_tank", liquid=liquid, pressurant="nitrogen", volume="20 L", fill=0.8,
+          pressure=pressure, **kw)
+    s.add("L", "pipe", length="1 m", diameter="10 mm")
+    s.add("V", "valve", cv="5e-2")  # numbers written as text still parse
+    s.add("A", "boundary", fluid=liquid)
+    s.connect("TK.liquid", "L.in"), s.connect("L.out", "V.in"), s.connect("V.out", "A.port")
+    return s
+
+
+def test_tank_liquid_starts_at_its_set_temperature():
+    for liquid, p, t in (("nitrous", "1200 psi", 280.0), ("oxygen", "1000 psi", 80.0)):
+        sim = Simulation(_tank_system(liquid, p, liquid_temperature=f"{t} K"))
+        assert sim.temperature("TK.liquid") == pytest.approx(t, abs=0.05)
+        assert sim.quality("L.in") < 0  # the feed line is primed with liquid
+
+
+def test_tank_liquid_that_would_boil_is_an_error_or_defaults_cold():
+    with pytest.raises(BuildError, match="not a liquid"):
+        build_network(_tank_system("oxygen", "50 psi", liquid_temperature="120 K"))
+    net = build_network(_tank_system("oxygen", "50 psi"))  # no temperature: just below boiling
+    assert any("boiling point" in w for w in net.warnings)

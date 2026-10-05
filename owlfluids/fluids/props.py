@@ -70,6 +70,27 @@ def _bilinear(tab, f, prop, i0, a, j0, b):
 
 
 @jit
+def _quality(tab, f, i0, a, j0, b, dense):
+    """Quality code at a point: interpolated, except across the single-phase code jump.
+
+    Single-phase states carry -1 above the critical density and 2 below it, so a
+    cell whose corners are all single-phase but straddle that jump (supercritical
+    states near the critical density) must not interpolate to a two-phase value.
+    """
+    x00 = tab[f, X, i0, j0]
+    x01 = tab[f, X, i0, j0 + 1]
+    x10 = tab[f, X, i0 + 1, j0]
+    x11 = tab[f, X, i0 + 1, j0 + 1]
+    single = 0
+    for v in (x00, x01, x10, x11):
+        if v < 0.0 or v > 1.0:
+            single += 1
+    if single == 4:
+        return -1.0 if dense else 2.0
+    return (1 - a) * ((1 - b) * x00 + b * x01) + a * ((1 - b) * x10 + b * x11)
+
+
+@jit
 def state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol):
     """(P, T, quality code, gamma, viscosity) of fluid ``f`` at (rho, u).
 
@@ -130,11 +151,13 @@ def state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol):
     b = su - j0
     p = _bilinear(tab, f, P, i0, a, j0, b)
     t = max(_bilinear(tab, f, T, i0, a, j0, b), 1.0)
-    x = _bilinear(tab, f, X, i0, a, j0, b)
+    x = _quality(tab, f, i0, a, j0, b, s >= N_LOG - 1)
     g = _bilinear(tab, f, GAMMA, i0, a, j0, b)
     mu = max(_bilinear(tab, f, MU, i0, a, j0, b), 1e-7)
     if scale < 1.0:
         x = 2.0
+    elif t >= grid[f, 5] and 0.0 <= x <= 1.0:
+        x = -1.0 if s >= N_LOG - 1 else 2.0  # no two-phase states above the critical temperature
     return max(p, 1.0) * scale, t, x, min(max(g, 1.0), 3.0), mu
 
 

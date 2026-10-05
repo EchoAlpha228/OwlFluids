@@ -243,7 +243,8 @@ class ValveRow(QWidget):
             self.slider = QSlider(Qt.Horizontal)
             self.slider.setRange(0, 100)
             self.slider.setMaximumWidth(90)
-            self.slider.sliderReleased.connect(lambda: panel.commanded.emit(name, self.slider.value() / 100.0))
+            # every user change (drag, groove click, keys, wheel); set_values blocks its own updates
+            self.slider.valueChanged.connect(lambda v: panel.commanded.emit(name, v / 100.0))
             h.addWidget(self.slider)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -259,7 +260,9 @@ class ValveRow(QWidget):
         colour = "#3fae5a" if cmd > 0.5 else "#d64545"
         self.button.setStyleSheet(f"QPushButton {{ background: {colour}; color: white; font-weight: bold; }}")
         if self.slider is not None and not self.slider.isSliderDown():
+            self.slider.blockSignals(True)
             self.slider.setValue(int(round(cmd * 100)))
+            self.slider.blockSignals(False)
         self.bar.setValue(int(round(pos * 100)))
 
 
