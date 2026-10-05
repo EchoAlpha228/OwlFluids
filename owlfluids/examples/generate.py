@@ -105,6 +105,8 @@ def engine_test_stand(n_purge: int = 4) -> System:
         add(f"ATM-{tag}", "boundary", fluid="nitrogen")
         con(f"K-{tag}.port", f"V-{tag}.in"), con(f"V-{tag}.out", f"L-{tag}.in"), con(f"L-{tag}.out", f"ATM-{tag}.port")
 
+    _place(s, n_purge)
+
     s.sense("PT-HP", "pressure", "MAN-HP.a", units="psi")
     s.sense("PT-OX", "pressure", "TK-OX.gas", units="psi")
     s.sense("PT-FU", "pressure", "TK-FU.gas", units="psi")
@@ -114,3 +116,37 @@ def engine_test_stand(n_purge: int = 4) -> System:
     s.sense("FM-OX", "mass_flow", "V-OXM")
     s.sense("FM-FU", "mass_flow", "V-FUM")
     return s
+
+
+def _place(s: System, n_purge: int, dx: float = 150.0, dy: float = 110.0) -> None:
+    """Schematic positions: supply on the left, oxidizer above, fuel below, purges at the bottom."""
+    grid = {
+        "GN2-K1": (0, 0), "L-K1": (1, 0), "V-K1": (2, 0), "GN2-K2": (0, 1.4), "L-K2": (1, 1.4), "V-K2": (2, 1.4),
+        "MAN-HP": (3, 0.7), "PT-HP-RV": (3, -0.6), "ATM-HP": (4, -0.6), "L-HP": (4, 0.7), "TEE-HP": (5, 0.7),
+    }
+    for tag, y in (("OX", -1.5), ("FU", 3.5)):
+        row = ["REG", "L-{}1", "V-{}P", "CV", "L-{}2", "F-{}1", "TEE-{}U"]
+        for i, name in enumerate(row):
+            cid = f"{name}-{tag}" if "{}" not in name else name.format(tag)
+            grid[cid] = (6 + i, y)
+        grid[f"RV-{tag}"] = (12, y - 0.9)
+        grid[f"ATM-{tag}R"] = (13, y - 0.9)
+        grid[f"V-{tag}V"] = (13, y)
+        grid[f"L-{tag}V"] = (14, y)
+        grid[f"ATM-{tag}"] = (15, y)
+        grid[f"TK-{tag}"] = (12, y + 1.3)
+        feed = [f"L-{tag}F1", f"F-{tag}F1", f"TEE-{tag}D", f"V-{tag}M", f"L-{tag}F2", f"F-{tag}F2", f"L-{tag}F3",
+                f"INJ-{tag}", f"CH-{tag}", f"NOZ-{tag}", f"ATM-C{tag}"]
+        for i, cid in enumerate(feed):
+            grid[cid] = (13 + i, y + 2.3)
+        grid[f"V-{tag}D"] = (15, y + 3.2)
+        grid[f"L-{tag}D"] = (16, y + 3.2)
+        grid[f"DUMP-{tag}"] = (17, y + 3.2)
+    for i in range(n_purge):
+        y = 8.5 + 1.25 * i
+        for j, cid in enumerate((f"K-P{i + 1}", f"V-P{i + 1}", f"L-P{i + 1}", f"ATM-P{i + 1}")):
+            grid[cid] = (j, y)
+    for c in s.components:
+        if c.id in grid:
+            gx, gy = grid[c.id]
+            c.position = (gx * dx, gy * dy)

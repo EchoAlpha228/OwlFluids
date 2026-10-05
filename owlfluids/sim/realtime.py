@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..core import layout as L
 from .simulation import Simulation
 
 
@@ -43,6 +44,10 @@ class Frame:
     lag: float = 0.0  # how far simulated time trails the wall clock, s
     load: float = 0.0  # share of wall time spent computing (recent average)
     stats: dict = field(default_factory=dict)
+    node_p: np.ndarray | None = None  # every node's pressure, Pa
+    node_t: np.ndarray | None = None  # every node's temperature, K
+    node_x: np.ndarray | None = None  # every node's quality code
+    link_mdot: np.ndarray | None = None  # every flow element's mass flow, kg/s
 
 
 class History:
@@ -253,7 +258,9 @@ class Runner:
         valves = {v: sim.valve_position(v) for v in sim.valves()}
         return Frame(t=sim.t, wall=wall, sensors=sim.sensors(), valves=valves,
                      commands={v: sim.valve_command(v) for v in sim.valves()}, lag=lag, load=load,
-                     stats=sim.solver_stats())
+                     stats=sim.solver_stats(), node_p=sim.nout[:, L.O_P].copy(),
+                     node_t=sim.nout[:, L.O_T].copy(), node_x=sim.nout[:, L.O_X].copy(),
+                     link_mdot=sim.lout[:, L.LO_MDOT].copy())
 
     def _publish(self, frame: Frame) -> None:
         self.frame = frame

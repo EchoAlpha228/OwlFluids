@@ -1,0 +1,69 @@
+"""Desktop app smoke tests (offscreen)."""
+import os
+import time
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+pytest.importorskip("pyqtgraph")
+
+from owlfluids.app.window import MainWindow  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def app():
+    return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
+def pump(app, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+@pytest.mark.gui
+def test_edit_save_and_run(app, tmp_path):
+    w = MainWindow()
+    w.show()
+    sc = w.scene
+    from PySide6.QtCore import QPointF
+
+    sc.add_component("tank", QPointF(0, 0))
+    sc.add_component("valve", QPointF(150, 0))
+    sc.add_component("boundary", QPointF(300, 0))
+    sc.connect_ports("K1.port", "V1.in")
+    sc.connect_ports("V1.out", "ATM1.port")
+    sc.system.sense("PT-K1", "pressure", "K1.port", units="psi")
+    assert w.dirty
+    w.path = tmp_path / "s.yaml"
+    assert w.save()
+    w.open_file(tmp_path / "s.yaml")
+    assert [c.id for c in w.scene.system.components] == ["K1", "V1", "ATM1"]
+
+    w.run()
+    deadline = time.time() + 60
+    while w.runner is None and time.time() < deadline:
+        pump(app, 0.05)
+    assert w.runner is not None, w.status_time.text()
+    p0 = w.runner.frame.sensors["PT-K1"]
+    w._toggle_valve("V1")
+    pump(app, 1.0)
+    assert w.runner.frame.commands["V1"] == 1.0
+    assert w.runner.frame.sensors["PT-K1"] < p0
+    w.stop()
+    assert w.runner is None
+    w.dirty = False
+    w.close()
+
+
+@pytest.mark.gui
+def test_examples_load_and_lay_out(app):
+    w = MainWindow()
+    for name in ("gn2-blowdown", "lox-feed", "test-stand"):
+        w.load_example(name)
+        assert len(w.scene.items_by_id) == len(w.scene.system.components)
+        assert all(c.position is not None for c in w.scene.system.components)
+    w.dirty = False
+    w.close()

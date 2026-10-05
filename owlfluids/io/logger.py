@@ -30,7 +30,7 @@ def _columns(runner) -> list[tuple[str, str]]:
 def _row(frame, runner, cols) -> list[float]:
     sim = runner.sim
     out = [frame.t]
-    for (name, unit), s in zip(cols, sim.system.sensors, strict=False):
+    for (_name, unit), s in zip(cols, sim.system.sensors, strict=False):
         out.append(units.convert(frame.sensors[s.id], unit))
     for v in sim.valves():
         out.append(frame.commands[v])
