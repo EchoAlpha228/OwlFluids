@@ -5,13 +5,16 @@ energy ``U`` (plus wall temperature when the node has a wall), and for every
 pipe link its mass flow. Orifices, valves and fittings are quasi-steady: their
 flow is an algebraic function of the node states on either side.
 
-Each step is linearly implicit (backward Euler with one Newton iteration):
+Each step is backward Euler, solved by chord Newton iterations
 
-    (I - dt J) dx = dt f(x)
+    (I - dt J) dx = -(x_k - x_n - dt f(x_k))
 
-``J`` is built by finite differences, perturbing groups of structurally
-independent states together (graph colouring), and the system is solved with a
-banded LU after the unknowns were reordered with reverse Cuthill-McKee.
+on a Jacobian ``J`` that is reused while iterations converge quickly. ``J`` is
+built by finite differences, perturbing groups of structurally independent
+states together (graph colouring) and re-evaluating only the nodes and links
+they touch. The system is solved with a banded LU after the unknowns were
+reordered with reverse Cuthill-McKee. Every Newton iterate conserves mass and
+energy exactly, because each link moves what it takes from one node into another.
 """
 
 from __future__ import annotations
@@ -43,7 +46,7 @@ jit = nb.njit(cache=True, nogil=True, _nrt=False)
 inl = jit
 
 G0 = 9.80665
-DP_LIN = 100.0  # Pa; below this pressure difference flow is linear in dP (keeps the Jacobian finite)
+DP_LIN = 2000.0  # Pa; below this pressure difference flow is linear in dP (keeps the Jacobian finite)
 R_LIN = 1e-3  # gas pressure ratio band near 1 treated the same way
 CHOKE_TAU = 1e-3  # s; relaxation time that holds pipe gas flow at the choked limit
 
@@ -606,16 +609,17 @@ def _factor(h, NI, jvals, col_ptr, col_rows, iperm, kl, ku, ab, piv):
 
 
 # Newton settings for each backward-Euler step. Most steps converge in one or two
-# iterations; filling or flashing in small volumes can take more. A step that has
-# not converged after NEWTON_MAX iterations is taken anyway (and counted), so the
-# real-time budget is never blown by one hard step.
+# chord iterations on a reused Jacobian; filling or flashing in small volumes can
+# take more, and a step that cannot converge is retried as sub-steps within a
+# fixed work budget (see ``advance``).
 NEWTON_MAX = 8
 NEWTON_TOL = 1e-4  # scaled Newton update that counts as converged
 NEWTON_REJAC = 1e-2  # update size above which the Jacobian is rebuilt at the iterate
-CLAMP = False
-ACCEPT_UNCONVERGED = False
 ACCEPT_TOL = 1e-2  # an unconverged step is still taken if its last update was this small
 JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickly
+STEP_BUDGET = 40.0  # work one step may spend (in right-hand-side evaluations) before it is forced
+JAC_COST = 5.0  # a Jacobian plus factorization, in right-hand-side evaluations
+MIN_SUBSTEP = 1.0 / 16.0  # smallest retry, as a fraction of dt
 
 
 @jit
@@ -628,6 +632,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     n = x.shape[0]
     nn = NI.shape[0]
     if ctl[4] > 0.0:
+        ctl[8] += JAC_COST + 1.0
         rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
         _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
         ctl[0] = 1.0
@@ -642,6 +647,9 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         xk[i] = x[i]
     err_prev = 1e30
     for it in range(NEWTON_MAX):
+        ctl[8] += 1.0
+        if ctl[8] > STEP_BUDGET:
+            return False
         rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
         for i in range(n):
             bvec[iperm[i]] = -(xk[i] - x[i] - h * fk[i])
@@ -656,6 +664,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             e = abs(d) / xscale[i]
             if e > err:
                 err = e
+                ctl[7] = i
         ctl[2] = it + 1
         if err < NEWTON_TOL and not chopped:
             break
@@ -663,8 +672,9 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             # stalled on a kink of the interpolated tables, already close: take it
             ctl[6] += 1.0
             break
-        if it + 1 < NEWTON_MAX and (err > NEWTON_REJAC or (it >= 1 and ctl[0] == 0.0 and err > 0.3 * err_prev)):
+        if it + 1 < NEWTON_MAX and (err > NEWTON_REJAC or (it >= 1 and ctl[0] == 0.0 and err > 0.1 * err_prev)):
             # large or slow correction: re-linearize at the current iterate
+            ctl[8] += JAC_COST + 1.0
             rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
             _jacobian(xk, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
             ctl[0] = 1.0
@@ -673,7 +683,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                 return False
         err_prev = err
     else:
-        if not ACCEPT_UNCONVERGED and (chopped or err > ACCEPT_TOL):
+        if chopped or err > ACCEPT_TOL:
             return False
         if NEWTON_MAX > 1:
             ctl[6] += 1.0
@@ -690,27 +700,37 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
 
 
 @jit
+def _physical(x, NI):
+    for i in range(x.shape[0]):
+        if not math.isfinite(x[i]):
+            return False
+    for i in range(NI.shape[0]):
+        if NI[i, N_KIND] == NODE_VOLUME and x[NI[i, N_SX]] <= 0.0:
+            return False
+    return True
+
+
+@jit
 def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
             xscale, st, sc, iperm, kl, ku,
             jvals, fk, ab, piv, bvec, xnew, ctl, stats, hist_p, hist_t, hist_m, hist_every):
     """Advance ``n_steps`` fixed steps of ``dt``.
 
     A step whose Newton iteration does not converge is retried as smaller
-    sub-steps (down to dt/256) with a fresh Jacobian; the outer step never
-    changes, so simulated time stays on the fixed grid. ``stats`` accumulates
-    [sub-steps, Newton iterations, Jacobians, failed sub-steps, clamped mass,
-    steps taken without converging].
-    History rows are written every ``hist_every`` steps (none if 0).
+    sub-steps with a fresh Jacobian; simulated time stays on the fixed grid.
+    Each step has a work budget (STEP_BUDGET Newton iterations) so one hard step
+    cannot stall real time: when it runs out, the last Newton iterate is taken if
+    it is physical (it conserves mass and energy like a converged one), otherwise
+    the state is held for the rest of the step. ``stats`` accumulates [sub-steps,
+    Newton iterations, Jacobians, failed sub-steps, forced steps, steps taken
+    without converging]. History rows are written every ``hist_every`` steps.
     """
     nl = LI.shape[0]
     hrow = 0
     for s in range(n_steps):
-        moving = False
         for k in range(nl):
             if LI[k, L_CTRL] == CTRL_VALVE:
                 d = LV[k, V_CMD] - LV[k, V_POS]
-                if d != 0.0:
-                    moving = True
                 if d > 0:
                     d = min(d, LV[k, V_RATE_OPEN] * dt)
                 else:
@@ -722,9 +742,9 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
         ctl[0] = 0.0
         remaining = dt
         h = dt
+        ctl[8] = 0.0
         while remaining > 1e-15:
             h = min(h, remaining)
-            ctl[5] = 0.0
             ok = _newton(x, h, xnew, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                          st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl)
             stats[1] += ctl[2]
@@ -732,23 +752,20 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                 stats[2] += 1.0
             if not ok:
                 stats[3] += 1.0
-                if h > dt / 64.0:
+                if h > dt * MIN_SUBSTEP and ctl[8] < STEP_BUDGET:
                     h *= 0.5
                     ctl[4] = 1.0
                     ctl[0] = 0.0
                     continue
-                # even the smallest sub-step did not converge: keep the damped
-                # iterate (masses stay positive) so simulated time does not stall
-                finite = True
-                for i in range(x.shape[0]):
-                    if not math.isfinite(xnew[i]):
-                        finite = False
-                if not finite:
+                # out of budget: take the iterate if it is physical, else hold
+                stats[4] += 1.0
+                if _physical(xnew, NI):
                     for i in range(x.shape[0]):
-                        xnew[i] = x[i]
+                        x[i] = xnew[i]
+                ctl[4] = 1.0
+                break
             for i in range(x.shape[0]):
                 x[i] = xnew[i]
-            stats[4] += ctl[5]
             stats[5] += ctl[6]
             ctl[6] = 0.0
             remaining -= h

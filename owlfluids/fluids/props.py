@@ -54,9 +54,12 @@ def state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol):
         return rho * par[f, I_R] * t, t, 2.0, par[f, I_GAMMA], par[f, I_MU]
     if m == MODEL_LIQUID:
         p = par[f, L_PREF] + par[f, L_K] * (rho / par[f, L_RHO0] - 1.0)
-        # a liquid line pulled below vapor pressure holds at vapor pressure
-        if p < par[f, L_PSAT]:
-            p = par[f, L_PSAT]
+        # a liquid line pulled below vapor pressure cavitates and holds near vapor
+        # pressure; the exponential blend keeps dP/drho continuous for Newton
+        ps = par[f, L_PSAT]
+        d = 0.5 * ps + 1000.0
+        if p < ps + d:
+            p = ps + d * math.exp((p - ps - d) / d)
         t = par[f, L_T0] + (u - par[f, L_U0]) / par[f, L_CV]
         return p, t, -1.0, 1.0, par[f, L_MU]
 

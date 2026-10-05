@@ -72,7 +72,9 @@ class Simulation:
         self.NF = net.NF.copy()
         self.t = 0.0
         self.steps = 0
-        self.ctl = np.array([0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        self.ctl = np.zeros(9)
+        self.ctl[1] = -1.0
+        self.ctl[4] = 1.0
         self.stats = np.zeros(6)
         self._sensors = {}
         for s in self.system.sensors:
@@ -122,10 +124,10 @@ class Simulation:
         return int(self.stats[0])
 
     def solver_stats(self) -> dict:
-        """Counters since reset: sub-steps, Newton iterations, Jacobians, failed sub-steps."""
+        """Counters since reset: sub-steps, Newton iterations, Jacobians, failed and forced steps."""
         s = self.stats
         return {"steps": self.steps, "substeps": int(s[0]), "newton_iterations": int(s[1]),
-                "jacobians": int(s[2]), "failed_substeps": int(s[3]), "clamped_mass": float(s[4]),
+                "jacobians": int(s[2]), "failed_substeps": int(s[3]), "forced_steps": int(s[4]),
                 "unconverged": int(s[5])}
 
     # ------------------------------------------------------------------ commands
