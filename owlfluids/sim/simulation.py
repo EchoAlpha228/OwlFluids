@@ -125,7 +125,7 @@ class Simulation:
                        net.iperm, net.kl, net.ku, self.jvals, self.f0, self.ab, self.piv, self.bvec, self.xnew,
                        self.ctl, self.stats,
                        self._empty_h, self._empty_h, self._empty_l, 0)
-        self.t += n * self.dt
+        self.t = (self.steps + n) * self.dt
         self.steps += n
         if n:
             for st in self._sensors.values():

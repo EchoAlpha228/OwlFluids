@@ -112,3 +112,29 @@ def to_psi(pa: float) -> float:
 
 def to_celsius(k: float) -> float:
     return k - 273.15
+
+
+DEFAULT_UNITS = {"pressure": "psi", "temperature": "K", "mass_flow": "kg/s", "valve_position": "",
+                 "quality": "", "density": "kg/m3", "mass": "kg", "wall_temperature": "K"}
+
+
+def convert(value_si: float, unit: str) -> float:
+    """SI value expressed in ``unit`` (the inverse of ``parse``); "" leaves it as is."""
+    u = unit.lower().replace("°", "").replace("deg", "")
+    if u in ("", "si", "k"):
+        return value_si
+    if u == "c":
+        return value_si - 273.15
+    if u == "f":
+        return (value_si - 273.15) * 9.0 / 5.0 + 32.0
+    if u == "r":
+        return value_si * 9.0 / 5.0
+    if u == "psig":
+        return (value_si - ATM) / PSI
+    if u == "barg":
+        return (value_si - ATM) / 1e5
+    if u == "kg/m3":
+        return value_si
+    if u not in _UNITS:
+        raise ValueError(f"unknown unit {unit!r}")
+    return value_si / _UNITS[u][0]
