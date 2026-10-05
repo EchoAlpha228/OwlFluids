@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "owlfluids"
+version = "0.1.0"
+description = "Real-time 1-D fluid network simulator for test automation"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "numba>=0.58",
+    "CoolProp>=6.6",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+app = ["PySide6>=6.5", "pyqtgraph>=0.13"]
+hdf5 = ["h5py>=3.8"]
+synnax = ["synnax"]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+owlfluids = "owlfluids.cli:main"
+owlfluids-tables = "owlfluids.fluids.tables:main"
+
+[tool.setuptools.packages.find]
+include = ["owlfluids*"]
+
+[tool.setuptools.package-data]
+owlfluids = ["examples/*.yaml"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: long-running validation or benchmark tests", "gui: needs Qt"]
