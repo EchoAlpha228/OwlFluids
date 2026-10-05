@@ -89,6 +89,9 @@ class Network:
     color_ptr: np.ndarray = field(repr=False, default=None)
     color_cols: np.ndarray = field(repr=False, default=None)
     iperm: np.ndarray = field(repr=False, default=None)
+    sowner: np.ndarray = field(repr=False, default=None)
+    nl_ptr: np.ndarray = field(repr=False, default=None)
+    nl_idx: np.ndarray = field(repr=False, default=None)
     kl: int = 0
     ku: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -282,6 +285,8 @@ class NetworkBuilder:
             if n.owner == "":
                 n.volume = max(self.net_volume.get(net, 0.0), self.junction_volume)
         self._assign_fluids()
+        if self.system.setting("prime_lines"):
+            self._prime_lines()
         return self._compile()
 
     def _assign_fluids(self) -> None:
@@ -320,6 +325,53 @@ class NetworkBuilder:
             fa, fb = self.nodes[lk.a].fluid, self.nodes[lk.b].fluid
             if fa != fb:
                 raise BuildError(f"{lk.owner} connects {fa} to {fb}; lines may carry one fluid only")
+
+    def _prime_lines(self) -> None:
+        """Start lines in equilibrium with the tank or volume they are open to.
+
+        Every node without its own initial state takes the state of the nearest
+        volume reachable through pipes, fittings, orifices and open valves; a line
+        on a tank's liquid port starts full of that liquid, as it is after loading.
+        Lines behind closed valves, check valves and regulators keep the system's
+        initial pressure and temperature.
+        """
+        def explicit(n):
+            if n.kind == L.NODE_BOUNDARY:
+                return True
+            i = n.init
+            return i is not None and (i[0] != "pt" or i[1] is not None or i[2] is not None)
+
+        def source_state(i, draw):
+            n = self.nodes[i]
+            if n.kind == L.NODE_BOUNDARY:
+                return ("pt", n.bp, n.bt)
+            if n.init[0] == "tank_liquid":
+                return ("pt", n.init[1], n.init[2])
+            if n.init[0] == "saturated" and draw != L.DRAW_MIX:
+                return ("saturated", n.init[1], n.init[2], 1.0 if draw == L.DRAW_LIQUID else 0.0)
+            return n.init
+
+        adj = defaultdict(list)
+        for lk in self.links:
+            if lk.kind == L.LINK_ORIFICE and lk.ctrl != L.CTRL_FIXED:
+                if lk.ctrl != L.CTRL_VALVE or not lk.valve or lk.valve[0] <= 0.0:
+                    continue
+            adj[lk.a].append((lk.b, lk.draw_a))
+            adj[lk.b].append((lk.a, lk.draw_b))
+        state: dict[int, tuple] = {}
+        q = deque()
+        for i, n in enumerate(self.nodes):
+            if explicit(n):
+                q.append((i, None))
+        while q:
+            i, st = q.popleft()
+            for j, draw in adj[i]:
+                if j in state or explicit(self.nodes[j]):
+                    continue
+                state[j] = st if st is not None else source_state(i, draw)
+                q.append((j, state[j]))
+        for j, st in state.items():
+            self.nodes[j].init = st
 
     def _compile(self) -> Network:
         sysm = self.system
@@ -401,7 +453,7 @@ class NetworkBuilder:
             if lk.kind == L.LINK_PIPE:
                 LI[k, L.L_SX] = len(x0)
                 x0.append(0.0)
-                xscale.append(1e-2)
+                xscale.append(1.0)
             if lk.valve:
                 start, r_open, r_close = lk.valve
                 LV[k] = (start, start, r_open, r_close)
@@ -521,6 +573,22 @@ def _structure(net: Network) -> None:
     net.iperm = iperm
     bw = int(np.max(np.abs(iperm[rows] - iperm[cols]))) if len(rows) else 0
     net.kl = net.ku = bw
+
+    # owner of each state (node index, or -(link + 1) for a pipe flow) and the
+    # links at each node, for the incremental Jacobian
+    sowner = np.zeros(n, dtype=np.int64)
+    for i in range(NI.shape[0]):
+        for st in node_states(i):
+            sowner[st] = i
+    adj: list[list[int]] = [[] for _ in range(NI.shape[0])]
+    for k in range(LI.shape[0]):
+        if LI[k, L.L_SX] >= 0:
+            sowner[LI[k, L.L_SX]] = -(k + 1)
+        adj[int(LI[k, L.L_A])].append(k)
+        adj[int(LI[k, L.L_B])].append(k)
+    net.sowner = sowner
+    net.nl_ptr = np.cumsum([0] + [len(a) for a in adj]).astype(np.int64)
+    net.nl_idx = np.array([k for a in adj for k in a], dtype=np.int64)
 
 
 def build_network(system: System) -> Network:

@@ -21,6 +21,7 @@ import math
 import numba as nb
 import numpy as np
 
+from ..fluids.props import psat as _psat
 from ..fluids.props import saturation, state
 from ..fluids.registry import L_PSAT, MODEL_IDEAL, MODEL_LIQUID
 from .layout import (
@@ -35,7 +36,11 @@ from .layout import (
     V_CMD, V_POS, V_RATE_CLOSE, V_RATE_OPEN,
 )
 
-jit = nb.njit(cache=True, nogil=True)
+# Compiled without Numba's reference counting: nothing here allocates, and the
+# counting otherwise costs more than the physics in the small per-node and
+# per-link helpers.
+jit = nb.njit(cache=True, nogil=True, _nrt=False)
+inl = jit
 
 G0 = 9.80665
 DP_LIN = 100.0  # Pa; below this pressure difference flow is linear in dP (keeps the Jacobian finite)
@@ -104,63 +109,82 @@ def _friction_r(mdot, rho, mu, area, diam, length, rough, k_minor):
     return (f * length / diam + k_minor) * mdot * am / (2.0 * rho * area * area)
 
 
-@jit
-def _node_props(x, NI, NF, fl, W):
+@inl
+def _node_one(i, x, NI, NF, fl, W):
+    """Fill row i of the scratch array W with the state of node i."""
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
-    n = NI.shape[0]
-    for i in range(n):
-        kind = NI[i, N_KIND]
-        f = NI[i, N_FLUID]
-        if kind == NODE_BOUNDARY:
-            rho = NF[i, NF_BRHO]
-            u = NF[i, NF_BU]
-            p, t, xq, g, mu = state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol)
-            W[i, W_P] = NF[i, NF_BP]
-            W[i, W_T] = NF[i, NF_BT]
-            W[i, W_V] = 0.0
-            W[i, W_TW] = NF[i, NF_BT]
-            W[i, W_S] = 1.0
-        else:
-            sx = NI[i, N_SX]
-            m = max(x[sx], 1e-12)
-            u = x[sx + 1] / m
-            if kind == NODE_TANK_LIQUID:
-                rho = NF[i, NF_RHOREF]
-                vol = m / rho
-                # fraction of an outflow that is still liquid; the rest is ullage gas
-                W[i, W_S] = min(max(m / NF[i, NF_MREF], 0.0), 1.0)
-            else:
-                vol = NF[i, NF_VOL]
-                pt = NI[i, N_PARTNER]
-                if pt >= 0:
-                    vol = vol - max(x[NI[pt, N_SX]], 0.0) / NF[pt, NF_RHOREF]
-                    vol = max(vol, 1e-4 * NF[i, NF_VOL])
-                rho = m / vol
-                # outflow throttle near vacuum (see NF_MREF)
-                W[i, W_S] = m / (m + NF[i, NF_MREF])
-            p, t, xq, g, mu = state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol)
-            W[i, W_P] = p
-            W[i, W_T] = t
-            W[i, W_V] = vol
-            W[i, W_TW] = x[sx + 2] if NI[i, N_WALL] else NF[i, NF_TAMB]
+    kind = NI[i, N_KIND]
+    f = NI[i, N_FLUID]
+    if kind == NODE_BOUNDARY:
+        rho = NF[i, NF_BRHO]
+        u = NF[i, NF_BU]
+        if W[i, W_RHO] == rho and W[i, W_U] == u and W[i, W_P] == NF[i, NF_BP]:
+            return  # unchanged since the last call
+        p, t, xq, g, mu = state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol)
+        W[i, W_P] = NF[i, NF_BP]
+        W[i, W_T] = NF[i, NF_BT]
+        W[i, W_V] = 0.0
+        W[i, W_TW] = NF[i, NF_BT]
+        W[i, W_S] = 1.0
         W[i, W_X] = xq
         W[i, W_RHO] = rho
         W[i, W_U] = u
         W[i, W_G] = g
         W[i, W_MU] = mu
-    # tank liquid takes its pressure from the ullage above it, plus liquid head
-    for i in range(n):
-        if NI[i, N_KIND] == NODE_TANK_LIQUID:
-            pt = NI[i, N_PARTNER]
-            head = 0.0
-            if NF[i, NF_AREA] > 0.0:
-                head = W[i, W_RHO] * G0 * W[i, W_V] / NF[i, NF_AREA]
-            W[i, W_P] = W[pt, W_P] + head
-    for i in range(n):
-        W[i, W_H] = W[i, W_U] + W[i, W_P] / W[i, W_RHO]
+        W[i, W_H] = u + NF[i, NF_BP] / rho
+        return
+    sx = NI[i, N_SX]
+    m = max(x[sx], 1e-12)
+    u = x[sx + 1] / m
+    if kind == NODE_TANK_LIQUID:
+        rho = NF[i, NF_RHOREF]
+        vol = m / rho
+        # fraction of an outflow that is still liquid; the rest is ullage gas
+        W[i, W_S] = min(max(m / NF[i, NF_MREF], 0.0), 1.0)
+    else:
+        vol = NF[i, NF_VOL]
+        pt = NI[i, N_PARTNER]
+        if pt >= 0:
+            vol = vol - max(x[NI[pt, N_SX]], 0.0) / NF[pt, NF_RHOREF]
+            vol = max(vol, 1e-4 * NF[i, NF_VOL])
+        rho = m / vol
+        # outflow throttle near vacuum (see NF_MREF)
+        W[i, W_S] = m / (m + NF[i, NF_MREF])
+    p, t, xq, g, mu = state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol)
+    W[i, W_P] = p
+    W[i, W_T] = t
+    W[i, W_V] = vol
+    W[i, W_TW] = x[sx + 2] if NI[i, N_WALL] else NF[i, NF_TAMB]
+    W[i, W_X] = xq
+    W[i, W_RHO] = rho
+    W[i, W_U] = u
+    W[i, W_G] = g
+    W[i, W_MU] = mu
+    W[i, W_H] = u + p / rho
+
+
+@inl
+def _tank_liquid_p(i, NI, NF, W):
+    """Tank liquid takes its pressure from the ullage above it, plus liquid head."""
+    pt = NI[i, N_PARTNER]
+    head = 0.0
+    if NF[i, NF_AREA] > 0.0:
+        head = W[i, W_RHO] * G0 * W[i, W_V] / NF[i, NF_AREA]
+    W[i, W_P] = W[pt, W_P] + head
+    W[i, W_H] = W[i, W_U] + W[i, W_P] / W[i, W_RHO]
 
 
 @jit
+def _node_props(x, NI, NF, fl, W):
+    n = NI.shape[0]
+    for i in range(n):
+        _node_one(i, x, NI, NF, fl, W)
+    for i in range(n):
+        if NI[i, N_KIND] == NODE_TANK_LIQUID:
+            _tank_liquid_p(i, NI, NF, W)
+
+
+@inl
 def _draw(i, d, NI, W, fl):
     """Properties of what flows out of node i through a port that draws ``d``.
 
@@ -179,7 +203,7 @@ def _draw(i, d, NI, W, fl):
     if NI[i, N_KIND] == NODE_TANK_LIQUID:
         psat = 0.0
         if t < tc:
-            psat = saturation(f, t, model, par, sat, satg)[0]
+            psat = _psat(f, t, model, par, sat, satg)
         return W[i, W_RHO], W[i, W_H], W[i, W_MU], W[i, W_G], True, psat
     if 0.0 < xq < 1.0 and d != DRAW_MIX:
         ps, rl, rv, hl, hv, mul, muv, gv, sub = saturation(f, t, model, par, sat, satg)
@@ -189,11 +213,11 @@ def _draw(i, d, NI, W, fl):
     liquid = t < tc and xq < 0.95
     psat = 0.0
     if liquid:
-        psat = saturation(f, t, model, par, sat, satg)[0]
+        psat = _psat(f, t, model, par, sat, satg)
     return W[i, W_RHO], W[i, W_H], W[i, W_MU], W[i, W_G], liquid, psat
 
 
-@jit
+@inl
 def _opening(k, LI, LF, LV, pa, pb):
     c = LI[k, L_CTRL]
     if c == CTRL_VALVE:
@@ -209,102 +233,154 @@ def _opening(k, LI, LF, LV, pa, pb):
     return 1.0
 
 
+@inl
+def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
+    """Flows carried by link k.
+
+    ``fn[0..3]`` are the nodes it changes (upstream, downstream, and the ullage
+    partners of either when it is tank liquid; -1 for none) and ``fv[2s]``,
+    ``fv[2s + 1]`` their mass and energy rates; ``fv[8]`` is d(mdot)/dt of a pipe.
+    Returns (signed mass flow, opening).
+    """
+    for s in range(4):
+        fn[s] = -1
+    for s in range(9):
+        fv[s] = 0.0
+    a = LI[k, L_A]
+    b = LI[k, L_B]
+    pa = W[a, W_P]
+    pb = W[b, W_P]
+    o = _opening(k, LI, LF, LV, pa, pb)
+    pipe = LI[k, L_KIND] == LINK_PIPE
+    if pipe:
+        mdot = x[LI[k, L_SX]]
+        fwd = mdot > 0.0 or (mdot == 0.0 and pa >= pb)
+    else:
+        fwd = pa >= pb
+        mdot = 0.0
+    up = a if fwd else b
+    dn = b if fwd else a
+    d_up = LI[k, L_DRAWA] if fwd else LI[k, L_DRAWB]
+    rho, h, mu, gam, liquid, psat = _draw(up, d_up, NI, W, fl)
+    s_up = W[up, W_S]
+    up_kind = NI[up, N_KIND]
+    pt = NI[up, N_PARTNER]
+    # an emptying tank liquid region hands its outflow over to the ullage gas
+    if up_kind == NODE_TANK_LIQUID and s_up < 0.5:
+        rho2, h2, mu2, gam2, liq2, ps2 = _draw(pt, DRAW_VAPOR, NI, W, fl)
+        rho, mu, gam, liquid, psat = rho2, mu2, gam2, liq2, ps2
+    p_up = W[up, W_P]
+    p_dn = W[dn, W_P]
+    if pipe:
+        area = LF[k, LF_AREA]
+        r = _friction_r(mdot, rho, mu, area, LF[k, LF_DIAM], LF[k, LF_LEN], LF[k, LF_ROUGH], LF[k, LF_K])
+        acc = area / LF[k, LF_LEN] * (pa - pb - r)
+        if not liquid:
+            m_ch = _choked_flux(p_up, rho, gam) * area
+            if abs(mdot) > m_ch:
+                acc -= (abs(mdot) - m_ch) * (1.0 if mdot > 0 else -1.0) / CHOKE_TAU
+        fv[8] = acc
+        q = abs(mdot)
+        if up_kind == NODE_VOLUME:
+            q *= s_up
+            mdot = q if fwd else -q
+    else:
+        q = _orifice_flow(LF[k, LF_CDA] * o, p_up, p_dn, rho, gam, liquid, psat)
+        if up_kind == NODE_VOLUME:
+            q *= s_up
+        mdot = q if fwd else -q
+    if q == 0.0:
+        return mdot, o
+    if up_kind == NODE_TANK_LIQUID:
+        # liquid share at the liquid enthalpy, the rest as ullage gas
+        h_g = _draw(pt, DRAW_VAPOR, NI, W, fl)[1]
+        fn[0] = up
+        fv[0] = -s_up * q
+        fv[1] = -s_up * q * h
+        fn[2] = pt
+        fv[4] = -(1.0 - s_up) * q
+        fv[5] = -(1.0 - s_up) * q * h_g
+        e = s_up * q * h + (1.0 - s_up) * q * h_g
+        # the ullage does the work of pushing the liquid out
+        w = W[pt, W_P] * fv[0] / NF[up, NF_RHOREF]
+        fv[5] += w
+        fv[1] -= w
+    else:
+        if up_kind != NODE_BOUNDARY:
+            fn[0] = up
+            fv[0] = -q
+            fv[1] = -q * h
+        e = q * h
+    if NI[dn, N_KIND] != NODE_BOUNDARY:
+        fn[1] = dn
+        fv[2] = q
+        fv[3] = e
+        if NI[dn, N_KIND] == NODE_TANK_LIQUID:
+            pd = NI[dn, N_PARTNER]
+            fn[3] = pd
+            w = W[pd, W_P] * q / NF[dn, NF_RHOREF]
+            fv[7] += w
+            fv[3] -= w
+    return mdot, o
+
+
+@inl
+def _node_source(i, x, NI, NF, W, ns):
+    """Heat flows of node i: ns[0] into the fluid, ns[1] d(Tw)/dt of its wall."""
+    ns[0] = 0.0
+    ns[1] = 0.0
+    if NI[i, N_KIND] == NODE_BOUNDARY:
+        return
+    t = W[i, W_T]
+    if NI[i, N_WALL]:
+        tw = x[NI[i, N_SX] + 2]
+        q_in = NF[i, NF_HA] * (tw - t)
+        ns[0] = q_in
+        ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / NF[i, NF_WALLMC]
+    elif NF[i, NF_HA] > 0.0:
+        ns[0] = NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
+
+
+@inl
+def _scatter_link(k, NI, LI, fn, fv, out, sign):
+    for s in range(4):
+        i = fn[s]
+        if i >= 0:
+            sx = NI[i, N_SX]
+            out[sx] += sign * fv[2 * s]
+            out[sx + 1] += sign * fv[2 * s + 1]
+    if LI[k, L_KIND] == LINK_PIPE:
+        out[LI[k, L_SX]] += sign * fv[8]
+
+
+@inl
+def _scatter_node(i, NI, ns, out, sign):
+    if NI[i, N_KIND] == NODE_BOUNDARY:
+        return
+    sx = NI[i, N_SX]
+    out[sx + 1] += sign * ns[0]
+    if NI[i, N_WALL]:
+        out[sx + 2] += sign * ns[1]
+
+
 @jit
-def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout):
-    """Time derivative of the state vector. Also fills node and link outputs."""
-    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
+def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
+    """Time derivative of the state vector. Also fills node and link outputs.
+
+    The per-link and per-node contributions are kept in FN, FV and NS so the
+    Jacobian can update them incrementally.
+    """
     xdot[:] = 0.0
     _node_props(x, NI, NF, fl, W)
-    nl = LI.shape[0]
-    for k in range(nl):
-        a = LI[k, L_A]
-        b = LI[k, L_B]
-        pa = W[a, W_P]
-        pb = W[b, W_P]
-        o = _opening(k, LI, LF, LV, pa, pb)
-        if LI[k, L_KIND] == LINK_PIPE:
-            sx = LI[k, L_SX]
-            mdot = x[sx]
-            fwd = mdot > 0.0 or (mdot == 0.0 and pa >= pb)
-        else:
-            fwd = pa >= pb
-            mdot = 0.0
-        up = a if fwd else b
-        dn = b if fwd else a
-        d_up = LI[k, L_DRAWA] if fwd else LI[k, L_DRAWB]
-        rho, h, mu, gam, liquid, psat = _draw(up, d_up, NI, W, fl)
-        s_up = W[up, W_S]
-        pt = NI[up, N_PARTNER]
-        # an emptying tank liquid region hands its outflow over to the ullage gas
-        if NI[up, N_KIND] == NODE_TANK_LIQUID and s_up < 0.5:
-            rho2, h2, mu2, gam2, liq2, ps2 = _draw(pt, DRAW_VAPOR, NI, W, fl)
-            rho, mu, gam, liquid, psat = rho2, mu2, gam2, liq2, ps2
-        p_up = W[up, W_P]
-        p_dn = W[dn, W_P]
-        if LI[k, L_KIND] == LINK_PIPE:
-            area = LF[k, LF_AREA]
-            r = _friction_r(mdot, rho, mu, area, LF[k, LF_DIAM], LF[k, LF_LEN], LF[k, LF_ROUGH], LF[k, LF_K])
-            acc = area / LF[k, LF_LEN] * (pa - pb - r)
-            if not liquid:
-                m_ch = _choked_flux(p_up, rho, gam) * area
-                if abs(mdot) > m_ch:
-                    acc -= (abs(mdot) - m_ch) * (1.0 if mdot > 0 else -1.0) / CHOKE_TAU
-            xdot[sx] = acc
-            q = abs(mdot)
-            if NI[up, N_KIND] == NODE_VOLUME:
-                q *= s_up
-                mdot = q if fwd else -q
-        else:
-            q = _orifice_flow(LF[k, LF_CDA] * o, p_up, p_dn, rho, gam, liquid, psat)
-            if NI[up, N_KIND] == NODE_VOLUME:
-                q *= s_up
-            mdot = q if fwd else -q
+    for k in range(LI.shape[0]):
+        mdot, o = _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, FN[k], FV[k])
         lout[k, LO_MDOT] = mdot
         lout[k, LO_OPEN] = o
-        if q == 0.0:
-            continue
-        # energy carried: liquid share at the liquid enthalpy, the rest as ullage gas
-        if NI[up, N_KIND] == NODE_TANK_LIQUID:
-            h_g = _draw(pt, DRAW_VAPOR, NI, W, fl)[1]
-            sx_up = NI[up, N_SX]
-            sx_pt = NI[pt, N_SX]
-            xdot[sx_up] -= s_up * q
-            xdot[sx_up + 1] -= s_up * q * h
-            xdot[sx_pt] -= (1.0 - s_up) * q
-            xdot[sx_pt + 1] -= (1.0 - s_up) * q * h_g
-            e = s_up * q * h + (1.0 - s_up) * q * h_g
-        else:
-            if NI[up, N_KIND] != NODE_BOUNDARY:
-                sx_up = NI[up, N_SX]
-                xdot[sx_up] -= q
-                xdot[sx_up + 1] -= q * h
-            e = q * h
-        if NI[dn, N_KIND] != NODE_BOUNDARY:
-            sx_dn = NI[dn, N_SX]
-            xdot[sx_dn] += q
-            xdot[sx_dn + 1] += e
-
+        _scatter_link(k, NI, LI, FN[k], FV[k], xdot, 1.0)
     n = NI.shape[0]
     for i in range(n):
-        kind = NI[i, N_KIND]
-        if kind == NODE_BOUNDARY:
-            continue
-        sx = NI[i, N_SX]
-        t = W[i, W_T]
-        if NI[i, N_WALL]:
-            tw = x[sx + 2]
-            q_in = NF[i, NF_HA] * (tw - t)
-            xdot[sx + 1] += q_in
-            xdot[sx + 2] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / NF[i, NF_WALLMC]
-        elif NF[i, NF_HA] > 0.0:
-            xdot[sx + 1] += NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
-        if kind == NODE_TANK_LIQUID:
-            # liquid volume change does pressure work on the ullage gas
-            pt = NI[i, N_PARTNER]
-            w = W[pt, W_P] * xdot[sx] / NF[i, NF_RHOREF]
-            xdot[NI[pt, N_SX] + 1] += w
-            xdot[sx + 1] -= w
-
+        _node_source(i, x, NI, NF, W, NS[i])
+        _scatter_node(i, NI, NS[i], xdot, 1.0)
     for i in range(n):
         nout[i, O_P] = W[i, W_P]
         nout[i, O_T] = W[i, W_T]
@@ -320,23 +396,140 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout):
 
 
 @jit
-def _jacobian(x, f0, NI, NF, LI, LF, LV, fl, W, nscr, lscr,
-              xscale, col_ptr, col_rows, color_ptr, color_cols, jvals, xp, fp):
+def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
+    """Finite-difference Jacobian at x, right after ``rhs(x)`` filled W, FN, FV, NS.
+
+    Columns of one colour are perturbed together. Only the nodes they own (and
+    their tank partners) are re-evaluated, and only the links touching those
+    nodes; the change of each contribution gives the Jacobian entries, so a
+    colour costs a small fraction of a full right-hand side.
+    """
+    col_ptr, col_rows, color_ptr, color_cols, sowner, nl_ptr, nl_idx = st
+    xp, dfp, stn, stl, dl, ll, wsave, fnt, fvt, nst, gen = sc
     n = x.shape[0]
+    nw = W.shape[1]
+    for j in range(n):
+        xp[j] = x[j]
+        dfp[j] = 0.0
     ncol = color_ptr.shape[0] - 1
     for c in range(ncol):
-        for j in range(n):
-            xp[j] = x[j]
+        gen[0] += 1
+        g = gen[0]
+        nd = 0
+        nk = 0
         for q in range(color_ptr[c], color_ptr[c + 1]):
             j = color_cols[q]
             xp[j] = x[j] + 1e-7 * max(abs(x[j]), xscale[j])
-        rhs(xp, fp, NI, NF, LI, LF, LV, fl, W, nscr, lscr)
+            o = sowner[j]
+            if o >= 0:
+                for i in (o, NI[o, N_PARTNER]):
+                    if i >= 0 and stn[i] != g:
+                        stn[i] = g
+                        dl[nd] = i
+                        nd += 1
+            else:
+                k = -o - 1
+                if stl[k] != g:
+                    stl[k] = g
+                    ll[nk] = k
+                    nk += 1
+        for d in range(nd):
+            i = dl[d]
+            for col in range(nw):
+                wsave[d, col] = W[i, col]
+            _node_one(i, xp, NI, NF, fl, W)
+            for idx in range(nl_ptr[i], nl_ptr[i + 1]):
+                k = nl_idx[idx]
+                if stl[k] != g:
+                    stl[k] = g
+                    ll[nk] = k
+                    nk += 1
+        for d in range(nd):
+            i = dl[d]
+            if NI[i, N_KIND] == NODE_TANK_LIQUID:
+                _tank_liquid_p(i, NI, NF, W)
+        for d in range(nk):
+            k = ll[d]
+            _scatter_link(k, NI, LI, FN[k], FV[k], dfp, -1.0)
+            _link_flux(k, xp, NI, NF, LI, LF, LV, fl, W, fnt, fvt)
+            _scatter_link(k, NI, LI, fnt, fvt, dfp, 1.0)
+        for d in range(nd):
+            i = dl[d]
+            _scatter_node(i, NI, NS[i], dfp, -1.0)
+            _node_source(i, xp, NI, NF, W, nst)
+            _scatter_node(i, NI, nst, dfp, 1.0)
         for q in range(color_ptr[c], color_ptr[c + 1]):
             j = color_cols[q]
             h = xp[j] - x[j]
             for idx in range(col_ptr[j], col_ptr[j + 1]):
                 i = col_rows[idx]
-                jvals[idx] = (fp[i] - f0[i]) / h
+                jvals[idx] = dfp[i] / h
+            xp[j] = x[j]
+        # undo: scratch rows and the derivative entries (all inside these columns' rows)
+        for d in range(nd):
+            i = dl[d]
+            for col in range(nw):
+                W[i, col] = wsave[d, col]
+        for q in range(color_ptr[c], color_ptr[c + 1]):
+            j = color_cols[q]
+            for idx in range(col_ptr[j], col_ptr[j + 1]):
+                dfp[col_rows[idx]] = 0.0
+
+
+@jit
+def _liquid_margin(f, rho, u, model, grid, lgrid, rhol):
+    """Relative distance of (rho, u) past the saturated-liquid boundary (> 0: compressed liquid)."""
+    if model[f] == MODEL_LIQUID or model[f] == MODEL_IDEAL:
+        return -1.0
+    u = min(max(u, grid[f, 3]), grid[f, 4])
+    u_lo = lgrid[f, 0]
+    u_hi = lgrid[f, 1]
+    if u >= u_hi:
+        return -1.0
+    su = (u - u_lo) / (u_hi - u_lo) * (rhol.shape[1] - 1)
+    k0 = min(max(int(math.floor(su)), 0), rhol.shape[1] - 2)
+    c = su - k0
+    r_l = (1 - c) * rhol[f, k0] + c * rhol[f, k0 + 1]
+    return rho / r_l - 1.0
+
+
+@jit
+def _chop(xk, bvec, iperm, NI, NF, fl):
+    """Limit each volume node's Newton update (Appleyard-style chop).
+
+    A node may not lose more than 80% of its mass in one iteration, and an update
+    that crosses the saturated-liquid boundary stops a little past it, so the next
+    iteration is linearized on the right side of the kink. Scaling m and U together
+    keeps the update's direction. Returns True if anything was chopped.
+    """
+    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
+    chopped = False
+    for i in range(NI.shape[0]):
+        if NI[i, N_KIND] != NODE_VOLUME or NI[i, N_PARTNER] >= 0:
+            continue
+        sx = NI[i, N_SX]
+        m0 = xk[sx]
+        dm = bvec[iperm[sx]]
+        du = bvec[iperm[sx + 1]]
+        a = 1.0
+        if m0 + dm < 0.2 * m0:
+            a = 0.8 * m0 / -dm
+        f = NI[i, N_FLUID]
+        vol = NF[i, NF_VOL]
+        u0 = xk[sx + 1] / m0
+        m1 = m0 + a * dm
+        u1 = (xk[sx + 1] + a * du) / m1
+        l0 = _liquid_margin(f, m0 / vol, u0, model, grid, lgrid, rhol)
+        l1 = _liquid_margin(f, m1 / vol, u1, model, grid, lgrid, rhol)
+        if (l0 <= 0.0) != (l1 <= 0.0) and abs(l1) > 1e-3:
+            c = l0 / (l0 - l1)
+            c = c + 0.1 * (1.0 - c)
+            a *= c
+        if a < 1.0:
+            bvec[iperm[sx]] = a * dm
+            bvec[iperm[sx + 1]] = a * du
+            chopped = True
+    return chopped
 
 
 @jit
@@ -421,12 +614,13 @@ NEWTON_TOL = 1e-4  # scaled Newton update that counts as converged
 NEWTON_REJAC = 1e-2  # update size above which the Jacobian is rebuilt at the iterate
 CLAMP = False
 ACCEPT_UNCONVERGED = False
+ACCEPT_TOL = 1e-2  # an unconverged step is still taken if its last update was this small
 JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickly
 
 
 @jit
-def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr, xscale,
-            col_ptr, col_rows, color_ptr, color_cols, iperm, kl, ku, jvals, xp, fp, fk, ab, piv, bvec, ctl):
+def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
+            st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl):
     """One backward-Euler step of size h from x into xk by damped modified Newton.
 
     ``ctl``: [jac_fresh, lu_h, iterations of last solve, jac_age, need_jac, clamped mass]. Returns success.
@@ -434,40 +628,25 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr, xscale,
     n = x.shape[0]
     nn = NI.shape[0]
     if ctl[4] > 0.0:
-        rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout)
-        _jacobian(x, fk, NI, NF, LI, LF, LV, fl, W, nscr, lscr,
-                  xscale, col_ptr, col_rows, color_ptr, color_cols, jvals, xp, fp)
+        rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
+        _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
         ctl[0] = 1.0
         ctl[3] = 0.0
         ctl[4] = 0.0
         ctl[1] = -1.0
     if ctl[1] != h:
-        if not _factor(h, NI, jvals, col_ptr, col_rows, iperm, kl, ku, ab, piv):
+        if not _factor(h, NI, jvals, st[0], st[1], iperm, kl, ku, ab, piv):
             return False
         ctl[1] = h
     for i in range(n):
         xk[i] = x[i]
+    err_prev = 1e30
     for it in range(NEWTON_MAX):
-        rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout)
+        rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
         for i in range(n):
             bvec[iperm[i]] = -(xk[i] - x[i] - h * fk[i])
         _band_solve(ab, piv, bvec, kl, ku, n)
-        # a volume may lose at most 95% of its mass in one iteration; a larger
-        # predicted loss is clamped (the clamped mass is counted in stats)
-        for i in range(nn):
-            if NI[i, N_KIND] != NODE_VOLUME:
-                continue
-            sx = NI[i, N_SX]
-            m = xk[sx]
-            dm = bvec[iperm[sx]]
-            if m + dm < 0.05 * m:
-                if CLAMP:
-                    u_old = xk[sx + 1] / max(m, 1e-30)
-                    bvec[iperm[sx]] = -0.95 * m
-                    bvec[iperm[sx + 1]] = 0.05 * m * u_old - xk[sx + 1]
-                    ctl[5] += 0.05 * m - (m + dm)
-                else:
-                    return False
+        chopped = _chop(xk, bvec, iperm, NI, NF, fl)
         err = 0.0
         for i in range(n):
             d = bvec[iperm[i]]
@@ -478,19 +657,23 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr, xscale,
             if e > err:
                 err = e
         ctl[2] = it + 1
-        if err < NEWTON_TOL:
+        if err < NEWTON_TOL and not chopped:
             break
-        if it + 1 < NEWTON_MAX and (err > NEWTON_REJAC or (it >= 1 and ctl[0] == 0.0)):
+        if it >= 1 and not chopped and err < ACCEPT_TOL and err > 0.5 * err_prev:
+            # stalled on a kink of the interpolated tables, already close: take it
+            ctl[6] += 1.0
+            break
+        if it + 1 < NEWTON_MAX and (err > NEWTON_REJAC or (it >= 1 and ctl[0] == 0.0 and err > 0.3 * err_prev)):
             # large or slow correction: re-linearize at the current iterate
-            rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout)
-            _jacobian(xk, fk, NI, NF, LI, LF, LV, fl, W, nscr, lscr,
-                      xscale, col_ptr, col_rows, color_ptr, color_cols, jvals, xp, fp)
+            rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
+            _jacobian(xk, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
             ctl[0] = 1.0
             ctl[3] = 0.0
-            if not _factor(h, NI, jvals, col_ptr, col_rows, iperm, kl, ku, ab, piv):
+            if not _factor(h, NI, jvals, st[0], st[1], iperm, kl, ku, ab, piv):
                 return False
+        err_prev = err
     else:
-        if not ACCEPT_UNCONVERGED:
+        if not ACCEPT_UNCONVERGED and (chopped or err > ACCEPT_TOL):
             return False
         if NEWTON_MAX > 1:
             ctl[6] += 1.0
@@ -507,9 +690,9 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr, xscale,
 
 
 @jit
-def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr,
-            xscale, col_ptr, col_rows, color_ptr, color_cols, iperm, kl, ku,
-            jvals, xp, fp, fk, ab, piv, bvec, xnew, ctl, stats, hist_p, hist_t, hist_m, hist_every):
+def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
+            xscale, st, sc, iperm, kl, ku,
+            jvals, fk, ab, piv, bvec, xnew, ctl, stats, hist_p, hist_t, hist_m, hist_every):
     """Advance ``n_steps`` fixed steps of ``dt``.
 
     A step whose Newton iteration does not converge is retried as smaller
@@ -534,7 +717,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr,
                     d = max(d, -LV[k, V_RATE_CLOSE] * dt)
                 LV[k, V_POS] += d
         ctl[3] += 1.0
-        if moving or ctl[3] >= JAC_MAX_AGE or ctl[2] > 3:
+        if ctl[3] >= JAC_MAX_AGE or ctl[2] > 3:
             ctl[4] = 1.0
         ctl[0] = 0.0
         remaining = dt
@@ -542,9 +725,8 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr,
         while remaining > 1e-15:
             h = min(h, remaining)
             ctl[5] = 0.0
-            ok = _newton(x, h, xnew, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr, xscale,
-                         col_ptr, col_rows, color_ptr, color_cols, iperm, kl, ku, jvals, xp, fp, fk, ab, piv,
-                         bvec, ctl)
+            ok = _newton(x, h, xnew, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
+                         st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl)
             stats[1] += ctl[2]
             if ctl[0] > 0.0:
                 stats[2] += 1.0
@@ -574,11 +756,11 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, nscr, lscr,
             if h < dt:
                 h = min(2.0 * h, dt)
         if hist_every > 0 and (s + 1) % hist_every == 0 and hrow < hist_p.shape[0]:
-            rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout)
+            rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
             for i in range(NI.shape[0]):
                 hist_p[hrow, i] = nout[i, O_P]
                 hist_t[hrow, i] = nout[i, O_T]
             for k in range(nl):
                 hist_m[hrow, k] = lout[k, LO_MDOT]
             hrow += 1
-    rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout)
+    rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)

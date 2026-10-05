@@ -27,6 +27,7 @@ DEFAULT_SETTINGS = {
     "initial_pressure": "1 atm",
     "initial_temperature": "293.15 K",
     "junction_volume": "1 cc",
+    "prime_lines": True,
     "backend": "HEOS",
     "fluid_models": {},
 }

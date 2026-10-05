@@ -47,12 +47,15 @@ class Simulation:
         self.W = np.zeros((nn, kernel.N_W))
         self.nout = np.zeros((nn, L.N_NO))
         self.lout = np.zeros((nl, L.N_LO))
-        self.nscr = np.zeros((nn, L.N_NO))
-        self.lscr = np.zeros((nl, L.N_LO))
+        self.FN = np.full((nl, 4), -1, dtype=np.int64)
+        self.FV = np.zeros((nl, 9))
+        self.NS = np.zeros((nn, 2))
         self.jvals = np.zeros(len(net.col_rows))
-        self.xp = np.zeros(n)
-        self.fp = np.zeros(n)
         self.f0 = np.zeros(n)
+        self.st = (net.col_ptr, net.col_rows, net.color_ptr, net.color_cols, net.sowner, net.nl_ptr, net.nl_idx)
+        self.sc = (np.zeros(n), np.zeros(n), np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64),
+                   np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64), np.zeros((nn, kernel.N_W)),
+                   np.zeros(4, dtype=np.int64), np.zeros(9), np.zeros(2), np.zeros(1, dtype=np.int64))
         self.ab = np.zeros((n, 2 * net.kl + net.ku + 1))
         self.piv = np.zeros(n, dtype=np.int64)
         self.bvec = np.zeros(n)
@@ -104,9 +107,9 @@ class Simulation:
     def _advance(self, n: int) -> None:
         net = self.net
         kernel.advance(self.x, n, self.dt, net.NI, self.NF, net.LI, net.LF, self.LV, self.fl, self.W,
-                       self.nout, self.lout, self.nscr, self.lscr, net.xscale, net.col_ptr, net.col_rows,
-                       net.color_ptr, net.color_cols, net.iperm, net.kl, net.ku, self.jvals, self.xp,
-                       self.fp, self.f0, self.ab, self.piv, self.bvec, self.xnew, self.ctl, self.stats,
+                       self.nout, self.lout, self.FN, self.FV, self.NS, net.xscale, self.st, self.sc,
+                       net.iperm, net.kl, net.ku, self.jvals, self.f0, self.ab, self.piv, self.bvec, self.xnew,
+                       self.ctl, self.stats,
                        self._empty_h, self._empty_h, self._empty_l, 0)
         self.t += n * self.dt
         self.steps += n

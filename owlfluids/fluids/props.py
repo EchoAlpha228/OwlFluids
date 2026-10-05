@@ -20,7 +20,7 @@ from .tables import (
     S_GAMV, S_HL, S_HV, S_MUL, S_MUV, S_PSAT, S_RHOL, S_RHOV,
 )
 
-jit = nb.njit(cache=True, fastmath=False, nogil=True)
+jit = nb.njit(cache=True, fastmath=False, nogil=True, _nrt=False)
 
 
 @jit
@@ -129,3 +129,17 @@ def saturation(f, t, model, par, sat, satg):
     out6 = (1 - a) * sat[f, S_MUV, k] + a * sat[f, S_MUV, k + 1]
     out7 = (1 - a) * sat[f, S_GAMV, k] + a * sat[f, S_GAMV, k + 1]
     return out0, out1, out2, out3, out4, out5, out6, out7, sub
+
+
+@jit
+def psat(f, t, model, par, sat, satg):
+    """Saturation pressure only (the cheap part of ``saturation``)."""
+    if model[f] == MODEL_LIQUID:
+        return par[f, L_PSAT]
+    if model[f] == MODEL_IDEAL:
+        return 0.0
+    t_min = satg[f, 0]
+    s = (t - t_min) / (satg[f, 1] - t_min) * (N_SAT - 1)
+    k = min(max(int(math.floor(s)), 0), N_SAT - 2)
+    a = min(max(s - k, 0.0), 1.0)
+    return (1 - a) * sat[f, S_PSAT, k] + a * sat[f, S_PSAT, k + 1]
