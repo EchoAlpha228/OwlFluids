@@ -11,7 +11,6 @@ the CPU allows; ``owlfluids.sim.realtime`` paces the same object to the wall clo
 from __future__ import annotations
 
 import math
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -64,22 +63,17 @@ class Simulation:
         self._empty_h = np.zeros((0, max(nn, 1)))
         self._empty_l = np.zeros((0, max(nl, 1)))
         self.fl = self.net.fluids.arrays()
-        self.step_budget = self._measure_budget()
+        self.step_budget = self._step_budget()
 
-    def _measure_budget(self, share: float = 0.6) -> float:
-        """Work one step may spend, in right-hand-side evaluations: ``share`` of dt."""
-        net = self.net
-        x = net.x0.copy()
-        f = np.zeros(net.n_states)
-        args = (x, f, net.NI, net.NF.copy(), net.LI, net.LF, net.LV.copy(), self.fl, self.W, self.nout, self.lout,
-                self.FN, self.FV, self.NS)
-        kernel.rhs_repeat(1, *args)  # compile / load
-        n = 200
-        t0 = time.perf_counter()
-        kernel.rhs_repeat(n, *args)
-        per = (time.perf_counter() - t0) / n
-        self.W[:] = 0.0
-        return float(min(max(share * self.dt / max(per, 1e-7), 30.0), 1000.0))
+    def _step_budget(self, share: float = 0.6) -> float:
+        """Work one step may spend, in right-hand-side evaluations.
+
+        Sized so a step uses at most ``share`` of dt on a typical desktop CPU
+        (about 0.1 us per node or link per evaluation). It depends only on the
+        network, so runs are reproducible on any machine.
+        """
+        elements = self.net.NI.shape[0] + self.net.LI.shape[0]
+        return float(min(max(share * self.dt / (1e-7 * elements), 30.0), 1000.0))
 
     def reset(self) -> None:
         """Back to the initial conditions of the system."""
