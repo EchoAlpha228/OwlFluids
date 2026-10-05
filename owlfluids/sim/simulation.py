@@ -88,14 +88,15 @@ class Simulation:
         args = (net.x0.copy(), self.f0, net.NI, net.NF.copy(), net.LI, net.LF, net.LV.copy(), self.fl,
                 self.W, self.nout, self.lout, self.FN, self.FV, self.NS)
         kernel.rhs(*args)  # compile
-        best = math.inf
+        runs = []
         for _ in range(5):
             t0 = time.perf_counter()
             for _ in range(20):
                 kernel.rhs(*args)
-            best = min(best, (time.perf_counter() - t0) / 20)
-        self.rhs_seconds = best
-        return float(min(max(share * self.dt / (1.5 * max(best, 1e-9)), 8.0), 1000.0))
+            runs.append((time.perf_counter() - t0) / 20)
+        # the median, not the best: leaves margin when other threads (GUI, Synnax) share the CPU
+        self.rhs_seconds = cost = sorted(runs)[len(runs) // 2]
+        return float(min(max(share * self.dt / (1.5 * max(cost, 1e-9)), 8.0), 1000.0))
 
     def reset(self) -> None:
         """Back to the initial conditions of the system."""
