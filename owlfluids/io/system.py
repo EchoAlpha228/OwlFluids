@@ -150,7 +150,7 @@ class System:
 
     def save(self, path: str | Path) -> None:
         with open(path, "w", encoding="utf-8") as fh:
-            yaml.dump(self.to_dict(), fh, Dumper=_FlowDumper, sort_keys=False, width=120, allow_unicode=True)
+            yaml.dump(self.to_dict(), fh, Dumper=_FlowDumper, sort_keys=False, width=4096, allow_unicode=True)
 
 
 class _FlowDumper(yaml.SafeDumper):

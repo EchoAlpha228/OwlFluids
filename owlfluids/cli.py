@@ -57,7 +57,10 @@ def cmd_run(args) -> int:
             print(_fmt(sim, frame), flush=True)
 
     runner.add_listener(show)
+    driver = _start_driver(args, runner)
     runner.start()
+    if driver:
+        driver.start()
     try:
         if args.script:
             ns: dict = {"__name__": "__owlfluids__", "units": units}
@@ -70,12 +73,26 @@ def cmd_run(args) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if driver:
+            driver.stop()
         runner.stop()
         if log:
             log.close()
     st = sim.solver_stats()
     print(f"done: t={sim.t:.3f}s, {st['steps']} steps, {runner.slips} clock slips, {st['forced_steps']} forced steps")
     return 1 if runner.error else 0
+
+
+def _start_driver(args, runner):
+    if not getattr(args, "synnax", None):
+        return None
+    from .drivers.synnax import SynnaxConfig, SynnaxDriver
+
+    cfg = SynnaxConfig.load(args.synnax)
+    driver = SynnaxDriver(runner, cfg)
+    print(f"Synnax: writing {len(driver.sensors)} sensors at {cfg.rate:g} Hz to {cfg.host}:{cfg.port}, "
+          f"reading {len(driver.valves)} valve channels")
+    return driver
 
 
 CONSOLE_HELP = """commands:
@@ -92,7 +109,10 @@ def cmd_console(args) -> int:
 
     sim = Simulation(_load(args.system))
     runner = Runner(sim)
+    driver = _start_driver(args, runner)
     runner.start()
+    if driver:
+        driver.start()
     log = None
     print(f"{sim.system.name}: running in real time. Valves: {', '.join(sim.valves()) or 'none'}")
     print(CONSOLE_HELP)
@@ -144,6 +164,8 @@ def cmd_console(args) -> int:
                 print("simulation error:", runner.error)
                 break
     finally:
+        if driver:
+            driver.stop()
         runner.stop()
         if log:
             log.close()
@@ -214,10 +236,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--log", help="write a .csv or .h5 log")
     p.add_argument("--log-interval", type=float, default=0.01)
     p.add_argument("--print-every", type=float, default=1.0, help="print sensors every N simulated s (0 = never)")
+    p.add_argument("--synnax", help="YAML file with a synnax: section; runs hardware-in-the-loop")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("console", help="run in real time with typed valve commands")
     p.add_argument("system")
+    p.add_argument("--synnax", help="YAML file with a synnax: section; runs hardware-in-the-loop")
     p.set_defaults(fn=cmd_console)
 
     p = sub.add_parser("check", help="build a system and print a summary")

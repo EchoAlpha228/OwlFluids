@@ -65,8 +65,26 @@ def table_path(coolprop_name: str, backend: str) -> Path:
 def _state(coolprop_name: str, backend: str):
     from CoolProp import AbstractState
 
+    if backend == "REFPROP":
+        _point_coolprop_at_refprop()
     name = REFPROP_NAMES.get(coolprop_name, coolprop_name) if backend == "REFPROP" else coolprop_name
-    return AbstractState(backend, name)
+    try:
+        return AbstractState(backend, name)
+    except ValueError as e:
+        if backend == "REFPROP":
+            raise RuntimeError(
+                f"REFPROP could not load {name}: {e}. Set RPPREFIX (or OWLFLUIDS_REFPROP_PATH) to the REFPROP "
+                "folder, e.g. C:\\Program Files (x86)\\REFPROP, or use the HEOS backend.") from None
+        raise
+
+
+def _point_coolprop_at_refprop() -> None:
+    """Tell CoolProp where REFPROP lives when an environment variable says so."""
+    path = os.environ.get("OWLFLUIDS_REFPROP_PATH") or os.environ.get("RPPREFIX")
+    if path:
+        import CoolProp.CoolProp as CP
+
+        CP.set_config_string(CP.ALTERNATIVE_REFPROP_PATH, path)
 
 
 def rho_grid(rho_min: float, rho_split: float, rho_max: float) -> np.ndarray:

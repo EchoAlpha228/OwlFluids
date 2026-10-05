@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.runner: Runner | None = None
         self.log = None
+        self.driver = None
         self._building = False
         self._build_result = None
 
@@ -141,6 +142,10 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         self.a_log = act("● Record", self.toggle_log, None, m_run, True, "Record sensors and valves to a file")
         self.a_log.setCheckable(True)
+        m_run.addSeparator()
+        self.a_synnax = act("Connect to Synnax…", self.toggle_synnax, None, m_run, False,
+                            "Hardware-in-the-loop: send sensors to Synnax, take valve channels from it")
+        self.a_synnax.setCheckable(True)
         act("Fit schematic", self.view.fit, "F", m_view, True)
         m_view.addAction(self.plot_dock.toggleViewAction())
         self._set_running_ui(False)
@@ -157,6 +162,7 @@ class MainWindow(QMainWindow):
         self.a_stop.setEnabled(running)
         self.a_reset.setEnabled(running)
         self.a_log.setEnabled(running)
+        self.a_synnax.setEnabled(running)
         self.a_rotate.setEnabled(not running)
         self.a_delete.setEnabled(not running)
         self.palette.setEnabled(not running)
@@ -338,6 +344,8 @@ class MainWindow(QMainWindow):
             self.a_pause.setText("▶ Resume")
 
     def stop(self) -> None:
+        if self.driver is not None:
+            self.toggle_synnax(False)
         if self.log is not None:
             self.toggle_log(False)
         if self.runner is not None:
@@ -382,6 +390,30 @@ class MainWindow(QMainWindow):
                 log.close()
             self.a_log.setChecked(False)
 
+    def toggle_synnax(self, on: bool) -> None:
+        if on and self.runner is not None and self.driver is None:
+            fn, _ = QFileDialog.getOpenFileName(self, "Synnax settings (a YAML file with a synnax: section)", "",
+                                                "YAML (*.yaml *.yml)")
+            if not fn:
+                self.a_synnax.setChecked(False)
+                return
+            try:
+                from ..drivers.synnax import SynnaxConfig, SynnaxDriver
+
+                self.driver = SynnaxDriver(self.runner, SynnaxConfig.load(fn))
+                self.driver.start()
+            except Exception as e:  # noqa: BLE001 - connection problems are reported, not fatal
+                self.driver = None
+                self.a_synnax.setChecked(False)
+                QMessageBox.critical(self, "Synnax", f"Could not connect: {e}")
+                return
+            self.statusBar().showMessage(f"Synnax connected: {len(self.driver.sensors)} sensors out, "
+                                         f"{len(self.driver.valves)} valves in", 6000)
+        elif not on and self.driver is not None:
+            drv, self.driver = self.driver, None
+            drv.stop()
+            self.a_synnax.setChecked(False)
+
     def _tick(self) -> None:
         if self._building and self._build_result is not None:
             self._finish_build()
@@ -393,6 +425,10 @@ class MainWindow(QMainWindow):
             self.stop()
             QMessageBox.critical(self, "Simulation stopped", f"{type(err).__name__}: {err}")
             return
+        if self.driver is not None and self.driver.error is not None:
+            err = self.driver.error
+            self.toggle_synnax(False)
+            QMessageBox.warning(self, "Synnax", f"Synnax link stopped: {err}")
         f = r.frame
         self.valves.show_frame(f)
         self.scene.show_values(self._component_values(r.sim, f))
@@ -403,7 +439,8 @@ class MainWindow(QMainWindow):
         self.status_time.setText(f"t = {f.t:8.2f} s" + ("   (paused)" if r.paused else ""))
         self.status_perf.setText(
             f"CPU {f.load * 100:4.0f}% of {'real time' if rate else 'max speed'}   lag {f.lag * 1000:4.1f} ms   "
-            f"slips {r.slips}   forced steps {st.get('forced_steps', 0)}")
+            f"slips {r.slips}   forced steps {st.get('forced_steps', 0)}"
+            + (f"   Synnax ↑{self.driver.writes} ↓{self.driver.commands}" if self.driver else ""))
 
     def _component_values(self, sim: Simulation, f) -> dict:
         net = sim.net

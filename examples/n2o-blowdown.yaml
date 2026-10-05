@@ -1,0 +1,16 @@
+name: Nitrous blowdown
+components:
+- {id: K, type: tank, fluid: nitrous, volume: 10 L, fill: 0.8, temperature: 20 C, at: [0, 0]}
+- {id: V, type: valve, cv: 0.3, open_time: 20 ms, at: [150, 50]}
+- {id: INJ, type: orifice, cda: 10 mm2, at: [300, 50]}
+- {id: ATM, type: boundary, fluid: nitrous, at: [450, 50]}
+connections:
+- [K.bottom, V.in]
+- [V.out, INJ.in]
+- [INJ.out, ATM.port]
+sensors:
+- {id: PT-K, type: pressure, at: K.port, units: psi}
+- {id: TC-K, type: temperature, at: K.port, units: C}
+- {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
+- {id: FM-N2O, type: mass_flow, at: INJ, units: kg/s}
+- {id: M-N2O, type: mass, at: K, units: kg}

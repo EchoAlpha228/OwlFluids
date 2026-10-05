@@ -1,0 +1,37 @@
+name: LN2 wet dress
+components:
+- {id: K-N2, type: tank, fluid: nitrogen, volume: 49 L, pressure: 3000 psi, temperature: 20 C, at: [0, -220]}
+- {id: REG, type: regulator, cv: 0.3, setpoint: 250 psi, droop: 20 psi, at: [150, -220]}
+- {id: V-P, type: valve, cv: 0.3, at: [300, -220]}
+- {id: L-P, type: pipe, length: 2 m, diameter: 6 mm, at: [300, -120]}
+- {id: TK, type: pressurized_tank, liquid: nitrogen, pressurant: nitrogen, volume: 100 L, fill: 0.85, pressure: 40 psi, liquid_temperature: 78 K, diameter: 0.4 m, at: [0, 0]}
+- {id: V-V, type: valve, cv: 0.3, at: [150, -80]}
+- {id: ATM-V, type: boundary, fluid: nitrogen, at: [300, -40]}
+- {id: V-M, type: valve, cv: 4, open_time: 200 ms, at: [150, 160]}
+- {id: L-F, type: pipe, length: 4 m, diameter: 0.5 in, wall_thickness: 0.049 in, segments: 4, at: [300, 160]}
+- {id: TEE, type: tee, at: [450, 160]}
+- {id: V-B, type: valve, cv: 0.2, at: [450, 260]}
+- {id: ATM-B, type: boundary, fluid: nitrogen, at: [600, 260]}
+- {id: INJ, type: orifice, cda: 25 mm2, at: [600, 160]}
+- {id: ATM, type: boundary, fluid: nitrogen, at: [750, 160]}
+connections:
+- [K-N2.port, REG.in]
+- [REG.out, V-P.in]
+- [V-P.out, L-P.in]
+- [L-P.out, TK.gas]
+- [TK.gas, V-V.in]
+- [V-V.out, ATM-V.port]
+- [TK.liquid, V-M.in]
+- [V-M.out, L-F.in]
+- [L-F.out, TEE.a]
+- [TEE.b, INJ.in]
+- [INJ.out, ATM.port]
+- [TEE.d, V-B.in]
+- [V-B.out, ATM-B.port]
+sensors:
+- {id: PT-TK, type: pressure, at: TK.gas, units: psi}
+- {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
+- {id: TC-INJ, type: temperature, at: INJ.in, units: K}
+- {id: TC-LINE, type: wall_temperature, at: L-F.s2, units: K}
+- {id: FM-LN2, type: mass_flow, at: V-M, units: kg/s}
+- {id: M-LN2, type: mass, at: TK, units: kg}
