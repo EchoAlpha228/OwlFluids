@@ -182,8 +182,9 @@ class Runner:
         self.submit(lambda sim: sim.command(valve, position))
 
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
-        state = self.sim.boundary_state(comp, pressure, temperature)  # fail now, in the caller
-        self.submit(lambda sim: sim.apply_boundary(state))
+        self.sim.boundary_state(comp, pressure, temperature)  # fail now, in the caller
+        # omitted values are filled in on the runner thread, after any earlier change
+        self.submit(lambda sim: sim.set_boundary(comp, pressure, temperature))
 
     def add_listener(self, fn: Callable[[Frame], None]) -> None:
         """Call ``fn(frame)`` on the runner thread after every chunk (loggers, drivers)."""

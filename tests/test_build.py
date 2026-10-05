@@ -95,3 +95,5 @@ def test_tank_liquid_that_would_boil_is_an_error_or_defaults_cold():
         build_network(_tank_system("oxygen", "50 psi", liquid_temperature="120 K"))
     net = build_network(_tank_system("oxygen", "50 psi"))  # no temperature: just below boiling
     assert any("boiling point" in w for w in net.warnings)
+    net = build_network(_tank_system("oxygen", "50 psi", liquid_temperature="103.6 K"))  # within 0.5 K
+    assert any("too close to boiling" in w for w in net.warnings)

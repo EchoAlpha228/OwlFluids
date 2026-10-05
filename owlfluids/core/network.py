@@ -329,6 +329,10 @@ class NetworkBuilder:
                     t = t_max
                     self.warnings.append(f"{n.owner}: {n.fluid} starts at {t:.1f} K, just below its boiling point "
                                          "at the tank pressure; set liquid_temperature to choose")
+            elif t_max < t < min(tc, t_boil if t_boil is not None else tc):
+                self.warnings.append(f"{n.owner}: {n.fluid} at {t:.1f} K is too close to boiling; "
+                                     f"starting it at {t_max:.1f} K")
+                t = t_max
             if t > t_max:
                 limit = f"boils at {t_boil:.1f} K at this pressure" if t_boil is not None else \
                     f"has no liquid above {tc:.1f} K"

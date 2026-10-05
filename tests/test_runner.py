@@ -85,3 +85,18 @@ def test_stop_runs_queued_log_close(sim, tmp_path):
     assert log._f.closed
     names, data = read_log(path)
     assert data.shape[0] > 0
+
+
+def test_boundary_changes_apply_in_order(sim):
+    sim.reset()
+    runner = Runner(sim, rate=0)
+    runner.start()
+    try:
+        runner.set_boundary("ATM", pressure="50 psi")
+        runner.set_boundary("ATM", temperature="250 K")  # must keep the 50 psi
+        runner.wait(0.02)
+        i, p, t, _, _ = sim.boundary_state("ATM")
+        assert p == pytest.approx(50 * 6894.757, rel=1e-6)
+        assert t == pytest.approx(250.0)
+    finally:
+        runner.stop()
