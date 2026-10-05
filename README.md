@@ -7,8 +7,9 @@ or Synnax) open and close valves.
 
 - **Real time first.** An 81-component LOX/ethanol stand takes about 0.06–0.1 ms
   per 1 ms step in steady operation and about 0.2 ms during valve transients on a
-  desktop CPU, and every step has a fixed work budget so hard transients (LOX
-  hitting a warm line) can't stall the clock.
+  desktop CPU, and every step has a work budget, timed on your machine at start-up,
+  so hard transients (LOX hitting a warm line) can't stall the clock. A slower CPU
+  gets more forced steps instead of falling behind.
 - **Real fluids.** Water, ethanol, oxygen (GOX/LOX), methane, nitrogen (GN2/LN2) and
   nitrous oxide, from ambient to ~3,000 psi and cryogenic to room temperature.
   Gases and cryogens use tables built once from CoolProp or REFPROP, including
@@ -140,4 +141,8 @@ real-time gate on the 81-component stand.
 - Two-phase flow is homogeneous equilibrium. Violent events (LOX into a warm line,
   geysering) are stable and conserve mass and energy but are not resolved in
   detail; the status bar counts "forced steps" when a step used its whole budget.
+  For runs that must match across machines, pass `Simulation(system, step_budget=200)`.
+- Property tables blend pressure within about one grid cell of saturated liquid,
+  so a saturated tank filled above ~98 % can read a few percent high (up to ~13 % at
+  99 %). States within a kelvin or so of the critical point are also approximate.
 - Pipe heat transfer uses a fixed film coefficient (set per line).

@@ -8,6 +8,9 @@ from owlfluids.sim.simulation import Simulation
 
 PSI = 6894.757
 
+# fixed work budget, so forced-step counts don't depend on the CI machine's speed
+BUDGET = 200
+
 
 @pytest.mark.slow
 def test_closed_ln2_dewar_self_pressurizes_along_saturation():
@@ -17,7 +20,7 @@ def test_closed_ln2_dewar_self_pressurizes_along_saturation():
     s.add("A", "boundary", fluid="nitrogen")
     s.connect("D.top", "V.in")
     s.connect("V.out", "A.port")
-    sim = Simulation(s)
+    sim = Simulation(s, step_budget=BUDGET)
     m0 = sim.mass("D")
     p_prev = sim.pressure("D")
     for _ in range(3):
@@ -37,7 +40,7 @@ def test_closed_ln2_dewar_self_pressurizes_along_saturation():
 
 @pytest.mark.slow
 def test_nitrous_blowdown_holds_near_vapor_pressure_and_cools():
-    sim = Simulation(n2o_blowdown())
+    sim = Simulation(n2o_blowdown(), step_budget=BUDGET)
     p0, t0 = sim.pressure("K"), sim.temperature("K")
     assert p0 == pytest.approx(CP.PropsSI("P", "T", 293.15, "Q", 0, "NitrousOxide"), rel=0.02)
     sim.open("V")
@@ -60,7 +63,7 @@ def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
     s.add("A", "boundary", fluid="nitrogen")
     for a, b in [("TK.liquid", "V1.in"), ("V1.out", "L1.in"), ("L1.out", "O1.in"), ("O1.out", "A.port")]:
         s.connect(a, b)
-    sim = Simulation(s)
+    sim = Simulation(s, step_budget=BUDGET)
     i_wall = sim.net.node_names.index("L1.s2")
     sx = sim.net.NI[i_wall, 3] + 2
     assert sim.x[sx] == pytest.approx(293.15)
@@ -78,7 +81,7 @@ def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
 
 @pytest.mark.slow
 def test_wet_dress_example_runs_cleanly():
-    sim = Simulation(ln2_wet_dress())
+    sim = Simulation(ln2_wet_dress(), step_budget=BUDGET)
     sim.open("V-P")
     sim.run(5.0)
     assert sim.read("PT-TK") > 100 * PSI

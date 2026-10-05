@@ -11,6 +11,7 @@ the CPU allows; ``owlfluids.sim.realtime`` paces the same object to the wall clo
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -27,8 +28,12 @@ SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quali
 
 
 class Simulation:
-    def __init__(self, system: System, seed: int = 0):
+    def __init__(self, system: System, seed: int = 0, step_budget: float | None = None):
+        """``step_budget``: work per step in right-hand-side evaluations; by default it is
+        timed on this machine (see ``_step_budget``). Give a number for runs that must
+        come out the same on every machine."""
         self.system = system
+        self._fixed_budget = step_budget
         self.net: Network = build_network(system)
         self.dt = self.net.dt
         self.rng = np.random.default_rng(seed)
@@ -63,7 +68,7 @@ class Simulation:
         self._empty_h = np.zeros((0, max(nn, 1)))
         self._empty_l = np.zeros((0, max(nl, 1)))
         self.fl = self.net.fluids.arrays()
-        self.step_budget = self._step_budget()
+        self.step_budget = float(self._fixed_budget) if self._fixed_budget else self._step_budget()
         # nodes whose fluid uses the property tables, which stop at tables.T_MAX
         from ..fluids import tables
         from ..fluids.registry import MODEL_TABLE
@@ -74,12 +79,23 @@ class Simulation:
     def _step_budget(self, share: float = 0.35) -> float:
         """Work one step may spend, in right-hand-side evaluations.
 
-        Sized so a step uses at most ``share`` of dt on a typical desktop CPU
-        (about 0.1 us per node or link per evaluation). It depends only on the
-        network, so runs are reproducible on any machine.
+        Sized so a step uses at most ``share`` of dt on this machine: one
+        evaluation is timed when the simulation is built, and a Newton iteration
+        costs about 1.5 evaluations once the linear solve is counted. A slower CPU
+        gets a smaller budget (more forced steps) rather than falling behind real time.
         """
-        elements = self.net.NI.shape[0] + self.net.LI.shape[0]
-        return float(min(max(share * self.dt / (1e-7 * elements), 30.0), 1000.0))
+        net = self.net
+        args = (net.x0.copy(), self.f0, net.NI, net.NF.copy(), net.LI, net.LF, net.LV.copy(), self.fl,
+                self.W, self.nout, self.lout, self.FN, self.FV, self.NS)
+        kernel.rhs(*args)  # compile
+        best = math.inf
+        for _ in range(5):
+            t0 = time.perf_counter()
+            for _ in range(20):
+                kernel.rhs(*args)
+            best = min(best, (time.perf_counter() - t0) / 20)
+        self.rhs_seconds = best
+        return float(min(max(share * self.dt / (1.5 * max(best, 1e-9)), 8.0), 1000.0))
 
     def reset(self) -> None:
         """Back to the initial conditions of the system."""

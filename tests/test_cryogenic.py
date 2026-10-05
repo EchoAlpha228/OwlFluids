@@ -4,6 +4,9 @@ import pytest
 from owlfluids.io.system import System
 from owlfluids.sim.simulation import Simulation
 
+# fixed work budget, so forced-step counts don't depend on the CI machine's speed
+BUDGET = 200
+
 
 def lox_feed():
     s = System("lox feed")
@@ -23,7 +26,7 @@ def lox_feed():
 
 @pytest.mark.slow
 def test_feed_line_starts_full_of_liquid_at_tank_pressure():
-    sim = Simulation(lox_feed())
+    sim = Simulation(lox_feed(), step_budget=BUDGET)
     assert sim.temperature("V1.in") == pytest.approx(90.0, abs=0.5)
     assert sim.quality("V1.in") < 0  # compressed liquid
     assert sim.pressure("V1.in") == pytest.approx(sim.pressure("TK.liquid"), rel=0.02)
@@ -35,7 +38,7 @@ def test_feed_line_starts_full_of_liquid_at_tank_pressure():
 
 @pytest.mark.slow
 def test_lox_flows_into_warm_line_and_conserves_oxygen():
-    sim = Simulation(lox_feed())
+    sim = Simulation(lox_feed(), step_budget=BUDGET)
     net = sim.net
     ox = [i for i in range(net.NI.shape[0]) if net.NI[i, 0] != 1 and net.fluids.names[net.NI[i, 1]] == "oxygen"]
     sx = net.NI[ox, 3]
