@@ -22,21 +22,67 @@ from __future__ import annotations
 import math
 
 import numba as nb
-import numpy as np
 
 from ..fluids.props import psat as _psat
 from ..fluids.props import saturation, state
 from ..fluids.registry import L_PSAT, MODEL_IDEAL, MODEL_LIQUID
 from .layout import (
-    CTRL_CHECK, CTRL_REGULATOR, CTRL_RELIEF, CTRL_VALVE, DRAW_LIQUID, DRAW_MIX, DRAW_VAPOR,
-    L_A, L_B, L_CTRL, L_DRAWA, L_DRAWB, L_KIND, L_SX,
-    LF_AREA, LF_CDA, LF_DIAM, LF_K, LF_LEN, LF_P1, LF_P2, LF_ROUGH,
-    LINK_PIPE, LO_MDOT, LO_OPEN,
-    N_FLUID, N_KIND, N_PARTNER, N_SX, N_WALL,
-    NF_AREA, NF_BP, NF_BRHO, NF_BT, NF_BU, NF_HA, NF_HAAMB, NF_MREF, NF_RHOREF, NF_TAMB, NF_VOL, NF_WALLMC,
-    NODE_BOUNDARY, NODE_TANK_LIQUID, NODE_VOLUME,
-    O_H, O_M, O_P, O_RHO, O_T, O_TW, O_X,
-    V_CMD, V_POS, V_RATE_CLOSE, V_RATE_OPEN,
+    CTRL_CHECK,
+    CTRL_REGULATOR,
+    CTRL_RELIEF,
+    CTRL_VALVE,
+    DRAW_LIQUID,
+    DRAW_MIX,
+    DRAW_VAPOR,
+    L_A,
+    L_B,
+    L_CTRL,
+    L_DRAWA,
+    L_DRAWB,
+    L_KIND,
+    L_SX,
+    LF_AREA,
+    LF_CDA,
+    LF_DIAM,
+    LF_K,
+    LF_LEN,
+    LF_P1,
+    LF_P2,
+    LF_ROUGH,
+    LINK_PIPE,
+    LO_MDOT,
+    LO_OPEN,
+    N_FLUID,
+    N_KIND,
+    N_PARTNER,
+    N_SX,
+    N_WALL,
+    NF_AREA,
+    NF_BP,
+    NF_BRHO,
+    NF_BT,
+    NF_BU,
+    NF_HA,
+    NF_HAAMB,
+    NF_MREF,
+    NF_RHOREF,
+    NF_TAMB,
+    NF_VOL,
+    NF_WALLMC,
+    NODE_BOUNDARY,
+    NODE_TANK_LIQUID,
+    NODE_VOLUME,
+    O_H,
+    O_M,
+    O_P,
+    O_RHO,
+    O_T,
+    O_TW,
+    O_X,
+    V_CMD,
+    V_POS,
+    V_RATE_CLOSE,
+    V_RATE_OPEN,
 )
 
 # Compiled without Numba's reference counting: nothing here allocates, and the
@@ -394,6 +440,13 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
         nout[i, O_TW] = W[i, W_TW]
 
 
+@jit
+def rhs_repeat(n, x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
+    """``n`` evaluations of ``rhs``, to time it from Python."""
+    for _ in range(n):
+        rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
+
+
 # ---------------------------------------------------------------------------
 # Jacobian and banded solve
 
@@ -617,7 +670,6 @@ NEWTON_TOL = 1e-4  # scaled Newton update that counts as converged
 NEWTON_REJAC = 1e-2  # update size above which the Jacobian is rebuilt at the iterate
 ACCEPT_TOL = 1e-2  # an unconverged step is still taken if its last update was this small
 JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickly
-STEP_BUDGET = 40.0  # work one step may spend (in right-hand-side evaluations) before it is forced
 JAC_COST = 5.0  # a Jacobian plus factorization, in right-hand-side evaluations
 MIN_SUBSTEP = 1.0 / 16.0  # smallest retry, as a fraction of dt
 
@@ -648,7 +700,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     err_prev = 1e30
     for it in range(NEWTON_MAX):
         ctl[8] += 1.0
-        if ctl[8] > STEP_BUDGET:
+        if ctl[8] > ctl[9]:
             return False
         rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
         for i in range(n):
@@ -718,7 +770,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
 
     A step whose Newton iteration does not converge is retried as smaller
     sub-steps with a fresh Jacobian; simulated time stays on the fixed grid.
-    Each step has a work budget (STEP_BUDGET Newton iterations) so one hard step
+    Each step has a work budget (``ctl[9]``, in right-hand-side evaluations) so one hard step
     cannot stall real time: when it runs out, the last Newton iterate is taken if
     it is physical (it conserves mass and energy like a converged one), otherwise
     the state is held for the rest of the step. ``stats`` accumulates [sub-steps,
@@ -752,7 +804,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                 stats[2] += 1.0
             if not ok:
                 stats[3] += 1.0
-                if h > dt * MIN_SUBSTEP and ctl[8] < STEP_BUDGET:
+                if h > dt * MIN_SUBSTEP and ctl[8] < ctl[9]:
                     h *= 0.5
                     ctl[4] = 1.0
                     ctl[0] = 0.0

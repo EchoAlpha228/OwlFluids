@@ -12,8 +12,13 @@ from dataclasses import dataclass
 
 from .. import units
 from ..core.layout import (
-    CTRL_CHECK, CTRL_FIXED, CTRL_REGULATOR, CTRL_RELIEF, CTRL_VALVE,
-    DRAW_LIQUID, DRAW_MIX, DRAW_VAPOR,
+    CTRL_CHECK,
+    CTRL_REGULATOR,
+    CTRL_RELIEF,
+    CTRL_VALVE,
+    DRAW_LIQUID,
+    DRAW_MIX,
+    DRAW_VAPOR,
 )
 
 CV_TO_CDA = 1.6987e-5  # m^2 of effective flow area per unit of valve Cv
@@ -157,7 +162,8 @@ class PressurizedTank(ComponentType):
         Param("fill", None, 0.8, "initial liquid volume fraction 0-1"),
         Param("pressure", "pressure", None, "initial ullage pressure"),
         Param("liquid_temperature", "temperature", "293.15 K", "initial liquid temperature"),
-        Param("gas_temperature", "temperature", None, "initial ullage temperature (default: system initial temperature)"),
+        Param("gas_temperature", "temperature", None,
+              "initial ullage temperature (default: system initial temperature)"),
         Param("diameter", "length", None, "inner diameter, for liquid head at the outlet (optional)"),
     ) + HEAT_PARAMS
     help = ("Liquid with a separate pressurant gas above it at one shared pressure. "

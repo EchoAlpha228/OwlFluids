@@ -56,7 +56,9 @@ def engine_test_stand(n_purge: int = 4) -> System:
         add(f"V-{tag}V", "valve", cv=0.8, normally="open")
         add(f"L-{tag}V", "pipe", length="1 m", diameter="10 mm")
         add(f"ATM-{tag}", "boundary", fluid="nitrogen")
-        con(f"TEE-{tag}U.c", f"V-{tag}V.in"), con(f"V-{tag}V.out", f"L-{tag}V.in"), con(f"L-{tag}V.out", f"ATM-{tag}.port")
+        con(f"TEE-{tag}U.c", f"V-{tag}V.in")
+        con(f"V-{tag}V.out", f"L-{tag}V.in")
+        con(f"L-{tag}V.out", f"ATM-{tag}.port")
         add(f"RV-{tag}", "relief_valve", cv=0.5, set_pressure="750 psi")
         add(f"ATM-{tag}R", "boundary", fluid="nitrogen")
         con(f"TEE-{tag}U.d", f"RV-{tag}.in"), con(f"RV-{tag}.out", f"ATM-{tag}R.port")
@@ -78,7 +80,9 @@ def engine_test_stand(n_purge: int = 4) -> System:
         add(f"DUMP-{tag}", "boundary", fluid=liquid)
         add(f"TEE-{tag}D", "tee")
         con(f"V-{tag}M.in", f"TEE-{tag}D.a")  # shares the junction ahead of the main valve
-        con(f"TEE-{tag}D.b", f"V-{tag}D.in"), con(f"V-{tag}D.out", f"L-{tag}D.in"), con(f"L-{tag}D.out", f"DUMP-{tag}.port")
+        con(f"TEE-{tag}D.b", f"V-{tag}D.in")
+        con(f"V-{tag}D.out", f"L-{tag}D.in")
+        con(f"L-{tag}D.out", f"DUMP-{tag}.port")
 
     prop_tank("OX", "oxygen", "90 K")
     prop_tank("FU", "ethanol", "20 C")
@@ -88,7 +92,9 @@ def engine_test_stand(n_purge: int = 4) -> System:
         add(f"CH-{tag}", "volume", volume="0.5 L")
         add(f"NOZ-{tag}", "orifice", cda="200 mm2")
         add(f"ATM-C{tag}", "boundary", fluid=fl)
-        con(f"INJ-{tag}.out", f"CH-{tag}.a"), con(f"CH-{tag}.b", f"NOZ-{tag}.in"), con(f"NOZ-{tag}.out", f"ATM-C{tag}.port")
+        con(f"INJ-{tag}.out", f"CH-{tag}.a")
+        con(f"CH-{tag}.b", f"NOZ-{tag}.in")
+        con(f"NOZ-{tag}.out", f"ATM-C{tag}.port")
 
     # GN2 purges into each feed line downstream of the main valves (own GN2 supplies)
     for i in range(n_purge):

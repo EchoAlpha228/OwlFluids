@@ -93,7 +93,7 @@ class FluidSet:
         self.sat = np.zeros((nf, tables.N_SATPROP, tables.N_SAT))
         self.satg = np.ones((nf, 4))
         self._states = {}
-        for i, (name, mdl) in enumerate(zip(self.names, self.models)):
+        for i, (name, mdl) in enumerate(zip(self.names, self.models, strict=True)):
             cp_name = FLUIDS[name][0]
             self.model[i] = MODEL_CODES[mdl]
             st = self._backend_state(cp_name)

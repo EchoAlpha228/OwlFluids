@@ -11,13 +11,41 @@ import math
 import numba as nb
 
 from .registry import (
-    I_CV, I_GAMMA, I_MU, I_R,
-    L_CV, L_K, L_MU, L_PREF, L_PSAT, L_RHO0, L_T0, L_U0,
-    MODEL_IDEAL, MODEL_LIQUID,
+    I_CV,
+    I_GAMMA,
+    I_MU,
+    I_R,
+    L_CV,
+    L_K,
+    L_MU,
+    L_PREF,
+    L_PSAT,
+    L_RHO0,
+    L_T0,
+    L_U0,
+    MODEL_IDEAL,
+    MODEL_LIQUID,
 )
 from .tables import (
-    GAMMA, MU, N_ETA, N_LIN, N_LOG, N_SAT, N_U, N_UL, P, T, X,
-    S_GAMV, S_HL, S_HV, S_MUL, S_MUV, S_PSAT, S_RHOL, S_RHOV,
+    GAMMA,
+    MU,
+    N_ETA,
+    N_LIN,
+    N_LOG,
+    N_SAT,
+    N_U,
+    N_UL,
+    S_GAMV,
+    S_HL,
+    S_HV,
+    S_MUL,
+    S_MUV,
+    S_PSAT,
+    S_RHOL,
+    S_RHOV,
+    P,
+    T,
+    X,
 )
 
 jit = nb.njit(cache=True, fastmath=False, nogil=True, _nrt=False)
