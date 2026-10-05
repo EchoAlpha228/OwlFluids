@@ -97,3 +97,8 @@ def test_tank_liquid_that_would_boil_is_an_error_or_defaults_cold():
     assert any("boiling point" in w for w in net.warnings)
     net = build_network(_tank_system("oxygen", "50 psi", liquid_temperature="103.6 K"))  # within 0.5 K
     assert any("too close to boiling" in w for w in net.warnings)
+    from owlfluids.fluids.registry import FluidSet
+    fs = FluidSet(["oxygen"], ["table"])
+    t_boil = fs.saturation_temperature(0, 50 * 6894.757)
+    net = build_network(_tank_system("oxygen", "50 psi", liquid_temperature=f"{t_boil!r} K"))  # exactly boiling
+    assert any("too close to boiling" in w for w in net.warnings)
