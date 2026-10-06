@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from . import units
+from .core.network import BuildError
 
 
 def _load(path: str):
@@ -17,6 +18,8 @@ def _load(path: str):
 
     if path in EXAMPLES:
         return EXAMPLES[path]()
+    if not Path(path).exists():
+        raise SystemExit(f"error: {path} not found; give a .yaml file or one of: {', '.join(EXAMPLES)}")
     return System.load(path)
 
 
@@ -76,7 +79,11 @@ def cmd_run(args) -> int:
             if runner.error or (driver and driver.error) or not runner.running:
                 break
             warned = _print_warnings(runner, warned)
-            time.sleep(0.05)
+            nap = 0.05
+            if args.duration:  # don't overshoot a short run by a whole poll
+                left = args.duration - runner.frame.t
+                nap = min(nap, left / args.rate if args.rate > 0 else 0.002)
+            time.sleep(max(nap, 0.001))
     except KeyboardInterrupt:
         pass
     finally:
@@ -172,6 +179,8 @@ def cmd_console(args) -> int:
                 elif cmd == "close":
                     runner.close(*rest)
                 elif cmd == "set":
+                    if len(rest) < 2:
+                        raise IndexError
                     runner.command(rest[0], float(rest[1]))
                 elif cmd in ("status", "s"):
                     print(_fmt(sim, runner.frame))
@@ -182,6 +191,8 @@ def cmd_console(args) -> int:
                     for v in sim.valves():
                         print(f"  {v}: cmd {f.commands[v]:.2f} pos {f.valves[v]:.2f}")
                 elif cmd == "rate":
+                    if not rest:
+                        raise IndexError
                     runner.set_rate(float(rest[0]))
                 elif cmd == "pause":
                     runner.pause()
@@ -190,13 +201,20 @@ def cmd_console(args) -> int:
                 elif cmd == "reset":
                     runner.reset()
                 elif cmd == "log":
+                    if not rest:
+                        raise IndexError
                     stop_log()
                     log = open_logger(rest[0], runner)
                 elif cmd == "stoplog":
                     stop_log()
-                else:
+                elif cmd in ("help", "h", "?"):
                     print(CONSOLE_HELP)
-            except (KeyError, ValueError, IndexError) as e:
+                else:
+                    print(f"unknown command {cmd!r}")
+                    print(CONSOLE_HELP)
+            except IndexError:
+                print("error: missing argument (type help for usage)")
+            except (KeyError, ValueError) as e:
                 print("error:", e)
             warned = _print_warnings(runner, warned)
             if runner.error or (driver and driver.error):
@@ -246,6 +264,9 @@ def cmd_example(args) -> int:
     if not args.name:
         print("examples:", ", ".join(EXAMPLES))
         return 0
+    if args.name not in EXAMPLES:
+        print(f"error: no example {args.name!r}; examples: {', '.join(EXAMPLES)}", file=sys.stderr)
+        return 2
     s = EXAMPLES[args.name]()
     out = args.output or f"{args.name}.yaml"
     s.save(out)
@@ -259,21 +280,29 @@ def cmd_app(args) -> int:
     return app_main(args.system)
 
 
+SYSTEM_HELP = "system .yaml file or example name (see `owlfluids example`)"
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["tables"]:  # the table builder has its own options
+        from .fluids.tables import main as tables_main
+
+        return tables_main(argv[1:]) or 0
     ap = argparse.ArgumentParser(prog="owlfluids", description="Real-time 1-D fluid network simulator")
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("app", help="open the desktop app")
-    p.add_argument("system", nargs="?", help="system file (.yaml) or example name")
+    p.add_argument("system", nargs="?", help=SYSTEM_HELP)
     p.set_defaults(fn=cmd_app)
 
     p = sub.add_parser("run", help="run a system headless")
-    p.add_argument("system")
-    p.add_argument("--duration", type=float, default=0.0, help="simulated seconds to run")
+    p.add_argument("system", help=SYSTEM_HELP)
+    p.add_argument("--duration", type=float, default=0.0, help="simulated seconds to run (0 = until Ctrl-C)")
     p.add_argument("--script", help="Python file with main(runner) that commands valves")
     p.add_argument("--rate", type=float, default=1.0, help="1 = real time, 0 = as fast as possible")
     p.add_argument("--log", help="write a .csv or .h5 log")
-    p.add_argument("--log-interval", type=float, default=0.01)
+    p.add_argument("--log-interval", type=float, default=0.01, help="seconds between log rows (default 0.01)")
     p.add_argument("--print-every", type=float, default=1.0, help="print sensors every N simulated s (0 = never)")
     p.add_argument("--synnax", help="YAML file with a synnax: section; connects the sim to Synnax")
     p.add_argument("--synnax-mode", choices=["hootl", "hitl"],
@@ -281,32 +310,34 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("console", help="run in real time with typed valve commands")
-    p.add_argument("system")
+    p.add_argument("system", help=SYSTEM_HELP)
     p.add_argument("--synnax", help="YAML file with a synnax: section; connects the sim to Synnax")
     p.add_argument("--synnax-mode", choices=["hootl", "hitl"],
                    help="override the file's mode: hootl fakes valve states, hitl reads them from hardware")
     p.set_defaults(fn=cmd_console)
 
     p = sub.add_parser("check", help="build a system and print a summary")
-    p.add_argument("system")
+    p.add_argument("system", help=SYSTEM_HELP)
     p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser("bench", help="time the 81-component test stand")
     p.set_defaults(fn=cmd_bench)
 
     p = sub.add_parser("example", help="list examples or write one to a file")
-    p.add_argument("name", nargs="?")
-    p.add_argument("-o", "--output")
+    p.add_argument("name", nargs="?", help="example to write (leave out to list them)")
+    p.add_argument("-o", "--output", help="file to write (default <name>.yaml)")
     p.set_defaults(fn=cmd_example)
 
-    p = sub.add_parser("tables", help="prebuild property tables (HEOS or REFPROP)")
-    p.add_argument("rest", nargs=argparse.REMAINDER)
-    p.set_defaults(fn=lambda a: __import__("owlfluids.fluids.tables", fromlist=["main"]).main(a.rest) or 0)
+    sub.add_parser("tables", help="prebuild property tables (see `owlfluids tables --help`)")
 
     args = ap.parse_args(argv)
     if not getattr(args, "fn", None):
         return cmd_app(argparse.Namespace(system=None))
-    return int(args.fn(args) or 0)
+    try:
+        return int(args.fn(args) or 0)
+    except BuildError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

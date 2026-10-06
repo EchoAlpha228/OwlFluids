@@ -7,6 +7,9 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, Q
 from .. import units
 from ..fluids.registry import FLUIDS
 from ..io.system import DEFAULT_SETTINGS
+from .panels import UNIT_EXAMPLES, _show_error
+
+LABELS = {"dt": "time step (dt)"}
 
 
 class SettingsDialog(QDialog):
@@ -21,9 +24,9 @@ class SettingsDialog(QDialog):
         for key, dim in (("dt", "time"), ("initial_pressure", "pressure"), ("initial_temperature", "temperature"),
                          ("junction_volume", "volume")):
             ed = QLineEdit(str(system.setting(key)))
-            ed.setToolTip(f"default {DEFAULT_SETTINGS[key]}")
+            ed.setToolTip(f"default: {DEFAULT_SETTINGS[key]}; units accepted, e.g. {UNIT_EXAMPLES[dim]}")
             self.fields[key] = (ed, dim)
-            form.addRow(key.replace("_", " "), ed)
+            form.addRow(LABELS.get(key, key.replace("_", " ")), ed)
         self.backend = QComboBox()
         self.backend.addItems(["HEOS", "REFPROP"])
         self.backend.setCurrentText(str(system.setting("backend")))
@@ -51,9 +54,11 @@ class SettingsDialog(QDialog):
         for ed, dim in self.fields.values():
             try:
                 units.parse(ed.text(), dim)
-            except (ValueError, TypeError):
-                ed.setStyleSheet("background:#fde2e2")
+            except (ValueError, TypeError) as e:
+                _show_error(ed, str(e))
+                ed.setFocus()
                 return
+            ed.setStyleSheet("")
         s = self.system.settings
         self.system.name = self.name.text().strip() or self.system.name
         for key, (ed, _dim) in self.fields.items():

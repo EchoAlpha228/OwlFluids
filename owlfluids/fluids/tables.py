@@ -361,7 +361,7 @@ def load_or_build(coolprop_name: str, backend: str = "HEOS", verbose: bool = Fal
 def main(argv: list[str] | None = None) -> None:
     from .registry import TABLE_FLUIDS
 
-    ap = argparse.ArgumentParser(description="Build OwlFluids property tables")
+    ap = argparse.ArgumentParser(prog="owlfluids tables", description="Build OwlFluids property tables")
     ap.add_argument("--backend", default="HEOS", help="HEOS (CoolProp) or REFPROP")
     ap.add_argument("--force", action="store_true", help="rebuild even if cached")
     ap.add_argument("fluids", nargs="*", help="CoolProp fluid names (default: all)")

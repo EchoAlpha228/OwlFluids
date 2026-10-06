@@ -343,7 +343,7 @@ class Fitting(ComponentType):
 
 class Orifice(ComponentType):
     type_name = "orifice"
-    label = "Orifice / injector"
+    label = "Orifice"
     category = "Flow control"
     ports = ("in", "out")
     params = AREA_PARAMS
