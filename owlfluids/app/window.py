@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -35,6 +36,10 @@ from .plots import FLOW_ZERO, PlotPanel
 from .schematic import Scene, View
 
 RATES = [("0.25x", 0.25), ("0.5x", 0.5), ("1x real time", 1.0), ("2x", 2.0), ("5x", 5.0), ("As fast as possible", 0.0)]
+
+
+def _safe_name(name: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name) or "run"
 
 
 def _flow_text(mdot: float) -> str:
@@ -83,7 +88,9 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(50)
-        self.resize(1400, 900)
+        screen = QApplication.primaryScreen()
+        g = screen.availableGeometry() if screen else None
+        self.resize(min(1400, int(g.width() * 0.9)) if g else 1400, min(900, int(g.height() * 0.9)) if g else 900)
         self.new_system()
 
     def _dock(self, title, widget, area) -> QDockWidget:
@@ -109,8 +116,9 @@ class MainWindow(QMainWindow):
             a.triggered.connect(slot)
             if shortcut:
                 a.setShortcut(QKeySequence(shortcut))
-            if tip:
-                a.setToolTip(tip)
+            if tip or shortcut:
+                keys = QKeySequence(shortcut).toString(QKeySequence.NativeText) if shortcut else ""
+                a.setToolTip(f"{tip or text.lstrip('▶⏸■⟲● ')}" + (f" ({keys})" if keys else ""))
             if menu is not None:
                 menu.addAction(a)
             if toolbar:
@@ -131,12 +139,12 @@ class MainWindow(QMainWindow):
 
         self.a_rotate = act("Rotate", self.scene.rotate_selected, "R", m_edit)
         self.a_delete = act("Delete", self.scene.delete_selected, QKeySequence.Delete, m_edit)
-        act("Settings…", self.edit_settings, menu=m_edit)
+        act("Settings…", self.edit_settings, "Ctrl+,", m_edit, tip="Time step, ambient and solver settings")
 
         tb.addSeparator()
         self.a_run = act("▶ Run", self.run, "F5", m_run, True, "Build the system and run it in real time")
-        self.a_pause = act("⏸ Pause", self.pause, "F6", m_run, True)
-        self.a_stop = act("■ Stop", self.stop, "Shift+F5", m_run, True)
+        self.a_pause = act("⏸ Pause", self.pause, "F6", m_run, True, "Pause or resume the clock")
+        self.a_stop = act("■ Stop", self.stop, "Shift+F5", m_run, True, "Stop and return to editing")
         self.a_reset = act("⟲ Reset", self.reset, "Ctrl+R", m_run, True, "Back to initial conditions")
         tb.addSeparator()
         tb.addWidget(QLabel(" Speed "))
@@ -147,7 +155,7 @@ class MainWindow(QMainWindow):
         self.rate_box.currentIndexChanged.connect(self._rate_changed)
         tb.addWidget(self.rate_box)
         tb.addSeparator()
-        self.a_log = act("● Record", self.toggle_log, None, m_run, True, "Record sensors and valves to a file")
+        self.a_log = act("● Record", self.toggle_log, "Ctrl+L", m_run, True, "Record sensors and valves to a file")
         self.a_log.setCheckable(True)
         m_run.addSeparator()
         self.a_synnax = act("Connect to Synnax…", self.toggle_synnax, None, m_run, False,
@@ -188,7 +196,7 @@ class MainWindow(QMainWindow):
     def open_dialog(self) -> None:
         if not self._confirm_discard():
             return
-        fn, _ = QFileDialog.getOpenFileName(self, "Open system", "", "OwlFluids systems (*.yaml *.yml)")
+        fn, _ = QFileDialog.getOpenFileName(self, "Open system", self._start_dir(), "OwlFluids systems (*.yaml *.yml)")
         if fn:
             self.open_file(fn)
 
@@ -212,13 +220,18 @@ class MainWindow(QMainWindow):
     def save(self) -> bool:
         if self.path is None:
             return self.save_as()
-        self.scene.system.save(self.path)
+        try:
+            self.scene.system.save(self.path)
+        except OSError as e:
+            QMessageBox.critical(self, "Could not save", f"{e}\n\nTry File > Save as… to pick another folder.")
+            return False
         self.dirty = False
         self._update_title()
         return True
 
     def save_as(self) -> bool:
-        fn, _ = QFileDialog.getSaveFileName(self, "Save system", self.scene.system.name + ".yaml",
+        fn, _ = QFileDialog.getSaveFileName(self, "Save system",
+                                            str(Path(self._start_dir()) / (self.scene.system.name + ".yaml")),
                                             "OwlFluids systems (*.yaml)")
         if not fn:
             return False
@@ -226,6 +239,10 @@ class MainWindow(QMainWindow):
         if self.scene.system.name == "untitled":
             self.scene.system.name = self.path.stem
         return self.save()
+
+    def _start_dir(self) -> str:
+        """Where file dialogs open: next to the current system file."""
+        return str(self.path.parent) if self.path else ""
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:
@@ -258,7 +275,8 @@ class MainWindow(QMainWindow):
             self._mark_dirty()
 
     def overlay_log(self) -> None:
-        fn, _ = QFileDialog.getOpenFileName(self, "Overlay a recorded log", "", "Logs (*.csv *.h5 *.hdf5)")
+        fn, _ = QFileDialog.getOpenFileName(self, "Overlay a recorded log", self._start_dir(),
+                                            "Logs (*.csv *.h5 *.hdf5)")
         if not fn:
             return
         try:
@@ -375,6 +393,7 @@ class MainWindow(QMainWindow):
     def reset(self) -> None:
         if self.runner is not None:
             self.runner.reset()
+            self.statusBar().showMessage("reset to initial conditions", 3000)
 
     def _rate_changed(self) -> None:
         if self.runner is not None:
@@ -391,7 +410,9 @@ class MainWindow(QMainWindow):
 
     def toggle_log(self, on: bool) -> None:
         if on and self.runner is not None and self.log is None:
-            fn, _ = QFileDialog.getSaveFileName(self, "Record to", "run.csv", "CSV (*.csv);;HDF5 (*.h5)")
+            stem = self.path.stem if self.path else _safe_name(self.scene.system.name)
+            default = Path(self._start_dir()) / f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}.csv"
+            fn, _ = QFileDialog.getSaveFileName(self, "Record to", str(default), "CSV (*.csv);;HDF5 (*.h5)")
             if not fn:
                 self.a_log.setChecked(False)
                 return
@@ -407,7 +428,8 @@ class MainWindow(QMainWindow):
 
     def toggle_synnax(self, on: bool) -> None:
         if on and self.runner is not None and self.driver is None:
-            fn, _ = QFileDialog.getOpenFileName(self, "Synnax settings (a YAML file with a synnax: section)", "",
+            fn, _ = QFileDialog.getOpenFileName(self, "Synnax settings (a YAML file with a synnax: section)",
+                                                self._start_dir(),
                                                 "YAML (*.yaml *.yml)")
             if not fn:
                 self.a_synnax.setChecked(False)
@@ -459,7 +481,8 @@ class MainWindow(QMainWindow):
         self.status_perf.setText(
             f"CPU {f.load * 100:4.0f}% of {'real time' if rate else 'max speed'}   lag {f.lag * 1000:4.1f} ms   "
             f"slips {r.slips}   forced steps {st.get('forced_steps', 0)}"
-            + (f"   Synnax ↑{self.driver.writes} ↓{self.driver.commands}" if self.driver else ""))
+            + (f"   Synnax ↑{self.driver.writes} ↓{self.driver.commands}" if self.driver else "")
+            + ("   ● REC" if self.log else ""))
 
     def _component_values(self, sim: Simulation, f) -> dict:
         net = sim.net

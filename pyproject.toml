@@ -29,7 +29,7 @@ owlfluids = "owlfluids.cli:main"
 owlfluids-tables = "owlfluids.fluids.tables:main"
 
 [project.gui-scripts]
-owlfluids-app = "owlfluids.app.main:main"
+owlfluids-app = "owlfluids.app.main:gui_main"
 
 [tool.setuptools.packages.find]
 include = ["owlfluids*"]

@@ -27,5 +27,10 @@ def main(path: str | None = None) -> int:
     return app.exec()
 
 
+def gui_main() -> int:
+    """``owlfluids-app [file]``: also what Windows "Open with" and shortcuts call."""
+    return main(sys.argv[1] if len(sys.argv) > 1 else None)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else None))
+    sys.exit(gui_main())

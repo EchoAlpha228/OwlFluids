@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -24,6 +25,21 @@ from .. import units
 from ..components import TYPES, get_type
 from ..fluids.registry import FLUIDS
 from ..io.system import Component, Sensor
+
+UNIT_EXAMPLES = {"pressure": "300 psi", "temperature": "-196 C", "length": "0.5 in", "area": "0.1 in2",
+                 "volume": "2 L", "time": "50 ms", "mass_flow": "1.2 kg/s"}
+
+
+def _label(name: str) -> str:
+    return name.replace("_", " ")
+
+
+def _show_error(widget, message: str) -> None:
+    """Pink field plus the reason, shown right away rather than only in a tooltip."""
+    widget.setStyleSheet("background:#fde2e2")
+    widget.setToolTip(message)
+    QToolTip.showText(widget.mapToGlobal(widget.rect().bottomLeft()), message, widget)
+
 
 FLUID_PARAMS = ("fluid", "liquid", "pressurant")
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
@@ -49,7 +65,7 @@ class Palette(QTreeWidget):
                 cat.setFlags(Qt.ItemIsEnabled)
             it = QTreeWidgetItem(cat, [ct.label or name])
             it.setData(0, Qt.UserRole, name)
-            it.setToolTip(0, (ct.__doc__ or "").strip().split("\n")[0])
+            it.setToolTip(0, ct.help or (ct.__doc__ or "").strip().split("\n")[0])
         self.expandAll()
         self.itemDoubleClicked.connect(self._double)
 
@@ -106,6 +122,11 @@ class Properties(QScrollArea):
         ct = get_type(comp.type)
         title = QLabel(f"<b>{ct.label or ct.type_name}</b>")
         self._layout.addWidget(title)
+        if ct.help:
+            about = QLabel(ct.help)
+            about.setWordWrap(True)
+            about.setStyleSheet("color: grey")
+            self._layout.addWidget(about)
         form_w = QWidget()
         form = QFormLayout(form_w)
         ident = QLineEdit(comp.id)
@@ -113,7 +134,7 @@ class Properties(QScrollArea):
         ident.editingFinished.connect(lambda: self._rename(ident))
         form.addRow("id", ident)
         for p in ct.params:
-            form.addRow(p.name, self._editor(p, comp, read_only))
+            form.addRow(_label(p.name), self._editor(p, comp, read_only))
         self._layout.addWidget(form_w)
         self._layout.addWidget(QLabel("<b>Sensors</b>"))
         for s in [s for s in system.sensors if s.at.split(".")[0] == comp.id]:
@@ -150,7 +171,11 @@ class Properties(QScrollArea):
             return box
         ed = QLineEdit("" if cur is None else str(cur))
         ed.setPlaceholderText("" if p.default is None else f"default: {p.default}")
-        ed.setToolTip(p.help + (f"  (a {p.dimension}, e.g. with units)" if p.dimension else ""))
+        hint = ""
+        if p.dimension in UNIT_EXAMPLES:
+            hint = f"  ({p.dimension}; units accepted, e.g. {UNIT_EXAMPLES[p.dimension]})"
+        ed.setToolTip(p.help + hint)
+        ed.setProperty("hint", p.help + hint)
         ed.setReadOnly(read_only)
         ed.editingFinished.connect(lambda e=ed, prm=p: self._set_text(prm, e))
         return ed
@@ -161,10 +186,10 @@ class Properties(QScrollArea):
             try:
                 units.parse(text, p.dimension)
             except (ValueError, TypeError) as e:
-                ed.setStyleSheet("background:#fde2e2")
-                ed.setToolTip(str(e))
+                _show_error(ed, str(e))
                 return
         ed.setStyleSheet("")
+        ed.setToolTip(ed.property("hint") or "")
         value: object = text
         try:
             value = float(text) if text and p.dimension is None else text
