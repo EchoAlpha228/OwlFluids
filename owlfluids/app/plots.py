@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from .. import units
 
+FLOW_ZERO = 1e-4  # kg/s; smaller flows are solver residue (or a closed path) and are shown as 0
 GROUPS = [("pressure", "Pressure"), ("temperature", "Temperature"), ("mass_flow", "Mass flow"),
           ("other", "Other"), ("valve", "Valve position")]
 COLOURS = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22",
@@ -128,7 +129,10 @@ class PlotPanel(QWidget):
             c = self.curves.get(n)
             if c is None or not c.isVisible():
                 continue
-            c.setData(t, units.convert(v[:, j], self.unit_of.get(n, "")))
+            y = v[:, j]
+            if self.groups.get(n) == "mass_flow":  # display only: residue would fill an autoscaled axis
+                y = np.where(np.abs(y) < FLOW_ZERO, 0.0, y)
+            c.setData(t, units.convert(y, self.unit_of.get(n, "")))
 
     def load_overlay(self, names: list[str], data: np.ndarray) -> int:
         """Overlay columns of a recorded log whose names match sensors (already in display units)."""

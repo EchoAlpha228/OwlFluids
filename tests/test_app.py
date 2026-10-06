@@ -67,3 +67,10 @@ def test_examples_load_and_lay_out(app):
         assert all(c.position is not None for c in w.scene.system.components)
     w.dirty = False
     w.close()
+
+
+def test_near_zero_flows_show_as_zero():
+    from owlfluids.app.window import _flow_text
+
+    assert _flow_text(3e-7) == "0 kg/s" and _flow_text(-5e-5) == "0 kg/s"
+    assert _flow_text(0.0123) == "0.0123 kg/s" and _flow_text(-2.5) == "-2.5 kg/s"

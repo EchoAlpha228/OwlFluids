@@ -31,11 +31,15 @@ from ..sim.realtime import Runner
 from ..sim.simulation import Simulation
 from . import symbols
 from .panels import Palette, Properties, ValvePanel
-from .plots import PlotPanel
+from .plots import FLOW_ZERO, PlotPanel
 from .schematic import Scene, View
 
 RATES = [("0.25x", 0.25), ("0.5x", 0.5), ("1x real time", 1.0), ("2x", 2.0), ("5x", 5.0), ("As fast as possible", 0.0)]
 
+
+def _flow_text(mdot: float) -> str:
+    """Mass flow label for the drawing; display only, the solver's values are untouched."""
+    return "0 kg/s" if abs(mdot) < FLOW_ZERO else f"{mdot:.3g} kg/s"
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -470,14 +474,14 @@ class MainWindow(QMainWindow):
                 if links:
                     k = links[0]
                     state["position"] = f.valves.get(c.id, f.link_open[k])
-                    text = f"{f.link_mdot[k]:.3g} kg/s"
+                    text = _flow_text(f.link_mdot[k])
             elif ct.type_name in ("orifice", "fitting"):
                 if links:
-                    text = f"{f.link_mdot[links[0]]:.3g} kg/s"
+                    text = _flow_text(f.link_mdot[links[0]])
             elif ct.type_name == "boundary":
                 text = ""
             elif ct.type_name == "pipe" and not nodes and links:
-                text = f"{f.link_mdot[links[0]]:.3g} kg/s"
+                text = _flow_text(f.link_mdot[links[0]])
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])
@@ -490,7 +494,7 @@ class MainWindow(QMainWindow):
                     text = f"{p:.0f} psi  {f.node_t[liq]:.0f} K liq"
                 elif ct.type_name == "pipe" and links:
                     mid = links[len(links) // 2]
-                    text = f"{f.link_mdot[mid]:.3g} kg/s  {p:.0f} psi"
+                    text = f"{_flow_text(f.link_mdot[mid])}  {p:.0f} psi"
                     if f.node_x[i] < 0.0 or (0.0 <= f.node_x[i] <= 0.5):
                         state["pipe_colour"] = symbols.CRYO if f.node_t[i] < 150 else symbols.LIQUID
                 elif ct.type_name == "tank" and 0.0 <= f.node_x[i] <= 1.0:
