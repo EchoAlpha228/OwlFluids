@@ -115,14 +115,22 @@ channel. Its `mode` picks the test:
 
 | mode | valves driven by | valve state channels |
 |---|---|---|
-| `hootl` (default) | the command channels your Arc sequences and operators write | faked by the sim (1/0, position for throttles) |
+| `hootl` (default) | the command channels your Arc sequences and operators write | faked by the sim |
 | `hitl` | the state channels the real hardware reports | left to the hardware |
+
+`valve_state` says what a state channel means. `command` (the default) is a Synnax
+digital output task's state, which echoes the command: HOOTL fakes it from the
+command, and in HITL the sim strokes the valve itself. `position` is limit-switch
+or position feedback: HOOTL fakes limit switches (1 once fully open, 0 once fully
+closed, held mid-stroke), and in HITL the sim valve jumps to the reported position.
 
 `--synnax-mode hitl` on `run` or `console` overrides the file. Point the channel
 names at the stand's real channels so sequences and schematics work unchanged:
 existing channels keep their own index channel, and missing ones are created on
 `index` unless `create_channels: false`. In HITL, stop the hardware's sensor read
-task first, since the sim writes those sensor channels. Only
+task first, since the sim writes those sensor channels; the driver refuses to
+start if a sensor it writes shares an index with a valve state it reads, and it
+errors rather than losing writes when another writer holds a channel. Only
 `owlfluids/drivers/synnax.py`'s `SynnaxLink` touches the Synnax client, so a new
 Synnax release means updating that one class.
 

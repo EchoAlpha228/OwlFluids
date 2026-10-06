@@ -6,11 +6,20 @@ so they look like the real transducers), and it streams valve channels back from
 Synnax and applies them to the simulated valves. ``mode`` decides which:
 
 - ``hootl`` (default): no hardware. The driver reads each valve's command channel
-  (what Arc sequences and operators write) and fakes the valve's state channel
-  from the simulated valve (1/0 for on/off valves, the position for throttles),
+  (what Arc sequences and operators write) and fakes the valve's state channel,
   so schematics and sequences that wait on valve states work as on the stand.
 - ``hitl``: real valve hardware. The driver reads the valve state channels the
   hardware reports and never writes them; only sensors are faked.
+
+``valve_state`` says what a state channel means on the stand:
+
+- ``command`` (default; a Synnax digital output task's state channel): it echoes
+  the command. HOOTL fakes it from the command (1/0, the command for throttles);
+  HITL commands the sim valve with it, and the sim models the stroke.
+- ``position``: it reports where the valve actually is (limit switches or position
+  feedback). HOOTL fakes it like limit switches, 1 once fully open and 0 once
+  fully closed, holding its value mid-stroke (the position for throttles); HITL
+  puts the sim valve at the reported position at once.
 
 Sensor and state channels that already exist keep their own index channel (the
 driver stamps each index it writes), so the real stand's channels can be used.
@@ -29,6 +38,7 @@ Config (a ``synnax:`` section in the system file, or its own YAML file)::
       password: seldon
       secure: false
       mode: hootl                 # hootl: fake valve states; hitl: read them from the hardware
+      valve_state: command        # command: state echoes the command; position: limit switches
       rate: 100                   # Hz written to Synnax
       index: owl_time             # index channel for channels the driver creates
       create_channels: true       # create any missing channel
@@ -51,6 +61,8 @@ import yaml
 from .. import units
 
 MODES = ("hootl", "hitl")
+VALVE_STATES = ("command", "position")
+LIMIT_OPEN, LIMIT_CLOSED = 0.99, 0.01  # faked limit switches (valve_state: position)
 
 
 def _channel_name(name: str) -> str:
@@ -65,6 +77,7 @@ class SynnaxConfig:
     password: str = "seldon"
     secure: bool = False
     mode: str = "hootl"
+    valve_state: str = "command"
     rate: float = 100.0
     index: str = "owl_time"
     create_channels: bool = True
@@ -76,6 +89,10 @@ class SynnaxConfig:
         self.mode = str(self.mode).strip().lower()
         if self.mode not in MODES:
             raise ValueError(f"synnax mode must be one of {', '.join(MODES)}, not {self.mode!r}")
+        self.valve_state = str(self.valve_state).strip().lower()
+        if self.valve_state not in VALVE_STATES:
+            raise ValueError(f"synnax valve_state must be one of {', '.join(VALVE_STATES)}, "
+                             f"not {self.valve_state!r}")
         for v, spec in self.valves.items():
             bad = set(spec or {}) - {"cmd", "state", "read", "write"}
             if bad:
@@ -143,6 +160,8 @@ class SynnaxLink:
 
         Data channels that exist keep their own index, so a real stand's sensor and
         valve state channels can be written; missing ones are created on ``index``.
+        An index that also stamps a channel the driver reads (a DAQ task's valve
+        states, say) is refused: two writers on one index lose each other's data.
         """
         sy = self.sy
         names = [*data, *commands]
@@ -170,6 +189,13 @@ class SynnaxLink:
                 raise RuntimeError(f"Synnax channel {n} is an index channel, not a data channel")
             if not c.virtual and c.index and c.index not in keys:
                 keys.append(c.index)
+        shared = {c.index for n in commands if (c := found.get(n)) and not c.virtual and c.index in keys}
+        if shared:
+            names = ", ".join(c.name for c in self.client.channels.retrieve(sorted(shared)))
+            reads = ", ".join(n for n in commands if (c := found.get(n)) and c.index in shared)
+            raise RuntimeError(f"Synnax index {names} stamps channels the driver writes and also {reads}, which "
+                               "it reads from the hardware; put the sensors the sim fakes on another index "
+                               "(or stop that task)")
         indexes = [c.name for c in self.client.channels.retrieve(keys)] if keys else []
         for n in new_data:
             self.client.channels.create(name=n, index=idx.key, data_type=sy.DataType.FLOAT32)
@@ -186,7 +212,7 @@ class SynnaxLink:
         self._p0 = time.perf_counter()
         self._last = self._t0 - 1
         self.writer = self.client.open_writer(start=sy.TimeStamp(self._t0), channels=write, name="OwlFluids",
-                                              enable_auto_commit=True)
+                                              enable_auto_commit=True, err_on_unauthorized=True)
         self.streamer = self.client.open_streamer(read) if read else None
 
     def latest(self, names: list[str]) -> dict[str, float]:
@@ -257,6 +283,7 @@ class SynnaxDriver:
         self.throttles = {v for v in self.valves
                           if get_type(sim.system.component(v).type).type_name == "throttle_valve"}
         self.read_to_valve = {r: v for v, (r, _w) in self.valves.items()}
+        self._held: dict[str, float] = {}  # faked limit-switch states
         self.state_out = {v: w for v, (_r, w) in self.valves.items() if w}
         data = [*self.sensors.values(), *self.state_out.values()]
         clash = sorted(set(data) & set(self.read_to_valve)) or sorted({c for c in data if data.count(c) > 1})
@@ -306,9 +333,21 @@ class SynnaxDriver:
     def values(self, frame) -> dict[str, float]:
         out = {ch: units.convert(frame.sensors[sid], self.units.get(sid, "")) for sid, ch in self.sensors.items()}
         for v, w in self.state_out.items():  # HOOTL: the faked valve states
-            pos = frame.valves[v]
-            out[w] = pos if v in self.throttles else (1.0 if pos >= 0.5 else 0.0)
+            out[w] = self._fake_state(v, frame)
         return out
+
+    def _fake_state(self, valve: str, frame) -> float:
+        if self.cfg.valve_state == "command":
+            cmd = frame.commands[valve]
+            return cmd if valve in self.throttles else (1.0 if cmd >= 0.5 else 0.0)
+        pos = frame.valves[valve]
+        if valve in self.throttles:
+            return pos
+        if pos >= LIMIT_OPEN:
+            self._held[valve] = 1.0
+        elif pos <= LIMIT_CLOSED:
+            self._held[valve] = 0.0
+        return self._held.setdefault(valve, 1.0 if pos >= 0.5 else 0.0)
 
     def _write_loop(self) -> None:
         period = 1.0 / self.cfg.rate
@@ -336,8 +375,15 @@ class SynnaxDriver:
                 self.apply(v, value)
 
     def apply(self, valve: str, value: float) -> None:
-        """A valve channel changed: on/off valves open above the threshold, throttles follow the value."""
+        """A valve channel changed: on/off valves open above the threshold, throttles follow the value.
+
+        A HITL state channel that reports position moves the sim valve at once; anything
+        else is a command, and the sim strokes the valve.
+        """
         throttle = valve in self.throttles
         pos = min(max(value, 0.0), 1.0) if throttle else (1.0 if value > self.cfg.valve_threshold else 0.0)
-        self.runner.command(valve, pos)
+        if self.cfg.mode == "hitl" and self.cfg.valve_state == "position":
+            self.runner.set_position(valve, pos)
+        else:
+            self.runner.command(valve, pos)
         self.commands += 1

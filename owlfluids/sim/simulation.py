@@ -186,6 +186,13 @@ class Simulation:
             position = {"open": 1.0, "opened": 1.0, "close": 0.0, "closed": 0.0}[position.lower()]
         self.LV[k, L.V_CMD] = min(max(float(position), 0.0), 1.0)
 
+    def set_position(self, valve: str, position: float) -> None:
+        """Put a valve at ``position`` at once, skipping its stroke (a measured position from hardware)."""
+        k = self._valve(valve)
+        p = min(max(float(position), 0.0), 1.0)
+        self.LV[k, L.V_CMD] = p
+        self.LV[k, L.V_POS] = p
+
     def open(self, *valves: str) -> None:
         for v in valves:
             self.command(v, 1.0)

@@ -92,13 +92,32 @@ def test_hitl_reads_hardware_states_and_writes_none():
     assert not any("v_m_state" in w for w in link.written)
 
 
-def test_hootl_fakes_on_off_states_as_zero_or_one():
+def test_hootl_fakes_states_from_command_or_limit_switches():
     runner = Runner(Simulation(lox_feed()), rate=0)
-    drv = SynnaxDriver(runner, SynnaxConfig(), link_factory=FakeLink)
     frame = runner.frame
-    for pos, state in ((0.3, 0.0), (0.7, 1.0)):
+    echo = SynnaxDriver(runner, SynnaxConfig(), link_factory=FakeLink)
+    frame.valves["V-M"] = 0.0
+    frame.commands["V-M"] = 1.0
+    assert echo.values(frame)["v_m_state"] == 1.0  # a DO task's state echoes the command at once
+    switches = SynnaxDriver(runner, SynnaxConfig(valve_state="position"), link_factory=FakeLink)
+    states = []
+    for pos in (0.0, 0.5, 0.98, 1.0, 0.5, 0.02, 0.0):  # open stroke, then close stroke
         frame.valves["V-M"] = pos
-        assert drv.values(frame)["v_m_state"] == state
+        states.append(switches.values(frame)["v_m_state"])
+    assert states == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0]  # held mid-stroke, flips only at the ends
+    with pytest.raises(ValueError):
+        SynnaxConfig(valve_state="switch")
+
+
+def test_hitl_position_states_skip_the_stroke():
+    runner = Runner(Simulation(lox_feed()), rate=0)
+    drv = SynnaxDriver(runner, SynnaxConfig(mode="hitl", valve_state="position"), link_factory=FakeLink)
+    drv.apply("V-M", 1.0)  # runner not started: applied at once
+    assert runner.sim.valve_position("V-M") == 1.0 and runner.sim.valve_command("V-M") == 1.0
+    runner = Runner(Simulation(lox_feed()), rate=0)
+    cmd = SynnaxDriver(runner, SynnaxConfig(mode="hitl"), link_factory=FakeLink)
+    cmd.apply("V-M", 1.0)  # a command echo: the sim strokes the valve
+    assert runner.sim.valve_command("V-M") == 1.0 and runner.sim.valve_position("V-M") == 0.0
 
 
 class FakeClient:
@@ -141,6 +160,16 @@ def test_link_keeps_existing_indexes_and_creates_missing_on_its_own():
     assert link.client.store["press_cmd"].virtual
     with pytest.raises(RuntimeError, match="index channel"):
         link.ensure_channels("owl_time", ["ai_time"], [], True)
+
+
+def test_link_refuses_an_index_the_hardware_also_writes():
+    link = object.__new__(SynnaxLink)
+    link.sy = SimpleNamespace(DataType=SimpleNamespace(TIMESTAMP="ts", FLOAT32="f32"))
+    # one DAQ task stamps both the sensors and the valve states on daq_time
+    link.client = FakeClient([_channel("daq_time", 1, is_index=True), _channel("pt_tk", 2, index=1),
+                              _channel("mpv_state", 3, index=1)])
+    with pytest.raises(RuntimeError, match="daq_time.*mpv_state"):
+        link.ensure_channels("owl_time", ["pt_tk"], ["mpv_state"], True)
 
 
 @pytest.mark.slow
