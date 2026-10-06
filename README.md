@@ -123,6 +123,9 @@ digital output task's state, which echoes the command: HOOTL fakes it from the
 command, and in HITL the sim strokes the valve itself. `position` is limit-switch
 or position feedback: HOOTL fakes limit switches (1 once fully open, 0 once fully
 closed, held mid-stroke), and in HITL the sim valve jumps to the reported position.
+Use `position` in HITL only with real position feedback: limit switches alone would
+hold the sim valve shut for the whole stroke, so stands with only limit switches
+should keep `command`.
 
 `--synnax-mode hitl` on `run` or `console` overrides the file. Point the channel
 names at the stand's real channels so sequences and schematics work unchanged:

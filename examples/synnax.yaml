@@ -17,7 +17,8 @@ synnax:
   #           HOOTL fakes it from the command; in HITL the sim strokes the valve itself.
   # position: it reports where the valve is (limit switches). HOOTL fakes limit
   #           switches (1 fully open, 0 fully closed, held mid-stroke); in HITL the
-  #           sim valve jumps to the reported position.
+  #           sim valve jumps to the reported position (use it in HITL only with
+  #           real position feedback; limit-switch-only stands should keep command).
   valve_state: command
   rate: 100                 # Hz written to Synnax
   index: owl_time           # index for channels the driver creates (existing ones keep theirs)
