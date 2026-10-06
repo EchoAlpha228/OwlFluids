@@ -18,8 +18,9 @@ or Synnax) open and close valves.
   valves; live values on the drawing and strip charts below.
 - **Scriptable and headless.** The same simulation runs from Python, the command
   line, or a sequence script; runs can be logged to CSV or HDF5.
-- **Hardware in the loop.** A Synnax driver writes simulated sensors to Synnax
-  channels and takes valve commands (or real valve states) back.
+- **HOOTL and HITL with Synnax.** A Synnax driver writes simulated sensors to
+  Synnax and either takes valve commands and fakes the valve states (HOOTL) or
+  takes the real hardware's valve states (HITL).
 
 ## Install (Windows)
 
@@ -51,7 +52,7 @@ under `settings:` in the system file).
 | `owlfluids app [file.yaml]` | Desktop app (also `owlfluids` with no arguments) |
 | `owlfluids console file.yaml` | Real-time run with typed commands: `open V-M`, `close V-M`, `set TV-1 0.4`, `status` |
 | `owlfluids run file.yaml --script seq.py --log run.csv` | Headless run of a sequence; `--rate 0` runs as fast as possible |
-| `owlfluids run file.yaml --synnax examples/synnax.yaml` | Hardware-in-the-loop with Synnax |
+| `owlfluids run file.yaml --synnax examples/synnax.yaml` | Run against Synnax (HOOTL, or `--synnax-mode hitl`) |
 | `owlfluids check file.yaml` | Build the network and print a summary (catches wiring mistakes) |
 | `owlfluids bench` | Time the 81-component example stand |
 | `owlfluids example NAME -o file.yaml` | Write one of the examples |
@@ -106,12 +107,33 @@ For real time, wrap it in `owlfluids.sim.realtime.Runner` (`start()`, `open()`,
 `wait()`, `wait_until()`, `frame`, `history`); sequence scripts get a runner (see
 `examples/lox_flow_sequence.py`).
 
-## Synnax hardware-in-the-loop
+## Synnax: HOOTL and HITL
 
 `examples/synnax.yaml` maps simulated sensors to Synnax channels (written in each
-sensor's display units, e.g. psi) and valves to the channels read back: the
-command channels your Arc sequences write, or the state channels a real controller
-reports. Missing channels are created unless `create_channels: false`. Only
+sensor's display units, e.g. psi) and each valve to a command channel and a state
+channel. Its `mode` picks the test:
+
+| mode | valves driven by | valve state channels |
+|---|---|---|
+| `hootl` (default) | the command channels your Arc sequences and operators write | faked by the sim |
+| `hitl` | the state channels the real hardware reports | left to the hardware |
+
+`valve_state` says what a state channel means. `command` (the default) is a Synnax
+digital output task's state, which echoes the command: HOOTL fakes it from the
+command, and in HITL the sim strokes the valve itself. `position` is limit-switch
+or position feedback: HOOTL fakes limit switches (1 once fully open, 0 once fully
+closed, held mid-stroke), and in HITL the sim valve jumps to the reported position.
+Use `position` in HITL only with real position feedback: limit switches alone would
+hold the sim valve shut for the whole stroke, so stands with only limit switches
+should keep `command`.
+
+`--synnax-mode hitl` on `run` or `console` overrides the file. Point the channel
+names at the stand's real channels so sequences and schematics work unchanged:
+existing channels keep their own index channel, and missing ones are created on
+`index` unless `create_channels: false`. In HITL, stop the hardware's sensor read
+task first, since the sim writes those sensor channels; the driver refuses to
+start if a sensor it writes shares an index with a valve state it reads, and it
+errors rather than losing writes when another writer holds a channel. Only
 `owlfluids/drivers/synnax.py`'s `SynnaxLink` touches the Synnax client, so a new
 Synnax release means updating that one class.
 

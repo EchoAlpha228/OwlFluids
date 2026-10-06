@@ -181,6 +181,10 @@ class Runner:
         self.sim._valve(valve)
         self.submit(lambda sim: sim.command(valve, position))
 
+    def set_position(self, valve: str, position: float) -> None:
+        self.sim._valve(valve)
+        self.submit(lambda sim: sim.set_position(valve, position))
+
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
         self.sim.boundary_state(comp, pressure, temperature)  # fail now, in the caller
         # omitted values are filled in on the runner thread, after any earlier change

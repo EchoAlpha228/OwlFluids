@@ -115,9 +115,12 @@ def _start_driver(args, runner):
     from .drivers.synnax import SynnaxConfig, SynnaxDriver
 
     cfg = SynnaxConfig.load(args.synnax)
+    if getattr(args, "synnax_mode", None):
+        cfg = SynnaxConfig.from_dict({**cfg.__dict__, "mode": args.synnax_mode})
     driver = SynnaxDriver(runner, cfg)
-    print(f"Synnax: writing {len(driver.sensors)} sensors at {cfg.rate:g} Hz to {cfg.host}:{cfg.port}, "
-          f"reading {len(driver.valves)} valve channels")
+    what = "faking valve states, reading valve commands" if cfg.mode == "hootl" else "reading valve states"
+    print(f"Synnax {cfg.mode.upper()}: writing {len(driver.sensors)} sensors at {cfg.rate:g} Hz to "
+          f"{cfg.host}:{cfg.port}, {what} for {len(driver.valves)} valves")
     return driver
 
 
@@ -272,12 +275,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--log", help="write a .csv or .h5 log")
     p.add_argument("--log-interval", type=float, default=0.01)
     p.add_argument("--print-every", type=float, default=1.0, help="print sensors every N simulated s (0 = never)")
-    p.add_argument("--synnax", help="YAML file with a synnax: section; runs hardware-in-the-loop")
+    p.add_argument("--synnax", help="YAML file with a synnax: section; connects the sim to Synnax")
+    p.add_argument("--synnax-mode", choices=["hootl", "hitl"],
+                   help="override the file's mode: hootl fakes valve states, hitl reads them from hardware")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("console", help="run in real time with typed valve commands")
     p.add_argument("system")
-    p.add_argument("--synnax", help="YAML file with a synnax: section; runs hardware-in-the-loop")
+    p.add_argument("--synnax", help="YAML file with a synnax: section; connects the sim to Synnax")
+    p.add_argument("--synnax-mode", choices=["hootl", "hitl"],
+                   help="override the file's mode: hootl fakes valve states, hitl reads them from hardware")
     p.set_defaults(fn=cmd_console)
 
     p = sub.add_parser("check", help="build a system and print a summary")
