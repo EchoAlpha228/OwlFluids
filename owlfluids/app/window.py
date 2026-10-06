@@ -235,10 +235,14 @@ class MainWindow(QMainWindow):
                                             "OwlFluids systems (*.yaml)")
         if not fn:
             return False
+        old_path, old_name = self.path, self.scene.system.name
         self.path = Path(fn)
         if self.scene.system.name == "untitled":
             self.scene.system.name = self.path.stem
-        return self.save()
+        if self.save():
+            return True
+        self.path, self.scene.system.name = old_path, old_name  # Ctrl+S must not retry the bad path
+        return False
 
     def _start_dir(self) -> str:
         """Where file dialogs open: next to the current system file."""

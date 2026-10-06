@@ -79,7 +79,11 @@ def cmd_run(args) -> int:
             if runner.error or (driver and driver.error) or not runner.running:
                 break
             warned = _print_warnings(runner, warned)
-            time.sleep(0.05)
+            nap = 0.05
+            if args.duration:  # don't overshoot a short run by a whole poll
+                left = args.duration - runner.frame.t
+                nap = min(nap, left / args.rate if args.rate > 0 else 0.002)
+            time.sleep(max(nap, 0.001))
     except KeyboardInterrupt:
         pass
     finally:
