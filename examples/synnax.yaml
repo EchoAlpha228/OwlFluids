@@ -1,4 +1,4 @@
-# Hardware-in-the-loop settings for `owlfluids run ... --synnax examples/synnax.yaml`
+# Synnax settings for `owlfluids run ... --synnax examples/synnax.yaml`
 # (or Run > Connect to Synnax… in the app). Channels that don't exist are created.
 synnax:
   host: localhost
@@ -6,16 +6,23 @@ synnax:
   username: synnax
   password: seldon
   secure: false
+  # hootl: no hardware. Reads each valve's cmd channel and fakes its state channel
+  #        (1/0, or the position for throttle valves) so valves work in Synnax.
+  # hitl:  real valves. Reads each valve's state channel from the hardware and
+  #        never writes it; only sensors are faked.
+  # `--synnax-mode hitl` on the command line overrides this.
+  mode: hootl
   rate: 100                 # Hz written to Synnax
-  index: owl_time
+  index: owl_time           # index for channels the driver creates (existing ones keep theirs)
   create_channels: true
   # Leave these out to use defaults: every sensor -> its id in lower case
-  # (PT-TK -> pt_tk), every valve -> <valve>_cmd (read) and <valve>_state (written).
+  # (PT-TK -> pt_tk), every valve -> <valve>_cmd and <valve>_state.
+  # Point them at the stand's real channels so Arc sequences and schematics work unchanged.
   sensors:
     PT-TK: pt_tk
     PT-INJ: pt_inj
     TC-INJ: tc_inj
     FM-LOX: fm_lox
   valves:
-    V-P: {read: press_cmd, write: press_state}
-    V-M: {read: mpv_cmd, write: mpv_state}
+    V-P: {cmd: press_cmd, state: press_state}
+    V-M: {cmd: mpv_cmd, state: mpv_state}

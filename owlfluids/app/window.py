@@ -147,7 +147,7 @@ class MainWindow(QMainWindow):
         self.a_log.setCheckable(True)
         m_run.addSeparator()
         self.a_synnax = act("Connect to Synnax…", self.toggle_synnax, None, m_run, False,
-                            "Hardware-in-the-loop: send sensors to Synnax, take valve channels from it")
+                            "HOOTL or HITL: send sensors to Synnax, take valve channels from it")
         self.a_synnax.setCheckable(True)
         act("Fit schematic", self.view.fit, "F", m_view, True)
         m_view.addAction(self.plot_dock.toggleViewAction())
@@ -418,7 +418,8 @@ class MainWindow(QMainWindow):
                 self.a_synnax.setChecked(False)
                 QMessageBox.critical(self, "Synnax", f"Could not connect: {e}")
                 return
-            self.statusBar().showMessage(f"Synnax connected: {len(self.driver.sensors)} sensors out, "
+            self.statusBar().showMessage(f"Synnax {self.driver.cfg.mode.upper()} connected: "
+                                         f"{len(self.driver.sensors)} sensors out, "
                                          f"{len(self.driver.valves)} valves in", 6000)
         elif not on and self.driver is not None:
             drv, self.driver = self.driver, None

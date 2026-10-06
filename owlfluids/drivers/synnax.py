@@ -1,11 +1,19 @@
-"""Synnax hardware-in-the-loop driver.
+"""Synnax driver for hardware-out-of-the-loop (HOOTL) and hardware-in-the-loop (HITL) tests.
 
 The simulation stands in for the test stand: every ``1/rate`` seconds the driver
 writes the simulated sensors to Synnax channels (in each sensor's display units,
 so they look like the real transducers), and it streams valve channels back from
-Synnax and applies them to the simulated valves. Those can be the command
-channels that Arc sequences and operators write, or the valve state channels a
-real controller reports in HITL tests.
+Synnax and applies them to the simulated valves. ``mode`` decides which:
+
+- ``hootl`` (default): no hardware. The driver reads each valve's command channel
+  (what Arc sequences and operators write) and fakes the valve's state channel
+  from the simulated valve (1/0 for on/off valves, the position for throttles),
+  so schematics and sequences that wait on valve states work as on the stand.
+- ``hitl``: real valve hardware. The driver reads the valve state channels the
+  hardware reports and never writes them; only sensors are faked.
+
+Sensor and state channels that already exist keep their own index channel (the
+driver stamps each index it writes), so the real stand's channels can be used.
 
 Everything that touches the ``synnax`` package lives in ``SynnaxLink``; when the
 client API changes, that class is the only one to update. The driver itself talks
@@ -20,13 +28,14 @@ Config (a ``synnax:`` section in the system file, or its own YAML file)::
       username: synnax
       password: seldon
       secure: false
+      mode: hootl                 # hootl: fake valve states; hitl: read them from the hardware
       rate: 100                   # Hz written to Synnax
-      index: owl_time             # index channel for everything written
+      index: owl_time             # index channel for channels the driver creates
       create_channels: true       # create any missing channel
       sensors:                    # sim sensor -> channel (default: lower-case id)
         PT-OX: pt_ox
-      valves:                     # sim valve -> channels (default: <valve>_cmd / <valve>_state)
-        V-OXM: {read: ox_mpv_cmd, write: ox_mpv_state}
+      valves:                     # sim valve -> channels, see SynnaxConfig.resolve
+        V-OXM: {cmd: ox_mpv_cmd, state: ox_mpv_state}
 """
 
 from __future__ import annotations
@@ -41,6 +50,8 @@ import yaml
 
 from .. import units
 
+MODES = ("hootl", "hitl")
+
 
 def _channel_name(name: str) -> str:
     return name.lower().replace("-", "_").replace(" ", "_").replace(".", "_")
@@ -53,12 +64,22 @@ class SynnaxConfig:
     username: str = "synnax"
     password: str = "seldon"
     secure: bool = False
+    mode: str = "hootl"
     rate: float = 100.0
     index: str = "owl_time"
     create_channels: bool = True
     sensors: dict[str, str] = field(default_factory=dict)
     valves: dict[str, dict[str, str]] = field(default_factory=dict)
     valve_threshold: float = 0.5  # a read value above this opens an on/off valve
+
+    def __post_init__(self):
+        self.mode = str(self.mode).strip().lower()
+        if self.mode not in MODES:
+            raise ValueError(f"synnax mode must be one of {', '.join(MODES)}, not {self.mode!r}")
+        for v, spec in self.valves.items():
+            bad = set(spec or {}) - {"cmd", "state", "read", "write"}
+            if bad:
+                raise ValueError(f"unknown settings for valve {v}: {', '.join(sorted(bad))} (use cmd and state)")
 
     @classmethod
     def from_dict(cls, d: dict | None) -> SynnaxConfig:
@@ -74,8 +95,14 @@ class SynnaxConfig:
             d = yaml.safe_load(fh) or {}
         return cls.from_dict(d.get("synnax", d))
 
-    def resolve(self, sim) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
-        """Sensor -> channel and valve -> (read channel, write channel), filling in defaults."""
+    def resolve(self, sim) -> tuple[dict[str, str], dict[str, tuple[str, str | None]]]:
+        """Sensor -> channel and valve -> (channel read, channel written or None), filling in defaults.
+
+        Each valve has a command channel (default ``<valve>_cmd``) and a state channel
+        (default ``<valve>_state``). HOOTL reads the command and writes the state; HITL
+        reads the state and writes nothing. ``read:``/``write:`` override either side
+        (``read: <cmd channel>`` in HITL follows commands instead of the hardware).
+        """
         sensors = dict(self.sensors) or {s.id: _channel_name(s.id) for s in sim.system.sensors}
         for sid in sensors:
             sim.read(sid)  # unknown sensor -> KeyError now, not mid-run
@@ -84,7 +111,12 @@ class SynnaxConfig:
         for v in names:
             sim.valve_position(v)
             spec = self.valves.get(v) or {}
-            valves[v] = (spec.get("read", f"{_channel_name(v)}_cmd"), spec.get("write", f"{_channel_name(v)}_state"))
+            cmd = spec.get("cmd", f"{_channel_name(v)}_cmd")
+            state = spec.get("state", f"{_channel_name(v)}_state")
+            if self.mode == "hitl":
+                valves[v] = (spec.get("read", state), None)
+            else:
+                valves[v] = (spec.get("read", cmd), spec.get("write", state))
         return sensors, valves
 
 
@@ -106,27 +138,47 @@ class SynnaxLink:
         self._p0 = 0.0
         self._last = 0
 
-    def ensure_channels(self, index: str, data: list[str], commands: list[str], create: bool) -> None:
+    def ensure_channels(self, index: str, data: list[str], commands: list[str], create: bool) -> list[str]:
+        """Check (and create) the channels; returns the index channels every write must stamp.
+
+        Data channels that exist keep their own index, so a real stand's sensor and
+        valve state channels can be written; missing ones are created on ``index``.
+        """
         sy = self.sy
-        existing = {c.name for c in self.client.channels.retrieve([index, *data, *commands])}
-        missing = [n for n in [index, *data, *commands] if n not in existing]
+        names = [*data, *commands]
+        found = {c.name: c for c in self.client.channels.retrieve(names)} if names else {}
+        missing = [n for n in names if n not in found]
+        new_data = [n for n in data if n in missing]
+        idx = None
+        if new_data:
+            got = self.client.channels.retrieve([index])
+            idx = got[0] if got else None
+            if idx is None:
+                missing.insert(0, index)
         if missing and not create:
             raise RuntimeError(f"missing Synnax channels: {', '.join(missing)}")
-        if index in missing:
-            self.client.channels.create(name=index, is_index=True, data_type=sy.DataType.TIMESTAMP)
-        idx = self.client.channels.retrieve(index)
-        if not idx.is_index:
+        if new_data and idx is None:
+            idx = self.client.channels.create(name=index, is_index=True, data_type=sy.DataType.TIMESTAMP)
+        if idx is not None and not idx.is_index:
             raise RuntimeError(f"Synnax channel {index} exists but is not an index channel")
-        present = [n for n in data if n not in missing]
-        wrong = [c.name for c in self.client.channels.retrieve(present) if c.index != idx.key] if present else []
-        if wrong:
-            raise RuntimeError(f"Synnax channels {', '.join(wrong)} exist but are not indexed by {index}")
+        keys = []
         for n in data:
-            if n in missing:
-                self.client.channels.create(name=n, index=idx.key, data_type=sy.DataType.FLOAT32)
+            c = found.get(n)
+            if c is None:
+                continue
+            if c.is_index:
+                raise RuntimeError(f"Synnax channel {n} is an index channel, not a data channel")
+            if not c.virtual and c.index and c.index not in keys:
+                keys.append(c.index)
+        indexes = [c.name for c in self.client.channels.retrieve(keys)] if keys else []
+        for n in new_data:
+            self.client.channels.create(name=n, index=idx.key, data_type=sy.DataType.FLOAT32)
+        if new_data and idx.name not in indexes:
+            indexes.append(idx.name)
         for n in commands:
             if n in missing:
                 self.client.channels.create(name=n, virtual=True, data_type=sy.DataType.FLOAT32)
+        return indexes
 
     def open(self, write: list[str], read: list[str]) -> None:
         sy = self.sy
@@ -149,11 +201,12 @@ class SynnaxLink:
                 pass
         return out
 
-    def write(self, values: dict[str, float], index: str) -> None:
+    def write(self, values: dict[str, float], indexes: list[str]) -> None:
         # stamps from a monotonic clock, so a wall-clock step (NTP) never sends time backwards
         stamp = max(self._t0 + int((time.perf_counter() - self._p0) * 1e9), self._last + 1)
         self._last = stamp
-        self.writer.write({index: self.sy.TimeStamp(stamp), **values})
+        ts = self.sy.TimeStamp(stamp)
+        self.writer.write({**{i: ts for i in indexes}, **values})
 
     def read(self, timeout: float) -> dict[str, float]:
         """Latest value of each streamed channel that changed, by channel name."""
@@ -189,7 +242,7 @@ class SynnaxLink:
 
 
 class SynnaxDriver:
-    """Publishes sensors and applies valve channels for a running ``Runner``."""
+    """Publishes sensors (and, in HOOTL, valve states) and applies valve channels for a running ``Runner``."""
 
     def __init__(self, runner, cfg: SynnaxConfig, link_factory: Callable[[SynnaxConfig], object] = SynnaxLink):
         self.runner = runner
@@ -199,12 +252,21 @@ class SynnaxDriver:
         self.units = {}
         for s in sim.system.sensors:
             self.units[s.id] = s.units or units.DEFAULT_UNITS.get(s.type, "")
+        from ..components import get_type
+
+        self.throttles = {v for v in self.valves
+                          if get_type(sim.system.component(v).type).type_name == "throttle_valve"}
         self.read_to_valve = {r: v for v, (r, _w) in self.valves.items()}
+        self.state_out = {v: w for v, (_r, w) in self.valves.items() if w}
+        data = [*self.sensors.values(), *self.state_out.values()]
+        clash = sorted(set(data) & set(self.read_to_valve)) or sorted({c for c in data if data.count(c) > 1})
+        if clash:
+            raise ValueError(f"Synnax channels used twice: {', '.join(clash)}")
         self.link = link_factory(cfg)
-        self.link.ensure_channels(cfg.index, list(self.sensors.values()) + [w for _r, w in self.valves.values()],
-                                  list(self.read_to_valve), cfg.create_channels)
-        self.link.open([cfg.index, *self.sensors.values(), *(w for _r, w in self.valves.values())],
-                       list(self.read_to_valve))
+        self.indexes = self.link.ensure_channels(cfg.index, data, list(self.read_to_valve), cfg.create_channels)
+        if self.indexes is None:  # a link that doesn't report indexes writes everything on cfg.index
+            self.indexes = [cfg.index]
+        self.link.open([*self.indexes, *data], list(self.read_to_valve))
         # a streamer only sees new writes: start from what the valve channels already say
         latest = getattr(self.link, "latest", None)
         self.initial = latest(list(self.read_to_valve)) if latest else {}
@@ -243,8 +305,9 @@ class SynnaxDriver:
 
     def values(self, frame) -> dict[str, float]:
         out = {ch: units.convert(frame.sensors[sid], self.units.get(sid, "")) for sid, ch in self.sensors.items()}
-        for v, (_r, w) in self.valves.items():
-            out[w] = frame.valves[v]
+        for v, w in self.state_out.items():  # HOOTL: the faked valve states
+            pos = frame.valves[v]
+            out[w] = pos if v in self.throttles else (1.0 if pos >= 0.5 else 0.0)
         return out
 
     def _write_loop(self) -> None:
@@ -254,7 +317,7 @@ class SynnaxDriver:
         while not self._stop.is_set():
             frame = self.runner.frame
             if frame.t != last_t:  # nothing new while paused
-                self.link.write(self.values(frame), self.cfg.index)
+                self.link.write(self.values(frame), self.indexes)
                 self.writes += 1
                 last_t = frame.t
             nxt += period
@@ -274,10 +337,7 @@ class SynnaxDriver:
 
     def apply(self, valve: str, value: float) -> None:
         """A valve channel changed: on/off valves open above the threshold, throttles follow the value."""
-        sim = self.runner.sim
-        from ..components import get_type
-
-        throttle = get_type(sim.system.component(valve).type).type_name == "throttle_valve"
+        throttle = valve in self.throttles
         pos = min(max(value, 0.0), 1.0) if throttle else (1.0 if value > self.cfg.valve_threshold else 0.0)
         self.runner.command(valve, pos)
         self.commands += 1
