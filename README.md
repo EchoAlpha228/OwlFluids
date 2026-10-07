@@ -90,7 +90,8 @@ Component types: `tank` (gas, or saturated liquid/vapor with `fill`),
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
 `valve_position`, `mass`, `level` (a tank's liquid fill, shown in %), `quality`
 and `density`. Display units default to psi, °F, kg/s, kg and %; set `units:`
-to change one. Sensors read with realistic noise and lag for their type: a
+to change one (temperatures defaulted to K before October 2026, so a sensor
+without `units:` now logs and sends °F). Sensors read with realistic noise and lag for their type: a
 pressure transducer gets noisier while fluid flows past it and while the pressure
 swings, thermocouples lag about 0.3 s, a flow meter's noise scales with flow (so a
 still line reads 0), and a level reading jitters as the level moves. Give a sensor

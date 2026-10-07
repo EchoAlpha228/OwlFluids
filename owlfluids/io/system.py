@@ -52,7 +52,6 @@ class Component:
         return d
 
 
-
 def _optional_float(v) -> float | None:
     """A sensor's lag or noise: omitted or "auto" means the realistic default, "off" means 0."""
     if v is None or (isinstance(v, str) and v.strip().lower() == "auto"):
@@ -60,6 +59,7 @@ def _optional_float(v) -> float | None:
     if isinstance(v, str) and v.strip().lower() in ("off", "none"):
         return 0.0
     return float(v)
+
 
 @dataclass
 class Sensor:

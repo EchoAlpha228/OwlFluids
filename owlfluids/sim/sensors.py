@@ -8,7 +8,7 @@ instrumentation on a 16-bit DAQ, not of any one transducer; give a sensor its ow
 
 - Pressure: 0.5 psi plus 0.05% of reading always; up to 0.3% more while fluid flows
   through the node (turbulence); more again while pressure is changing fast
-  (valve transients and water hammer ring).
+  (valve transients), capped at 0.5% + 1 psi so it never trips a redline.
 - Temperature (thermocouples): 0.3 K (about 0.5 °F) of noise and a 0.3 s first-order lag, like an
   exposed-junction probe; wall thermocouples lag 0.5 s.
 - Mass flow: 1% of reading, so a meter on a still line reads 0.
@@ -40,7 +40,7 @@ def sigma(stype: str, value: float, rate: float, flow: float) -> float:
     a = abs(value)
     if stype == "pressure":
         s = 0.5 * PSI + 5e-4 * a + 3e-3 * a * flow
-        return s + min(2e-3 * abs(rate), 0.02 * a + 5 * PSI)  # ringing while pressure moves
+        return s + min(2e-3 * abs(rate), 0.005 * a + PSI)  # ringing while pressure moves (kept below redlines)
     if stype in ("temperature", "wall_temperature"):
         return 0.3
     if stype == "mass_flow":
