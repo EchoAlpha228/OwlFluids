@@ -31,6 +31,7 @@ synnax:
     PT-INJ: pt_inj
     TC-INJ: tc_inj
     FM-LOX: fm_lox
+    LL-LOX: ll_lox
   valves:
     V-P: {cmd: press_cmd, state: press_state}
     V-M: {cmd: mpv_cmd, state: mpv_state}

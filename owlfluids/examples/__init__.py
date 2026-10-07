@@ -16,7 +16,7 @@ def gn2_blowdown() -> System:
     s.connect("V1.out", "L1.in")
     s.connect("L1.out", "ATM.port")
     s.sense("PT-K1", "pressure", "K1.port", units="psi")
-    s.sense("TC-K1", "temperature", "K1.port", units="K")
+    s.sense("TC-K1", "temperature", "K1.port", units="F")
     s.sense("FM-V1", "mass_flow", "V1", units="kg/s")
     return s
 
@@ -41,9 +41,10 @@ def lox_feed() -> System:
         s.connect(a, b)
     s.sense("PT-TK", "pressure", "TK.gas", units="psi")
     s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
-    s.sense("TC-INJ", "temperature", "INJ.in", units="K")
+    s.sense("TC-INJ", "temperature", "INJ.in", units="F")
     s.sense("FM-LOX", "mass_flow", "V-M", units="kg/s")
     s.sense("M-LOX", "mass", "TK", units="kg")
+    s.sense("LL-LOX", "level", "TK", units="%")
     return s
 
 
@@ -72,10 +73,11 @@ def ln2_wet_dress() -> System:
         s.connect(a, b)
     s.sense("PT-TK", "pressure", "TK.gas", units="psi")
     s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
-    s.sense("TC-INJ", "temperature", "INJ.in", units="K")
-    s.sense("TC-LINE", "wall_temperature", "L-F.s2", units="K")
+    s.sense("TC-INJ", "temperature", "INJ.in", units="F")
+    s.sense("TC-LINE", "wall_temperature", "L-F.s2", units="F")
     s.sense("FM-LN2", "mass_flow", "V-M", units="kg/s")
     s.sense("M-LN2", "mass", "TK", units="kg")
+    s.sense("LL-LN2", "level", "TK", units="%")
     return s
 
 
@@ -90,10 +92,11 @@ def n2o_blowdown() -> System:
     s.connect("V.out", "INJ.in")
     s.connect("INJ.out", "ATM.port")
     s.sense("PT-K", "pressure", "K.port", units="psi")
-    s.sense("TC-K", "temperature", "K.port", units="C")
+    s.sense("TC-K", "temperature", "K.port", units="F")
     s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
     s.sense("FM-N2O", "mass_flow", "INJ", units="kg/s")
     s.sense("M-N2O", "mass", "K", units="kg")
+    s.sense("LL-N2O", "level", "K", units="%")
     return s
 
 

@@ -87,6 +87,18 @@ Component types: `tank` (gas, or saturated liquid/vapor with `fill`),
 `orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`.
 `owlfluids app` shows every parameter with its default and meaning.
 
+Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
+`valve_position`, `mass`, `level` (a tank's liquid fill, shown in %), `quality`
+and `density`. Display units default to psi, °F, kg/s, kg and %; set `units:`
+to change one. Sensors read with realistic noise and lag for their type: a
+pressure transducer gets noisier while fluid flows past it and while the pressure
+swings, thermocouples lag about 0.3 s, a flow meter's noise scales with flow (so a
+still line reads 0), and a level reading jitters as the level moves. Give a sensor
+`noise: off` or its own `noise:` (standard deviation, SI) and `lag:` (s), or set
+`sensor_noise: off` under `settings:` for exact values. Noise repeats run to run
+for a given `noise_seed` setting. It changes only what sensors read, never the
+simulation.
+
 Lines start in equilibrium with the tank or volume they are open to: a feed line
 on a LOX tank starts full of LOX at tank pressure, a regulated line starts at its
 setpoint, and anything behind a closed valve starts at the system's initial

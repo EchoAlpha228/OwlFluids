@@ -43,7 +43,7 @@ def _show_error(widget, message: str) -> None:
 
 FLUID_PARAMS = ("fluid", "liquid", "pressurant")
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
-                "wall_temperature")
+                "wall_temperature", "level")
 
 
 class Palette(QTreeWidget):
@@ -229,9 +229,9 @@ class Properties(QScrollArea):
 
         def do():
             t = kind.currentText()
-            at = comp.id if t in ("mass_flow", "valve_position", "mass") else where.currentText()
+            at = comp.id if t in ("mass_flow", "valve_position", "mass", "level") else where.currentText()
             prefix = {"pressure": "PT", "temperature": "TC", "mass_flow": "FM", "valve_position": "ZS",
-                      "mass": "M"}.get(t, t[:2].upper())
+                      "mass": "M", "level": "LL"}.get(t, t[:2].upper())
             n = 1
             while any(s.id == f"{prefix}-{comp.id}" + (f"-{n}" if n > 1 else "") for s in self.system.sensors):
                 n += 1
