@@ -21,22 +21,26 @@ from .. import units
 from ..core import kernel
 from ..core import layout as L
 from ..core.network import Network, build_network
+from ..fluids import props
 from ..io.system import System
+from . import sensors as sensor_model
 
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
-                "wall_temperature")
+                "wall_temperature", "level")
 
 
 class Simulation:
-    def __init__(self, system: System, seed: int = 0, step_budget: float | None = None):
+    def __init__(self, system: System, seed: int | None = None, step_budget: float | None = None):
         """``step_budget``: work per step in right-hand-side evaluations; by default it is
         timed on this machine (see ``_step_budget``). Give a number for runs that must
-        come out the same on every machine."""
+        come out the same on every machine. ``seed``: sensor noise seed (default: the
+        system's ``noise_seed`` setting); every reset restarts the same noise."""
         self.system = system
         self._fixed_budget = step_budget
         self.net: Network = build_network(system)
         self.dt = self.net.dt
-        self.rng = np.random.default_rng(seed)
+        self.seed = int(system.setting("noise_seed") if seed is None else seed)
+        self.realistic = str(system.setting("sensor_noise")).strip().lower() not in ("off", "false", "none", "0")
         self._alloc()
         self.reset()
 
@@ -114,12 +118,18 @@ class Simulation:
         self.stats = np.zeros(6)
         self.notices: list[str] = []  # physics the model cannot represent, newest last
         self._limited = np.zeros(self.net.NI.shape[0], dtype=bool)
+        self.rng = np.random.default_rng(self.seed)
         self._sensors = {}
         for s in self.system.sensors:
-            self._sensors[s.id] = _SensorState(s, self._sensor_source(s))
+            st = _SensorState(s, self._sensor_source(s))
+            st.lag = s.lag if s.lag is not None else (sensor_model.default_lag(s.type) if self.realistic else 0.0)
+            st.modelled = s.noise is None and self.realistic
+            st.links = self._sensor_links(st)
+            self._sensors[s.id] = st
         self._advance(0)
         for st in self._sensors.values():
             st.value = st.held = self._raw(st)
+            self._sample_noise(st)
 
     # ------------------------------------------------------------------ time
     def step(self, n: int = 1) -> None:
@@ -161,8 +171,11 @@ class Simulation:
                                     "pressure".format(self.t))
             self._limited |= hot
         if n:
+            mdot = self.lout[:, L.LO_MDOT]
             for st in self._sensors.values():
-                st.update(self._raw(st), n * self.dt, self.t)
+                flow = sensor_model.flow_factor(float(np.abs(mdot[st.links]).sum()) / 2) if len(st.links) else 0.0
+                if st.update(self._raw(st), n * self.dt, self.t, flow):
+                    self._sample_noise(st)
 
     @property
     def substeps(self) -> int:
@@ -279,10 +292,13 @@ class Simulation:
         st = self._sensors.get(sensor)
         if st is None:
             raise KeyError(f"no sensor {sensor!r}; sensors: {', '.join(self._sensors)}")
+        return float(st.reading)
+
+    def _sample_noise(self, st) -> None:
+        """Noise is drawn once per sample, so repeated reads agree and runs repeat exactly."""
         v = st.held
-        if st.spec.noise:
-            v += self.rng.normal(0.0, st.spec.noise)
-        return float(v)
+        sd = sensor_model.sigma(st.spec.type, v, st.rate, st.flow) if st.modelled else (st.spec.noise or 0.0)
+        st.reading = v + self.rng.normal(0.0, sd) if sd > 0 and math.isfinite(v) else v
 
     def sensors(self) -> dict[str, float]:
         return {k: self.read(k) for k in self._sensors}
@@ -311,7 +327,44 @@ class Simulation:
             return "valve", self._valve(s.at)
         if s.type == "mass":
             return "mass", 0
+        if s.type == "level":
+            return "level", self._level_source(s)
         return "node", self.node(s.at)
+
+    def _level_source(self, s) -> int:
+        comp = s.at.split(".")[0]
+        nodes = self.net.comp_nodes.get(comp, [])
+        ctype = next((c.type for c in self.system.components if c.id == comp), None)
+        if ctype not in ("tank", "pressurized_tank") or not nodes:
+            raise ValueError(f"sensor {s.id}: a level sensor goes on a tank, not {s.at!r}")
+        return nodes[0]
+
+    def _sensor_links(self, st) -> np.ndarray:
+        """Links next to a pressure sensor's node, whose flow makes the reading noisier."""
+        kind, idx = st.source
+        if kind != "node" or st.spec.type != "pressure":
+            return np.zeros(0, dtype=np.int64)
+        net = self.net
+        return net.nl_idx[net.nl_ptr[idx]:net.nl_ptr[idx + 1]]
+
+    def _level(self, comp: str) -> float:
+        """Liquid volume fraction 0-1 of a tank."""
+        nodes = self.net.comp_nodes[comp]
+        o = self.nout
+        if len(nodes) > 1:  # pressurized tank: ullage, then liquid
+            vol = self.net.NF[nodes[0], L.NF_VOL]
+            liq = nodes[1]
+            return min(max(o[liq, L.O_M] / max(o[liq, L.O_RHO], 1e-9) / vol, 0.0), 1.0)
+        i = nodes[0]
+        x = o[i, L.O_X]
+        fl = self.fl
+        # the saturation table, not CoolProp: this runs on the runner thread every chunk
+        sat = props.saturation(int(self.net.NI[i, L.N_FLUID]), float(o[i, L.O_T]), fl[0], fl[1], fl[7], fl[8])
+        if not sat[8] or not math.isfinite(x) or x >= 1.0:  # supercritical or all vapor: no liquid level
+            return 0.0
+        if x <= 0.0:
+            return 1.0
+        return min(max((1.0 - x) * o[i, L.O_RHO] / sat[1], 0.0), 1.0)
 
     def _raw(self, st) -> float:
         kind, idx = st.source
@@ -322,6 +375,8 @@ class Simulation:
             return float(self.LV[idx, L.V_POS])
         if kind == "mass":
             return self.mass(st.spec.at)
+        if kind == "level":
+            return self._level(st.spec.at.split(".")[0])
         col = {"pressure": L.O_P, "temperature": L.O_T, "quality": L.O_X, "density": L.O_RHO,
                "wall_temperature": L.O_TW}[t]
         return float(self.nout[idx, col])
@@ -334,14 +389,28 @@ class _SensorState:
         self.value = 0.0
         self.held = 0.0
         self.next_sample = 0.0
+        self.lag = 0.0
+        self.modelled = False
+        self.links = None
+        self.rate = 0.0  # d(reading)/dt, for transient noise
+        self.flow = 0.0  # 0-1, flow past the sensor
+        self.reading = 0.0  # held value plus noise: what read() returns
 
-    def update(self, raw: float, elapsed: float, t: float) -> None:
-        if self.spec.lag > 0:
-            self.value += (1.0 - math.exp(-elapsed / self.spec.lag)) * (raw - self.value)
+    def update(self, raw: float, elapsed: float, t: float, flow: float = 0.0) -> bool:
+        """Advance the lag; True when a new sample was taken."""
+        before = self.value
+        if self.lag > 0:
+            self.value += (1.0 - math.exp(-elapsed / self.lag)) * (raw - self.value)
         else:
             self.value = raw
+        if elapsed > 0 and math.isfinite(self.value) and math.isfinite(before):
+            self.rate = (self.value - before) / elapsed
+        self.flow = flow
         if self.spec.rate <= 0:
             self.held = self.value
-        elif t + 1e-12 >= self.next_sample:
+            return True
+        if t + 1e-12 >= self.next_sample:
             self.held = self.value
             self.next_sample = t + 1.0 / self.spec.rate
+            return True
+        return False

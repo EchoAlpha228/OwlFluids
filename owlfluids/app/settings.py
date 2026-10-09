@@ -35,6 +35,10 @@ class SettingsDialog(QDialog):
         self.prime = QCheckBox("start lines filled from the tank they are open to")
         self.prime.setChecked(bool(system.setting("prime_lines")))
         form.addRow("prime lines", self.prime)
+        self.noise = QCheckBox("realistic noise and lag by sensor type (off: exact values)")
+        self.noise.setChecked(str(system.setting("sensor_noise")).lower() != "off")
+        self.noise.setToolTip("Applies only to what sensors read; the simulation itself is unchanged")
+        form.addRow("sensor noise", self.noise)
         self.models = {}
         cfg = dict(system.setting("fluid_models") or {})
         for name, (_cp, default, allowed) in FLUIDS.items():
@@ -65,5 +69,6 @@ class SettingsDialog(QDialog):
             s[key] = ed.text().strip()
         s["backend"] = self.backend.currentText()
         s["prime_lines"] = self.prime.isChecked()
+        s["sensor_noise"] = "realistic" if self.noise.isChecked() else "off"
         s["fluid_models"] = {n: b.currentText() for n, (b, d) in self.models.items() if b.currentText() != d}
         self.accept()

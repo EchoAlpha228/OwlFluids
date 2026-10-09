@@ -30,6 +30,8 @@ DEFAULT_SETTINGS = {
     "prime_lines": True,
     "backend": "HEOS",
     "fluid_models": {},
+    "sensor_noise": "realistic",  # realistic: noise and lag by sensor type and state; off: exact values
+    "noise_seed": 0,  # the same seed gives the same noise run to run
 }
 
 
@@ -50,21 +52,32 @@ class Component:
         return d
 
 
+def _optional_float(v) -> float | None:
+    """A sensor's lag or noise: omitted or "auto" means the realistic default, "off" means 0."""
+    if v is None or (isinstance(v, str) and v.strip().lower() == "auto"):
+        return None
+    if isinstance(v, str) and v.strip().lower() in ("off", "none"):
+        return 0.0
+    return float(v)
+
+
 @dataclass
 class Sensor:
     id: str
-    type: str  # pressure, temperature, mass_flow, valve_position, quality, density, mass
-    at: str  # "COMP.port" for node quantities, "COMP" for links
-    lag: float = 0.0  # s, first-order time constant
-    noise: float = 0.0  # standard deviation in SI units
+    type: str  # pressure, temperature, mass_flow, valve_position, quality, density, mass, level
+    at: str  # "COMP.port" for node quantities, "COMP" for links and tanks
+    lag: float | None = None  # s, first-order time constant; None = the realistic default for the type
+    noise: float | None = None  # standard deviation in SI units; None = realistic model, 0 = none
     rate: float = 0.0  # Hz, 0 = every step
     units: str = ""  # display units, e.g. "psi"
 
     def to_dict(self) -> dict:
         d = {"id": self.id, "type": self.type, "at": self.at}
-        for k in ("lag", "noise", "rate"):
-            if getattr(self, k):
+        for k in ("lag", "noise"):
+            if getattr(self, k) is not None:
                 d[k] = getattr(self, k)
+        if self.rate:
+            d["rate"] = self.rate
         if self.units:
             d["units"] = self.units
         return d
@@ -128,7 +141,7 @@ class System:
         for s in d.get("sensors") or []:
             s = dict(s)
             sensors.append(Sensor(str(s.pop("id")), s.pop("type"), str(s.pop("at")),
-                                  float(s.pop("lag", 0) or 0), float(s.pop("noise", 0) or 0),
+                                  _optional_float(s.pop("lag", None)), _optional_float(s.pop("noise", None)),
                                   float(s.pop("rate", 0) or 0), str(s.pop("units", "") or "")))
         return cls(str(d.get("name", "untitled")), comps, conns, sensors, settings)
 
