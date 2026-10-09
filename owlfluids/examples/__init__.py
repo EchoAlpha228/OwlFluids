@@ -77,7 +77,11 @@ def nitrous_fill() -> System:
     receiver between 100 and 115 psig.
     """
     s = System("Nitrous fill with air purge")
-    s.add("NOS", "tank", fluid="nitrous", volume="30 L", fill=0.8, temperature="20 C", at=[0, 260])
+    # valve, filter and check valve bodies hold a few tens of cc each; saturated nitrous
+    # flashing through 1 cc junctions is much stiffer than it needs to be
+    s.settings["junction_volume"] = "20 cc"
+    s.add("NOS", "tank", fluid="nitrous", volume="30 L", fill=0.8, temperature="20 C", wall_mass="15 kg",
+          wall_material="aluminum", at=[0, 260])
     s.add("OFTV", "valve", cv=1.5, open_time="1 s", at=[0, 150])
     s.add("OFF", "orifice", cv=2.0, at=[60, 0])
     s.add("L-OF1", "pipe", length="3 m", diameter="0.43 in", at=[200, 0])
@@ -93,7 +97,8 @@ def nitrous_fill() -> System:
     s.add("L-OF2", "pipe", length="3 m", diameter="0.43 in", at=[780, 0])
     s.add("OQD", "fitting", kind="quick_disconnect", diameter="0.43 in", at=[880, 0])
     s.add("RFCV", "check_valve", cv=1.2, at=[960, 0])  # the run tank's own fill check valve
-    s.add("RT", "tank", fluid="nitrous", volume="15 L", pressure="1 atm", temperature="20 C", at=[1040, 100])
+    s.add("RT", "tank", fluid="nitrous", volume="15 L", pressure="1 atm", temperature="20 C", wall_mass="6 kg",
+          wall_material="aluminum", at=[1040, 100])
     s.add("RTV", "valve", cv=0.15, open_time="200 ms", at=[1040, -80])
     s.add("ATM-4", "boundary", fluid="nitrous", at=[1040, -160])
     # shop air: compressor, receiver, regulator, isolation valve, filter, purge solenoid and check

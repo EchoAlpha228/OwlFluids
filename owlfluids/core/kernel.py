@@ -300,12 +300,13 @@ def _mixed_one(i, x, NI, NF, fl, W):
             gam = par[f, I_GAMMA] if mdl == MODEL_IDEAL else par[g, I_GAMMA]
             xq = 2.0
         else:
-            # secant steps on u, from dT/du ~ 1/cv of the fluid as a gas
-            u = W[i, W_U0]
+            # secant steps on u, from dT/du ~ 1/cv of the fluid as a gas; with no gas
+            # (a line the purge has not reached) u is explicit, as in a single-fluid node
+            u = W[i, W_U0] if m_g > 0.0 else e / m_f
             p_f, t, xq, gam, mu = state(f, rho_liq, u, model, par, tab, grid, ltab, lgrid, rhol)
             res = m_f * u + m_g * (cv * t + off) - e
             d = m_f + m_g * cv / par[f, I_CV]
-            for _ in range(MIX_ITER):
+            for _ in range(MIX_ITER if m_g > 0.0 else 0):
                 nu = u - res / d
                 nu = min(max(nu, u - 2e5), u + 2e5)
                 if abs(nu - u) < 1e-10 * max(abs(u), 1e5):
@@ -546,9 +547,10 @@ def _smooth01(z):
 
 @inl
 def _q_side(n, d, NI, W, fl):
-    """What sets the flow rate out of node n through a port drawing ``d``.
+    """What leaves node n through a port drawing ``d``, and sets the flow rate.
 
-    Returns (density, gamma, liquid-like weight, vapor pressure, flow multiplier).
+    Returns (density, gamma, liquid-like weight, vapor pressure, flow multiplier,
+    enthalpy, viscosity).
     """
     par = fl[1]
     if NI[n, N_GX] >= 0:
@@ -560,19 +562,21 @@ def _q_side(n, d, NI, W, fl):
         w_l = _smooth01((0.95 - xg) / 0.1) if liquid else 0.0
         gam = par[g, I_GAMMA] if liquid else y * W[n, W_G] + (1.0 - y) * par[g, I_GAMMA]
         rho, psat = W[n, W_RHOM], W[n, W_PS]
+        h = W[n, W_H]
+        mu = 1.0 / (y / max(W[n, W_MU], 1e-9) + (1.0 - y) / par[g, I_MU])
     else:
         rho, h, mu, gam, liquid, psat = _draw(n, d, NI, W, fl)
         # an emptying tank liquid region hands its outflow over to the ullage gas
         if NI[n, N_KIND] == NODE_TANK_LIQUID and W[n, W_S] < 0.5:
-            rho, h, mu, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
+            rho, h_v, mu, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
         w_l = 1.0 if liquid else 0.0
     s = W[n, W_S] if NI[n, N_KIND] == NODE_VOLUME else 1.0
-    return rho, gam, w_l, psat, s
+    return rho, gam, w_l, psat, s, h, mu
 
 
 @inl
 def _q_orifice(cda, p_up, p_dn, side):
-    rho, gam, w_l, psat, s = side
+    rho, gam, w_l, psat, s, h, mu = side
     q = 0.0
     if w_l > 0.0:
         q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat)
@@ -640,15 +644,9 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
     s_up = W[up, W_S]
     up_kind = NI[up, N_KIND]
     pt = NI[up, N_PARTNER]
-    y = 1.0
-    if mixed:
-        h = W[up, W_H]
-        y = W[up, W_Y]
-        mu_q = 1.0 / (y / max(W[up, W_MU], 1e-9) + (1.0 - y) / par[NI[up, N_GAS], I_MU])
-    else:
-        rho, h, mu_q, gam, liquid, psat = _draw(up, d_up, NI, W, fl)
-        if up_kind == NODE_TANK_LIQUID and s_up < 0.5:
-            mu_q = _draw(pt, DRAW_VAPOR, NI, W, fl)[2]
+    y = W[up, W_Y] if mixed else 1.0
+    h = side[5]
+    mu_q = side[6]
     p_up = W[up, W_P]
     p_dn = W[dn, W_P]
     back = 0.0

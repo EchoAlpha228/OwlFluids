@@ -1,6 +1,7 @@
 name: Nitrous fill with air purge
+settings: {junction_volume: 20 cc}
 components:
-- {id: NOS, type: tank, fluid: nitrous, volume: 30 L, fill: 0.8, temperature: 20 C, at: [0, 260]}
+- {id: NOS, type: tank, fluid: nitrous, volume: 30 L, fill: 0.8, temperature: 20 C, wall_mass: 15 kg, wall_material: aluminum, at: [0, 260]}
 - {id: OFTV, type: valve, cv: 1.5, open_time: 1 s, at: [0, 150]}
 - {id: 'OFF', type: orifice, cv: 2.0, at: [60, 0]}
 - {id: L-OF1, type: pipe, length: 3 m, diameter: 0.43 in, at: [200, 0]}
@@ -16,7 +17,7 @@ components:
 - {id: L-OF2, type: pipe, length: 3 m, diameter: 0.43 in, at: [780, 0]}
 - {id: OQD, type: fitting, kind: quick_disconnect, diameter: 0.43 in, at: [880, 0]}
 - {id: RFCV, type: check_valve, cv: 1.2, at: [960, 0]}
-- {id: RT, type: tank, fluid: nitrous, volume: 15 L, pressure: 1 atm, temperature: 20 C, at: [1040, 100]}
+- {id: RT, type: tank, fluid: nitrous, volume: 15 L, pressure: 1 atm, temperature: 20 C, wall_mass: 6 kg, wall_material: aluminum, at: [1040, 100]}
 - {id: RTV, type: valve, cv: 0.15, open_time: 200 ms, at: [1040, -80]}
 - {id: ATM-4, type: boundary, fluid: nitrous, at: [1040, -160]}
 - {id: AC, type: air_pump, flow: 3 g/s, start_pressure: 100 psig, stop_pressure: 115 psig, at: [200, 340]}

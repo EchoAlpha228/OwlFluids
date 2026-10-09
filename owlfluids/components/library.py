@@ -131,9 +131,16 @@ class Tank(ComponentType):
         Param("pressure", "pressure", None, "initial pressure (gas, or saturated if fill is given)"),
         Param("temperature", "temperature", None, "initial temperature"),
         Param("fill", None, None, "liquid volume fraction 0-1 for a saturated liquid/vapor fill"),
+        Param("wall_mass", "mass", None,
+              "mass of the tank shell; enables a wall that stores heat and warms the fluid as it boils"),
+        Param("wall_material", "choice", "steel", "tank shell material", tuple(MATERIALS)),
+        Param("film_coefficient", None, 300.0, "fluid-to-wall heat transfer coefficient, W/m2K"),
+        Param("outer_coefficient", None, 5.0, "wall-to-ambient heat transfer coefficient, W/m2K"),
     ) + HEAT_PARAMS
-    help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous); "
-            "'top' draws vapor, 'bottom' draws liquid, 'port' draws the mixture.")
+    help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous) in "
+            "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; "
+            "'top' draws vapor, 'bottom' draws liquid, 'port' draws the mixture. A 'wall_mass' gives "
+            "it a shell that feeds heat into the boiling fluid (a nitrous bottle stays warmer as it empties).")
 
     @classmethod
     def build(cls, b, comp):
@@ -148,8 +155,18 @@ class Tank(ComponentType):
             if p is None or t is None:
                 raise ValueError(f"{comp.id} needs pressure and temperature (or temperature and fill)")
             init = ("pt", p, t)
+        wall = None
+        m_wall = cls.param(comp, "wall_mass")
+        if m_wall:
+            # shell area of a cylinder four diameters long
+            d = (vol / math.pi) ** (1.0 / 3.0)
+            area = 4.5 * math.pi * d * d
+            mat = MATERIALS[cls.param(comp, "wall_material")]
+            wall = (float(m_wall) * mat["cp"], float(cls.param(comp, "film_coefficient")) * area,
+                    float(cls.param(comp, "outer_coefficient")) * area, cls.param(comp, "ambient_temperature"),
+                    True)  # the shell starts at the fluid's temperature
         n = b.new_node(comp, "", fluid=fluid, volume=vol, init=init,
-                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")), wall=wall)
         b.bind_port(comp, "top", n, DRAW_VAPOR)
         b.bind_port(comp, "bottom", n, DRAW_LIQUID)
         b.bind_port(comp, "port", n, DRAW_MIX)

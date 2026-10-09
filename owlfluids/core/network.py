@@ -37,7 +37,7 @@ from ..fluids.registry import (
 from ..io.system import System
 from . import layout as L
 
-GAS_TRACE = 1e-6  # volume fraction a mixed node starts with of the fluid it is not full of
+GAS_TRACE = 1e-6  # least gas partial pressure (as a share of the total) a liquid node starts its solve from
 
 
 class BuildError(ValueError):
@@ -604,14 +604,15 @@ class NetworkBuilder:
             # held to a relative accuracy
             xscale += [max(m_full, 1e-9), max(abs(m_full * u), m_full * 1e5, 1e-3)]
             if n.wall:
-                mc, ha_in, ha_out, t_amb = n.wall
+                mc, ha_in, ha_out, t_amb, *at_fluid = n.wall
                 NI[i, L.N_WALL] = 1
                 NF[i, L.NF_WALLMC] = mc
                 NF[i, L.NF_HA] = ha_in
                 NF[i, L.NF_HAAMB] = ha_out
                 NF[i, L.NF_TAMB] = t_amb
-                # a line primed from a tank has been sitting full: its wall is at the fluid's temperature
-                x0.append(t0 if n.primed else t_amb)
+                # a line primed from a tank has been sitting full, and a tank shell holds its
+                # contents: their walls are at the fluid's temperature
+                x0.append(t0 if n.primed or any(at_fluid) else t_amb)
                 xscale.append(100.0)
             if n.gas:
                 NI[i, L.N_GX] = len(x0)
@@ -682,14 +683,14 @@ def _mixed_init(fs: FluidSet, f: int, g: int, vol: float, p0: float, t0: float, 
                 gas_fill: bool) -> tuple[float, float, float, tuple]:
     """Starting masses and energy of a node holding fluid f and purge gas g at p0, t0.
 
-    It starts full of whichever it was primed with and holds a trace of the other,
-    in the kernel's own terms (``kernel._mixed_one``), so it starts at p0.
+    It starts full of whichever it was primed with and holds none of the other, in
+    the kernel's own terms (``kernel._mixed_one``), so it starts at p0.
     Returns (fluid mass, energy, gas mass, (fluid energy, log gas partial pressure,
     temperature, 0)) the kernel's first solve starts from.
     """
     par = fs.par
     r_g, u_g = par[g, I_R], par[g, I_CV] * t0 + par[g, P_OFF]
-    frac = GAS_TRACE if gas_fill else 1.0 - GAS_TRACE
+    frac = 0.0 if gas_fill else 1.0
     if fs.model[f] != MODEL_LIQUID:
         # the fluid spread over the node, the gas's partial pressure on top
         m_f = rho * vol * frac

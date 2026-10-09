@@ -53,6 +53,32 @@ def test_nitrous_blowdown_holds_near_vapor_pressure_and_cools():
 
 
 @pytest.mark.slow
+def test_tank_wall_keeps_a_draining_nitrous_bottle_warmer():
+    """A bottle's shell feeds heat into the boiling nitrous; it starts at the fluid's temperature."""
+    out = {}
+    for wall in (None, "15 kg"):
+        s = System("bottle")
+        kw = {"wall_mass": wall, "wall_material": "aluminum"} if wall else {}
+        s.add("K", "tank", fluid="nitrous", volume="10 L", fill=0.8, temperature="20 C", **kw)
+        s.add("V", "valve", cv=0.15)
+        s.add("A", "boundary", fluid="nitrous")
+        s.connect("K.bottom", "V.in")
+        s.connect("V.out", "A.port")
+        sim = Simulation(s, step_budget=BUDGET)
+        if wall:
+            assert sim.x[sim.net.NI[0, 3] + 2] == pytest.approx(293.15)
+        m0 = sim.mass("K")
+        sim.open("V")
+        sim.run(20.0)
+        t = sim.temperature("K")
+        assert sim.pressure("K") == pytest.approx(CP.PropsSI("P", "T", t, "Q", 0, "NitrousOxide"), rel=0.02)
+        out[wall] = (t, m0 - sim.mass("K"))
+        assert sim.solver_stats()["forced_steps"] == 0
+    assert out["15 kg"][0] > out[None][0] + 0.2
+    assert out["15 kg"][1] == pytest.approx(out[None][1], rel=0.05)  # about the same nitrous drawn
+
+
+@pytest.mark.slow
 def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
     s = System("chill")
     s.add("TK", "pressurized_tank", liquid="nitrogen", pressurant="nitrogen", volume="200 L", fill=0.8,

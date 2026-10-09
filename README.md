@@ -87,7 +87,8 @@ sensors:
 - {id: PT-K1, type: pressure, at: K1.port, units: psi}
 ```
 
-Component types: `tank` (gas, or saturated liquid/vapor with `fill`),
+Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally with a
+`wall_mass` shell that stores heat),
 `pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`,
 `pipe` (friction, inertia, optional wall for chilldown), `tee`, `fitting`,
 `orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`,
@@ -117,6 +118,15 @@ setpoint, and anything behind a closed valve starts at the system's initial
 pressure and temperature (`prime_lines: false` turns this off).
 
 ### Purges
+
+Saturated tanks (`tank` with `fill`) hold liquid and vapor in equilibrium, so a
+nitrous bottle's pressure follows its temperature as it empties and cools, and a run
+tank filled from the bottom while its vent is open settles on the vapor pressure of
+what it holds. `wall_mass` adds the tank shell, which warms the boiling nitrous.
+
+Purges are meant to run the way stands run them: vent the line to ambient first,
+then flow purge gas for a few seconds. Lines the purge gas has not reached cost
+about the same as plain lines.
 
 Connect a purge bottle (a `tank` of helium, nitrogen or air), usually
 through a regulator, a valve and a check valve, to any line; `examples/lox-purge.yaml`
