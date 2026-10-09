@@ -134,8 +134,10 @@ class Tank(ComponentType):
         Param("wall_mass", "mass", None,
               "mass of the tank shell; enables a wall that stores heat and warms the fluid as it boils"),
         Param("wall_material", "choice", "steel", "tank shell material", tuple(MATERIALS)),
-        Param("film_coefficient", None, 300.0, "fluid-to-wall heat transfer coefficient, W/m2K"),
-        Param("outer_coefficient", None, 5.0, "wall-to-ambient heat transfer coefficient, W/m2K"),
+        Param("film_coefficient", None, 1000.0,
+              "fluid-to-wall heat transfer coefficient, W/m2K (boiling nitrous: about 1000-3000; tune to test data)"),
+        Param("outer_coefficient", None, 5.0,
+              "wall-to-ambient heat transfer coefficient, W/m2K (heat_transfer, if set, adds to it)"),
     ) + HEAT_PARAMS
     help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous) in "
             "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; "
@@ -163,7 +165,8 @@ class Tank(ComponentType):
             area = 4.5 * math.pi * d * d
             mat = MATERIALS[cls.param(comp, "wall_material")]
             wall = (float(m_wall) * mat["cp"], float(cls.param(comp, "film_coefficient")) * area,
-                    float(cls.param(comp, "outer_coefficient")) * area, cls.param(comp, "ambient_temperature"),
+                    float(cls.param(comp, "outer_coefficient")) * area + float(cls.param(comp, "heat_transfer") or 0.0),
+                    cls.param(comp, "ambient_temperature"),
                     True)  # the shell starts at the fluid's temperature
         n = b.new_node(comp, "", fluid=fluid, volume=vol, init=init,
                        heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")), wall=wall)

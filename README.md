@@ -122,7 +122,9 @@ pressure and temperature (`prime_lines: false` turns this off).
 Saturated tanks (`tank` with `fill`) hold liquid and vapor in equilibrium, so a
 nitrous bottle's pressure follows its temperature as it empties and cools, and a run
 tank filled from the bottom while its vent is open settles on the vapor pressure of
-what it holds. `wall_mass` adds the tank shell, which warms the boiling nitrous.
+what it holds. `wall_mass` adds the tank shell, which warms the boiling nitrous;
+`film_coefficient` (default 1000 W/m2K) sets how fast, and is the value to tune
+against test data.
 
 Purges are meant to run the way stands run them: vent the line to ambient first,
 then flow purge gas for a few seconds. Lines the purge gas has not reached cost
