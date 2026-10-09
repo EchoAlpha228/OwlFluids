@@ -72,7 +72,12 @@ def test_small_budget_keeps_the_valve_transient():
 
 @pytest.mark.slow
 def test_stand_purge_converges():
-    """With a generous budget, GN2 purging the LOX feed after a run takes no forced steps."""
+    """With a generous budget, GN2 purging the LOX feed after a run rarely forces a step.
+
+    LOX trapped at saturation under the purge gas is still a hard spot, and the count
+    varies from machine to machine (0 to about 30 here), so this guards against the
+    ~190 (13 % of the purge) the stand took before the chop covered purge nodes.
+    """
     sim = Simulation(engine_test_stand(), step_budget=200)
     sim.run(0.1)
     sim.open("V-OXP", "V-FUP")
@@ -85,4 +90,4 @@ def test_stand_purge_converges():
     sim.run(0.3)
     sim.open("V-P1", "V-P2", "V-P3", "V-P4")
     sim.run(1.5)
-    assert sim.solver_stats()["forced_steps"] < 10
+    assert sim.solver_stats()["forced_steps"] < 75

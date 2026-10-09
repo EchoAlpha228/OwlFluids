@@ -977,7 +977,10 @@ def _chop(xk, bvec, iperm, NI, NF, fl, xscale, W):
         u1 = (e0 + a * du - max(mg0 + a * dmg, 0.0) * ug) / m1
         l0 = _liquid_margin(f, m0 / vol, u0, model, grid, lgrid, rhol)
         l1 = _liquid_margin(f, m1 / vol, u1, model, grid, lgrid, rhol)
-        if (l0 <= 0.0) != (l1 <= 0.0) and abs(l1) > 1e-3:
+        # a purge gas over the liquid pins it at the boundary (the gas pressure adds
+        # to its vapor pressure), so there it stops much closer
+        tol = 1e-5 if gx >= 0 and mg0 > TRACE * xscale[gx] else 1e-3
+        if (l0 <= 0.0) != (l1 <= 0.0) and abs(l1) > tol:
             c = l0 / (l0 - l1)
             c = c + 0.1 * (1.0 - c)
             a *= c
