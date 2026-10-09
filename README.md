@@ -97,7 +97,9 @@ Component types: `tank` (gas, or saturated liquid/vapor with `fill`),
 
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
 `valve_position`, `mass`, `level` (a tank's liquid fill, shown in %),
-`purge_fraction` (share of a node's volume that is purge gas, in %), `quality`
+`purge_fraction` (share of a node's volume that is purge gas, in %; in LOX, nitrous,
+LN2 and methane lines it is the gas's share of the pressure, so a node still full of
+LOX can read 30 % while gas pushes on it), `quality`
 and `density`. Display units default to psi, °F, kg/s, kg and %; set `units:`
 to change one (temperatures defaulted to K before October 2026, so a sensor
 without `units:` now logs and sends °F). Sensors read with realistic noise and lag for their type: a
@@ -209,9 +211,12 @@ the 81-component stand, purges included.
   capacity and does not dissolve in the liquid. In LOX, nitrous, LN2 and methane
   lines it spreads over the whole node, so a gas pocket pushing on liquid there
   presses less hard than a real one: purges clear these lines, a little more
-  gently. The purge gas never condenses: GN2 in a line still at LOX
-  temperature would really liquefy above about 50 psi. An air pump delivers its rated mass flow at a fixed temperature (after
-  its aftercooler) whatever the outlet pressure.
+  gently. Near zero flow, nodes on either side of a link swap a small stream (this
+  keeps Newton from circling the flow reversal), so a purge gas and a line's fluid
+  sitting still across an open valve slowly blend. The purge gas never condenses:
+  GN2 in a line still at LOX temperature would really liquefy above about 50 psi.
+  An air pump delivers its rated mass flow at a fixed temperature (after its
+  aftercooler) whatever the outlet pressure.
 - Two-phase flow is homogeneous equilibrium. Violent events (LOX into a warm line,
   geysering) are stable and conserve mass and energy but are not resolved in
   detail; the status bar counts "forced steps" when a step used its whole budget.

@@ -68,3 +68,21 @@ def test_small_budget_keeps_the_valve_transient():
     assert ref[arrival[0]] > 100 * 6894.757 and small[arrival[1]] > 100 * 6894.757
     assert abs(arrival[0] - arrival[1]) <= 3  # within 30 ms
     assert np.mean(small[-30:]) == pytest.approx(np.mean(ref[-30:]), rel=0.03)
+
+
+@pytest.mark.slow
+def test_stand_purge_converges():
+    """With a generous budget, GN2 purging the LOX feed after a run takes no forced steps."""
+    sim = Simulation(engine_test_stand(), step_budget=200)
+    sim.run(0.1)
+    sim.open("V-OXP", "V-FUP")
+    sim.run(1.0)
+    sim.close("V-OXV", "V-FUV")
+    sim.run(0.5)
+    sim.open("V-OXM", "V-FUM")
+    sim.run(1.0)
+    sim.close("V-OXM", "V-FUM")
+    sim.run(0.3)
+    sim.open("V-P1", "V-P2", "V-P3", "V-P4")
+    sim.run(1.5)
+    assert sim.solver_stats()["forced_steps"] < 10

@@ -923,7 +923,7 @@ TRACE = 1e-3  # a mixed node's fluid or gas below this share of its scale is a t
 
 
 @jit
-def _chop(xk, bvec, iperm, NI, NF, fl, xscale):
+def _chop(xk, bvec, iperm, NI, NF, fl, xscale, W):
     """Damp the Newton update (Appleyard-style chop).
 
     A node may not lose more than 80% of its mass in one iteration, and an update
@@ -933,7 +933,9 @@ def _chop(xk, bvec, iperm, NI, NF, fl, xscale):
     each flux's mass and energy leaving one node equal to what enters the next,
     so a damped iterate conserves like a full one. In a mixed node the same holds for
     its fluid and its purge gas, except for a trace of either, which may dip slightly
-    below zero instead (it then counts as none). Returns True if anything was chopped.
+    below zero instead (it then counts as none); its fluid's energy, for the
+    saturated-liquid test, is the node's less the gas's at the iterate's temperature.
+    Returns True if anything was chopped.
     """
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
     amin = 1.0
@@ -947,25 +949,32 @@ def _chop(xk, bvec, iperm, NI, NF, fl, xscale):
         du = bvec[iperm[sx + 1]]
         a = 1.0
         vol = NF[i, NF_VOL]
+        e0 = xk[sx + 1]
+        mg0 = 0.0
+        dmg = 0.0
+        ug = 0.0
         if gx >= 0:
             mg0 = xk[gx]
             dmg = bvec[iperm[gx]]
             if mg0 > TRACE * xscale[gx] and mg0 + dmg < 0.2 * mg0:
                 a = 0.8 * mg0 / -dmg
-            if m0 > TRACE * xscale[sx]:
-                if m0 + a * dm < 0.2 * m0:
-                    a = 0.8 * m0 / -dm
-            if a < amin:
-                amin = a
-            continue
-        if not m0 > 0.0:
-            continue  # the step will be rejected as non-physical
-        if m0 + a * dm < 0.2 * m0:
-            a = 0.8 * m0 / -dm
+            if m0 > TRACE * xscale[sx] and m0 + a * dm < 0.2 * m0:
+                a = 0.8 * m0 / -dm
+            g = NI[i, N_GAS]
+            ug = par[g, I_CV] * W[i, W_T] + par[g, P_OFF]
+            if not m0 > TRACE * xscale[sx]:
+                if a < amin:
+                    amin = a
+                continue
+        else:
+            if not m0 > 0.0:
+                continue  # the step will be rejected as non-physical
+            if m0 + a * dm < 0.2 * m0:
+                a = 0.8 * m0 / -dm
         f = NI[i, N_FLUID]
-        u0 = xk[sx + 1] / m0
+        u0 = (e0 - max(mg0, 0.0) * ug) / m0
         m1 = m0 + a * dm
-        u1 = (xk[sx + 1] + a * du) / m1
+        u1 = (e0 + a * du - max(mg0 + a * dmg, 0.0) * ug) / m1
         l0 = _liquid_margin(f, m0 / vol, u0, model, grid, lgrid, rhol)
         l1 = _liquid_margin(f, m1 / vol, u1, model, grid, lgrid, rhol)
         if (l0 <= 0.0) != (l1 <= 0.0) and abs(l1) > 1e-3:
@@ -1121,7 +1130,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             e = abs(bvec[iperm[i]]) / xscale[i]
             if e > raw:
                 raw = e
-        chopped = _chop(xk, bvec, iperm, NI, NF, fl, xscale)
+        chopped = _chop(xk, bvec, iperm, NI, NF, fl, xscale, W)
         if it >= 1 and raw >= ACCEPT_TOL:
             if raw > 0.9 * err_prev:
                 # the update is not shrinking: Newton is circling a switch (a check
@@ -1131,6 +1140,8 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                 limit = NEWTON_MAX + DAMP_EXTRA
             elif raw < 0.5 * err_prev:
                 damp = min(2.0 * damp, 1.0)
+        elif it >= 1:
+            damp = 1.0  # close enough: full steps converge from here
         if damp < 1.0:
             for i in range(n):
                 bvec[i] *= damp
