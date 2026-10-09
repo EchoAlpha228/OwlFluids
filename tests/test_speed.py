@@ -31,11 +31,14 @@ def test_engine_stand_runs_faster_than_real_time():
     run(1.0)
     sim.close("V-OXM", "V-FUM")
     run(0.3)
+    shut = sim.read("FM-OX")
+    sim.open("V-P1", "V-P2", "V-P3", "V-P4")  # GN2 purges of both feeds and the chambers
+    run(1.0)
     t = np.array(times) / 0.01  # wall seconds per simulated second
-    # generous margins for slow CI machines; typical is ~0.1 mean, ~0.5 worst
+    # generous margins for slow CI machines; typical is ~0.2 mean, ~0.7 worst
     assert t.mean() < 0.5
     assert t.max() < 1.5
-    assert sim.read("FM-OX") == pytest.approx(0.0, abs=0.05)
+    assert shut == pytest.approx(0.0, abs=0.05)
 
 
 def _feed_transient(budget):

@@ -17,8 +17,9 @@ def test_yaml_round_trip(tmp_path, gas_blowdown):
 
 
 def test_two_fluids_on_one_line_is_an_error():
+    # two propellants may not meet; a purge gas may (see test_purge.py)
     s = System("bad")
-    s.add("A", "tank", fluid="nitrogen", volume="1 L", pressure="10 bar", temperature="300 K")
+    s.add("A", "tank", fluid="methane", volume="1 L", pressure="10 bar", temperature="300 K")
     s.add("B", "tank", fluid="oxygen", volume="1 L", pressure="10 bar", temperature="300 K")
     s.add("V", "valve", cv=0.1)
     s.connect("A.port", "V.in")

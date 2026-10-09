@@ -68,19 +68,19 @@ components:
 - {id: K-P1, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 935.0]}
 - {id: V-P1, type: valve, cv: 0.1, at: [150.0, 935.0]}
 - {id: L-P1, type: pipe, length: 1 m, diameter: 4 mm, at: [300.0, 935.0]}
-- {id: ATM-P1, type: boundary, fluid: nitrogen, at: [450.0, 935.0]}
+- {id: CK-P1, type: check_valve, cv: 0.1, at: [450.0, 935.0]}
 - {id: K-P2, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 1072.5]}
 - {id: V-P2, type: valve, cv: 0.1, at: [150.0, 1072.5]}
 - {id: L-P2, type: pipe, length: 1 m, diameter: 4 mm, at: [300.0, 1072.5]}
-- {id: ATM-P2, type: boundary, fluid: nitrogen, at: [450.0, 1072.5]}
+- {id: CK-P2, type: check_valve, cv: 0.1, at: [450.0, 1072.5]}
 - {id: K-P3, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 1210.0]}
 - {id: V-P3, type: valve, cv: 0.1, at: [150.0, 1210.0]}
 - {id: L-P3, type: pipe, length: 1 m, diameter: 4 mm, at: [300.0, 1210.0]}
-- {id: ATM-P3, type: boundary, fluid: nitrogen, at: [450.0, 1210.0]}
+- {id: CK-P3, type: check_valve, cv: 0.1, at: [450.0, 1210.0]}
 - {id: K-P4, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 1347.5]}
 - {id: V-P4, type: valve, cv: 0.1, at: [150.0, 1347.5]}
 - {id: L-P4, type: pipe, length: 1 m, diameter: 4 mm, at: [300.0, 1347.5]}
-- {id: ATM-P4, type: boundary, fluid: nitrogen, at: [450.0, 1347.5]}
+- {id: CK-P4, type: check_valve, cv: 0.1, at: [450.0, 1347.5]}
 connections:
 - [GN2-K1.port, L-K1.in]
 - [L-K1.out, V-K1.in]
@@ -148,16 +148,20 @@ connections:
 - [NOZ-FU.out, ATM-CFU.port]
 - [K-P1.port, V-P1.in]
 - [V-P1.out, L-P1.in]
-- [L-P1.out, ATM-P1.port]
+- [L-P1.out, CK-P1.in]
+- [CK-P1.out, F-OXF2.out]
 - [K-P2.port, V-P2.in]
 - [V-P2.out, L-P2.in]
-- [L-P2.out, ATM-P2.port]
+- [L-P2.out, CK-P2.in]
+- [CK-P2.out, F-FUF2.out]
 - [K-P3.port, V-P3.in]
 - [V-P3.out, L-P3.in]
-- [L-P3.out, ATM-P3.port]
+- [L-P3.out, CK-P3.in]
+- [CK-P3.out, CH-OX.c]
 - [K-P4.port, V-P4.in]
 - [V-P4.out, L-P4.in]
-- [L-P4.out, ATM-P4.port]
+- [L-P4.out, CK-P4.in]
+- [CK-P4.out, CH-FU.c]
 sensors:
 - {id: PT-HP, type: pressure, at: MAN-HP.a, units: psi}
 - {id: PT-OX, type: pressure, at: TK-OX.gas, units: psi}

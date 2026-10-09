@@ -115,7 +115,8 @@ def to_celsius(k: float) -> float:
 
 
 DEFAULT_UNITS = {"pressure": "psi", "temperature": "F", "mass_flow": "kg/s", "valve_position": "",
-                 "quality": "", "density": "kg/m3", "mass": "kg", "wall_temperature": "F", "level": "%"}
+                 "quality": "", "density": "kg/m3", "mass": "kg", "wall_temperature": "F", "level": "%",
+                 "purge_fraction": "%"}
 
 
 def convert(value_si: float, unit: str) -> float:

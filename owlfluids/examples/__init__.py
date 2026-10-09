@@ -48,6 +48,26 @@ def lox_feed() -> System:
     return s
 
 
+def lox_purge() -> System:
+    """LOX feed with a helium purge: flow, close the main valve, then purge the line clear.
+
+    Any of helium, nitrogen, argon, air or CO2 can purge; change the purge bottle's fluid.
+    """
+    s = lox_feed()
+    s.name = "LOX feed with helium purge"
+    s.add("K-HE", "tank", fluid="helium", volume="15 L", pressure="2000 psi", temperature="20 C", at=[300, 300])
+    s.add("REG-PG", "regulator", cv=0.2, setpoint="150 psi", droop="10 psi", at=[450, 300])
+    s.add("V-PG", "valve", cv=0.2, open_time="50 ms", at=[600, 300])
+    s.add("CK-PG", "check_valve", cv=0.2, at=[600, 230])
+    for a, b in [("K-HE.port", "REG-PG.in"), ("REG-PG.out", "V-PG.in"), ("V-PG.out", "CK-PG.in"),
+                 ("CK-PG.out", "L2.in")]:
+        s.connect(a, b)
+    s.sense("PT-PG", "pressure", "V-PG.out", units="psi")
+    s.sense("FM-PG", "mass_flow", "CK-PG", units="kg/s")
+    s.sense("PF-INJ", "purge_fraction", "INJ.in", units="%")
+    return s
+
+
 def ln2_wet_dress() -> System:
     """LN2 stand-in for LOX: loaded run tank, line chilldown through a bleed, then flow."""
     s = System("LN2 wet dress")
@@ -103,6 +123,7 @@ def n2o_blowdown() -> System:
 EXAMPLES = {
     "gn2-blowdown": gn2_blowdown,
     "lox-feed": lox_feed,
+    "lox-purge": lox_purge,
     "ln2-wet-dress": ln2_wet_dress,
     "n2o-blowdown": n2o_blowdown,
     "test-stand": engine_test_stand,
