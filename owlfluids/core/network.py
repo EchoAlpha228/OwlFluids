@@ -461,9 +461,14 @@ class NetworkBuilder:
                 extra = s_other - s_self
                 if n.gas is None and extra and n.owner and (n.owner, n.fluid) not in warned:
                     warned.add((n.owner, n.fluid))
-                    self.warnings.append(
-                        f"{n.owner} holds only {n.fluid}: any {' or '.join(sorted(extra))} flowing into it "
-                        f"is counted as {n.fluid}")
+                    what = " or ".join(sorted(extra))
+                    if n.kind == L.NODE_TANK_LIQUID:
+                        gas = self.nodes[n.partner].fluid
+                        self.warnings.append(f"{n.owner} holds only {n.fluid} and {gas}: any {what} flowing into "
+                                             f"it rises into its ullage and is counted as {gas}")
+                    else:
+                        self.warnings.append(f"{n.owner} holds only {n.fluid}: any {what} flowing into it "
+                                             f"is counted as {n.fluid}")
 
     def _prime_lines(self) -> None:
         """Start lines in equilibrium with the tank or volume they are open to.

@@ -209,7 +209,8 @@ the 81-component stand, purges included.
   capacity and does not dissolve in the liquid. In LOX, nitrous, LN2 and methane
   lines it spreads over the whole node, so a gas pocket pushing on liquid there
   presses less hard than a real one: purges clear these lines, a little more
-  gently. An air pump delivers its rated mass flow at a fixed temperature (after
+  gently. The purge gas never condenses: GN2 in a line still at LOX
+  temperature would really liquefy above about 50 psi. An air pump delivers its rated mass flow at a fixed temperature (after
   its aftercooler) whatever the outlet pressure.
 - Two-phase flow is homogeneous equilibrium. Violent events (LOX into a warm line,
   geysering) are stable and conserve mass and energy but are not resolved in
