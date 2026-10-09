@@ -6,7 +6,7 @@ import pytest
 
 from owlfluids.core import layout as L
 from owlfluids.core.network import BuildError, build_network
-from owlfluids.examples import lox_purge
+from owlfluids.examples import lox_purge, nitrous_fill
 from owlfluids.fluids.registry import PURGE_GASES
 from owlfluids.io.system import System
 from owlfluids.sim.simulation import Simulation
@@ -54,7 +54,7 @@ def test_every_purge_gas_clears_a_water_line(gas):
     assert sim.solver_stats()["forced_steps"] < 100
 
 
-@pytest.mark.parametrize("liquid,gas", [("oxygen", "nitrogen"), ("ethanol", "helium"), ("methane", "argon")])
+@pytest.mark.parametrize("liquid,gas", [("oxygen", "nitrogen"), ("ethanol", "helium"), ("methane", "air")])
 def test_purge_pushes_propellant_out(liquid, gas):
     sim = Simulation(_rig(liquid, gas))
     _flow_then_purge(sim, purge=3.0)
@@ -74,11 +74,13 @@ def test_purge_conserves_mass():
     assert sim.nout[vol, L.O_M].sum() == pytest.approx(m0, rel=1e-6)
 
 
-def test_line_between_purge_valve_and_check_starts_full_of_gas():
+def test_only_lines_both_fluids_can_flow_into_carry_both():
     sim = Simulation(_rig("oxygen", "nitrogen"))
-    i = sim.node("PV.out")
-    assert sim.nout[i, L.O_GAS] > 0.99
-    assert sim.nout[sim.node("L1.out"), L.O_GAS] < 0.01
+    net = sim.net
+    i = sim.node("PV.out")  # behind the purge check valve: oxygen cannot get there
+    assert net.fluids.names[net.NI[i, L.N_FLUID]] == "nitrogen" and net.NI[i, L.N_GX] < 0
+    j = sim.node("L1.out")
+    assert net.NI[j, L.N_GX] >= 0 and sim.nout[j, L.O_GAS] < 0.01  # starts full of LOX
 
 
 def test_builder_names_foreign_fluid_conversions():
@@ -113,3 +115,41 @@ def test_lox_purge_example_runs_in_real_time():
     assert t.max() < 1.5
     assert sim.read("PF-INJ") > 0.95
     assert sim.read("TC-INJ") > 200
+
+
+@pytest.mark.slow
+def test_nitrous_fill_purge_and_refill():
+    """The nitrous fill example: fill, dump, air purge, then fill again, in real time."""
+    sim = Simulation(nitrous_fill())
+    times = []
+
+    def run(duration):
+        for _ in range(int(round(duration / 0.01))):
+            t0 = time.perf_counter()
+            sim.run(0.01)
+            times.append(time.perf_counter() - t0)
+
+    sim.open("OFTV", "RTV")
+    run(0.5)
+    sim.open("OFV")
+    run(5.0)
+    filled = sim.mass("RT")
+    assert filled > 1.0
+    sim.close("OFV")
+    run(0.5)
+    sim.open("ODV")
+    run(2.0)
+    sim.open("OPGS")
+    run(3.0)
+    assert sim.read("PF-OF") > 0.9  # shop air has swept the fill line
+    assert sim.mass("RT") > 0.9 * filled  # the run tank's check valve kept its load
+    sim.close("OPGS", "ODV")
+    run(0.5)
+    before = sim.mass("RT")
+    sim.open("OFV")
+    run(4.0)
+    assert sim.mass("RT") > before + 0.5  # the fill restarts through the air-filled line
+    assert sim.read("PF-OF") < 0.01
+    t = np.array(times) / 0.01
+    assert t.mean() < 0.5
+    assert t.max() < 1.5

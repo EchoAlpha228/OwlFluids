@@ -5,7 +5,7 @@ Three runtime models keep property evaluation cheap:
 * ``liquid``: nearly incompressible liquid with a constant bulk modulus
   (water and ethanol by default).
 * ``ideal``: ideal gas with constant heat capacities (opt-in for gases; the only
-  model for helium, air, argon and carbon dioxide, which OwlFluids uses as gases).
+  model for helium and air, which OwlFluids uses as gases).
 * ``table``: real-fluid lookup table on (density, internal energy) covering gas,
   liquid, supercritical and two-phase states (default for oxygen, methane,
   nitrogen and nitrous oxide, so GOX/LOX and GN2/LN2 are the same fluid).
@@ -33,10 +33,8 @@ L_RHO0, L_K, L_PREF, L_CV, L_T0, L_U0, L_PSAT, L_MU = range(8)
 # fluid's line is an ideal gas on this reference, so it carries the same enthalpy as
 # in its own (table) lines, and a fluid that ends up in a volume holding only another
 # fluid is converted at its temperature.
-# P_KL: bulk modulus of the liquid near its normal boiling point, for a liquid that
-# shares a line with a purge gas (table fluids; liquid-model fluids use L_K)
-P_CPA, P_OFF, P_KL = 8, 9, 10
-N_PAR = 11
+P_CPA, P_OFF = 8, 9
+N_PAR = 10
 T_REF = 300.0
 
 R_UNIVERSAL = 8.314462618
@@ -51,12 +49,10 @@ FLUIDS = {
     "nitrous": ("NitrousOxide", "table", ("table", "ideal")),
     "helium": ("Helium", "ideal", ("ideal",)),
     "air": ("Air", "ideal", ("ideal",)),
-    "argon": ("Argon", "ideal", ("ideal",)),
-    "co2": ("CarbonDioxide", "ideal", ("ideal",)),
 }
 # gases that may purge (mix into) a line of another fluid. When two of them meet,
 # the one listed first is the purge gas and the other the line's own fluid.
-PURGE_GASES = ("helium", "nitrogen", "argon", "air", "co2")
+PURGE_GASES = ("helium", "nitrogen", "air")
 TABLE_FLUIDS = [v[0] for v in FLUIDS.values() if "table" in v[2]]
 
 ALIASES = {
@@ -68,8 +64,6 @@ ALIASES = {
     "ethanol": "ethanol", "etoh": "ethanol", "c2h5oh": "ethanol",
     "helium": "helium", "he": "helium", "ghe": "helium",
     "air": "air",
-    "argon": "argon", "ar": "argon", "gar": "argon",
-    "co2": "co2", "carbon dioxide": "co2", "carbondioxide": "co2",
 }
 
 
@@ -147,10 +141,6 @@ class FluidSet:
                 if mdl == "table":
                     rho, u = self.rho_u_from_pt(i, 101325.0, T_REF)
                     self.par[i, P_OFF] = u + 101325.0 / rho - cp0 * T_REF
-                    st.update(CP.PQ_INPUTS, 101325.0, 0.0)
-                    t_nbp = st.T()
-                    st.update(CP.PT_INPUTS, 2e6, t_nbp)
-                    self.par[i, P_KL] = st.rhomass() / st.first_partial_deriv(CP.iDmass, CP.iP, CP.iT)
             else:
                 import CoolProp.CoolProp as CP
 
@@ -169,7 +159,6 @@ class FluidSet:
                 self.par[i, L_PSAT] = st.p()
                 self.par[i, P_CPA] = self.par[i, L_CV]
                 self.par[i, P_OFF] = self.par[i, L_U0] - self.par[i, L_CV] * t0
-                self.par[i, P_KL] = self.par[i, L_K]
 
     def arrays(self) -> tuple:
         """The packed arrays in the order the kernel expects them."""

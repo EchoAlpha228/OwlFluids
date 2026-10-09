@@ -25,6 +25,8 @@ from ..fluids import props
 from ..io.system import System
 from . import sensors as sensor_model
 
+MIN_BUDGET = 8.0  # smallest work per step: one Jacobian and two Newton iterations
+
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
                 "wall_temperature", "level", "purge_fraction")
 
@@ -110,7 +112,14 @@ class Simulation:
             runs.append((time.perf_counter() - t0) / 20)
         # the median, not the best: leaves margin when other threads (GUI, Synnax) share the CPU
         self.rhs_seconds = cost = sorted(runs)[len(runs) // 2]
-        return float(min(max(share * self.dt / (1.5 * max(cost, 1e-9)), 12.0), 1000.0))
+        budget = share * self.dt / (1.5 * max(cost, 1e-9))
+        if budget < MIN_BUDGET:
+            # below this a step cannot build a Jacobian and still iterate: the floor holds,
+            # so hard transients can run behind the wall clock on this machine
+            self._slow_note = (f"this computer is too slow to guarantee real time for this system: a step costs "
+                               f"{1.5 * cost * MIN_BUDGET / self.dt:.0%} of its time at the smallest work budget; "
+                               "hard transients may run behind the clock")
+        return float(min(max(budget, MIN_BUDGET), 1000.0))
 
     def reset(self) -> None:
         """Back to the initial conditions of the system."""
@@ -127,6 +136,8 @@ class Simulation:
         self.ctl[9] = self.step_budget
         self.stats = np.zeros(6)
         self.notices: list[str] = []  # physics the model cannot represent, newest last
+        if getattr(self, "_slow_note", None):
+            self.notices.append(self._slow_note)
         self._limited = np.zeros(self.net.NI.shape[0], dtype=bool)
         self.rng = np.random.default_rng(self.seed)
         self._sensors = {}
@@ -229,6 +240,15 @@ class Simulation:
 
     def valve_position(self, valve: str) -> float:
         return float(self.LV[self._valve(valve), L.V_POS])
+
+    def pumps(self) -> list[str]:
+        return list(self.net.pumps)
+
+    def pump_running(self, pump: str) -> bool:
+        """Whether a pump's pressure switch has it on."""
+        if pump not in self.net.pumps:
+            raise KeyError(f"no pump {pump!r}; pumps: {', '.join(self.net.pumps)}")
+        return bool(self.LV[self.net.pumps[pump], L.V_CMD] > 0.5)
 
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
         """Change a pressure boundary during a run (a supply regulator setting, say)."""
@@ -334,7 +354,8 @@ class Simulation:
         if s.type == "mass_flow":
             return "link", self.link(s.at)
         if s.type == "valve_position":
-            return "valve", self._valve(s.at)
+            # on a pump it reads how far it has spun up (0 stopped, 1 running)
+            return "valve", self.net.pumps[s.at] if s.at in self.net.pumps else self._valve(s.at)
         if s.type == "mass":
             return "mass", 0
         if s.type == "level":

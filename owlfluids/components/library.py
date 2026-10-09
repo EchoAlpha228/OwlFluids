@@ -447,14 +447,42 @@ class Regulator(ComponentType):
                       p1=cls.require(comp, "setpoint"), p2=max(cls.param(comp, "droop"), 100.0))
 
 
+class AirPump(ComponentType):
+    type_name = "air_pump"
+    label = "Air pump / compressor"
+    category = "Flow control"
+    ports = ("out",)
+    params = (
+        Param("flow", "mass_flow", None, "mass flow while running"),
+        Param("start_pressure", "pressure", None, "outlet pressure at or below which it switches on"),
+        Param("stop_pressure", "pressure", None, "outlet pressure at which it switches off"),
+        Param("fluid", "text", "air", "what it pumps (drawn from the atmosphere)"),
+        Param("temperature", "temperature", "293.15 K", "delivery temperature (after its aftercooler)"),
+        Param("spin_up", "time", "0.5 s", "time to reach full flow, and to stop"),
+        Param("volume", "volume", "50 cc", "internal volume at its outlet"),
+    )
+    help = ("Compressor with a pressure switch: it starts when its outlet falls to the start pressure "
+            "and runs at its rated flow until the outlet reaches the stop pressure.")
+
+    @classmethod
+    def build(cls, b, comp):
+        p_on = cls.require(comp, "start_pressure")
+        p_off = cls.require(comp, "stop_pressure")
+        if p_off <= p_on:
+            raise ValueError(f"{comp.id}: stop_pressure must be above start_pressure")
+        b.add_pump(comp, "out", cls.param(comp, "fluid"), cls.param(comp, "temperature"), cls.require(comp, "flow"),
+                   p_on, p_off, cls.param(comp, "spin_up"), cls.param(comp, "volume"))
+
+
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
     for c in (Tank, PressurizedTank, Boundary, Volume, Pipe, Tee, Fitting, Orifice, Valve, ThrottleValve,
-              CheckValve, ReliefValve, Regulator)
+              CheckValve, ReliefValve, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",
            "solenoid": "valve", "ball_valve": "valve", "needle_valve": "throttle_valve", "tubing": "pipe",
-           "line": "pipe", "manifold": "volume", "cross": "tee", "junction": "tee"}
+           "line": "pipe", "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
+           "pump": "air_pump"}
 
 
 def get_type(name: str) -> type[ComponentType]:

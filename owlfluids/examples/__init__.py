@@ -51,7 +51,7 @@ def lox_feed() -> System:
 def lox_purge() -> System:
     """LOX feed with a helium purge: flow, close the main valve, then purge the line clear.
 
-    Any of helium, nitrogen, argon, air or CO2 can purge; change the purge bottle's fluid.
+    Helium, nitrogen or air can purge; change the purge bottle's fluid.
     """
     s = lox_feed()
     s.name = "LOX feed with helium purge"
@@ -65,6 +65,68 @@ def lox_purge() -> System:
     s.sense("PT-PG", "pressure", "V-PG.out", units="psi")
     s.sense("FM-PG", "mass_flow", "CK-PG", units="kg/s")
     s.sense("PF-INJ", "purge_fraction", "INJ.in", units="%")
+    return s
+
+
+def nitrous_fill() -> System:
+    """Nitrous fill cart with an air purge, after a typical oxidizer fill P&ID.
+
+    Fill: open OFTV, OFV and the run tank vent RTV. Safe: close OFV, open the dump
+    ODV and the purge solenoid OPGS so shop air sweeps the fill line out. Close
+    OPGS and ODV and the fill can start again. The air compressor keeps its
+    receiver between 100 and 115 psig.
+    """
+    s = System("Nitrous fill with air purge")
+    s.add("NOS", "tank", fluid="nitrous", volume="30 L", fill=0.8, temperature="20 C", at=[0, 260])
+    s.add("OFTV", "valve", cv=1.5, open_time="1 s", at=[0, 150])
+    s.add("OFF", "orifice", cv=2.0, at=[60, 0])
+    s.add("L-OF1", "pipe", length="3 m", diameter="0.43 in", at=[200, 0])
+    s.add("OFRV-1", "relief_valve", cv=0.3, set_pressure="1000 psi", at=[370, -80])
+    s.add("ATM-1", "boundary", fluid="nitrous", at=[370, -160])
+    s.add("OFV", "valve", cv=1.2, open_time="300 ms", at=[420, 0])
+    s.add("OFCV", "check_valve", cv=1.2, at=[540, 0])
+    s.add("ODV", "valve", cv=0.5, open_time="200 ms", normally="closed", at=[560, -80])
+    s.add("ATM-2", "boundary", fluid="nitrous", at=[560, -160])
+    s.add("OFRV-2", "relief_valve", cv=0.3, set_pressure="1000 psi", at=[650, -80])
+    s.add("ATM-3", "boundary", fluid="nitrous", at=[650, -160])
+    s.add("OFIF", "orifice", cv=2.0, at=[660, 0])
+    s.add("L-OF2", "pipe", length="3 m", diameter="0.43 in", at=[780, 0])
+    s.add("OQD", "fitting", kind="quick_disconnect", diameter="0.43 in", at=[880, 0])
+    s.add("RFCV", "check_valve", cv=1.2, at=[960, 0])  # the run tank's own fill check valve
+    s.add("RT", "tank", fluid="nitrous", volume="15 L", pressure="1 atm", temperature="20 C", at=[1040, 100])
+    s.add("RTV", "valve", cv=0.15, open_time="200 ms", at=[1040, -80])
+    s.add("ATM-4", "boundary", fluid="nitrous", at=[1040, -160])
+    # shop air: compressor, receiver, regulator, isolation valve, filter, purge solenoid and check
+    s.add("AC", "air_pump", flow="3 g/s", start_pressure="100 psig", stop_pressure="115 psig", at=[200, 340])
+    s.add("AR", "tank", fluid="air", volume="20 L", pressure="115 psig", temperature="20 C", at=[280, 340])
+    s.add("APRV", "relief_valve", cv=0.1, set_pressure="150 psi", at=[280, 250])
+    s.add("ATM-A", "boundary", fluid="air", at=[280, 180])
+    s.add("APR", "regulator", cv=0.3, setpoint="90 psig", droop="10 psi", at=[350, 340])
+    s.add("AIV", "valve", cv=0.5, normally="open", at=[400, 340])
+    s.add("ACF", "orifice", cv=0.8, at=[450, 340])
+    s.add("L-A", "pipe", length="2 m", diameter="0.18 in", at=[470, 260])
+    s.add("OPGS", "valve", cv=0.3, open_time="50 ms", at=[470, 180])
+    s.add("OPGCV", "check_valve", cv=0.3, at=[470, 90])
+    for a, b in [("NOS.bottom", "OFTV.in"), ("OFTV.out", "OFF.in"), ("OFF.out", "L-OF1.in"),
+                 ("L-OF1.out", "OFV.in"), ("L-OF1.out", "OFRV-1.in"), ("OFRV-1.out", "ATM-1.port"),
+                 ("OFV.out", "OFCV.in"), ("OFCV.out", "OFIF.in"), ("OFCV.out", "ODV.in"), ("ODV.out", "ATM-2.port"),
+                 ("OFCV.out", "OFRV-2.in"), ("OFRV-2.out", "ATM-3.port"), ("OFIF.out", "L-OF2.in"),
+                 ("L-OF2.out", "OQD.in"), ("OQD.out", "RFCV.in"), ("RFCV.out", "RT.bottom"), ("RT.top", "RTV.in"),
+                 ("RTV.out", "ATM-4.port"),
+                 ("AC.out", "AR.port"), ("AR.port", "APRV.in"), ("APRV.out", "ATM-A.port"), ("AR.port", "APR.in"),
+                 ("APR.out", "AIV.in"), ("AIV.out", "ACF.in"), ("ACF.out", "L-A.in"), ("L-A.out", "OPGS.in"),
+                 ("OPGS.out", "OPGCV.in"), ("OPGCV.out", "OFV.out")]:
+        s.connect(a, b)
+    s.sense("OFPT", "pressure", "L-OF1.out", units="psig")
+    s.sense("OFT", "temperature", "L-OF1.out", units="F")
+    s.sense("OIPT", "pressure", "OFIF.out", units="psig")
+    s.sense("APT", "pressure", "ACF.out", units="psig")
+    s.sense("ART", "pressure", "AR.port", units="psig")
+    s.sense("FM-OF", "mass_flow", "OFV", units="kg/s")
+    s.sense("M-RT", "mass", "RT", units="kg")
+    s.sense("LL-RT", "level", "RT", units="%")
+    s.sense("PF-OF", "purge_fraction", "OFIF.out", units="%")
+    s.sense("AC-ON", "valve_position", "AC")
     return s
 
 
@@ -126,5 +188,6 @@ EXAMPLES = {
     "lox-purge": lox_purge,
     "ln2-wet-dress": ln2_wet_dress,
     "n2o-blowdown": n2o_blowdown,
+    "nitrous-fill": nitrous_fill,
     "test-stand": engine_test_stand,
 }

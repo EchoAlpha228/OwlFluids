@@ -34,6 +34,7 @@ CTRL_VALVE = 1  # commanded, with actuator travel time
 CTRL_CHECK = 2  # opens on forward pressure difference
 CTRL_RELIEF = 3  # opens when upstream exceeds downstream by the set pressure
 CTRL_REGULATOR = 4  # throttles to hold the downstream pressure at the setpoint
+CTRL_PUMP = 5  # fixed mass flow from its inlet while running; on below LF_P1, off above LF_P2 (LF_CDA: kg/s)
 
 # ---- link float columns
 LF_CDA, LF_AREA, LF_LEN, LF_DIAM, LF_ROUGH, LF_K, LF_P1, LF_P2, LF_P3 = range(9)

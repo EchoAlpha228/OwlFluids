@@ -38,6 +38,7 @@ from ..fluids.registry import (
     I_MU,
     I_R,
     L_CV,
+    L_K,
     L_MU,
     L_PREF,
     L_PSAT,
@@ -47,11 +48,11 @@ from ..fluids.registry import (
     MODEL_IDEAL,
     MODEL_LIQUID,
     P_CPA,
-    P_KL,
     P_OFF,
 )
 from .layout import (
     CTRL_CHECK,
+    CTRL_PUMP,
     CTRL_REGULATOR,
     CTRL_RELIEF,
     CTRL_VALVE,
@@ -202,41 +203,23 @@ def _friction_r(mdot, rho, mu, area, diam, length, rough, k_minor):
 
 
 @inl
-def _sat_ref(f, t, fl):
-    """Liquid of fluid f at t, for a node it shares with a purge gas.
-
-    Returns (vapor pressure, reference density, its pressure, saturated vapor density,
-    liquid and vapor internal energy, liquid viscosity, vapor gamma); the liquid
-    density at pressure p is ref * (1 + (p - p_ref) / P_KL).
-    """
-    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
-    if model[f] == MODEL_LIQUID:
-        u_l = par[f, L_U0] + par[f, L_CV] * (t - par[f, L_T0])
-        return par[f, L_PSAT], par[f, L_RHO0], par[f, L_PREF], 0.0, u_l, 0.0, par[f, L_MU], 1.3
-    ps, rl, rv, hl, hv, mul, muv, gv, sub = saturation(f, t, model, par, sat, satg)
-    return ps, rl, ps, rv, hl - ps / rl, hv - ps / rv, mul, gv
-
-
-@inl
-def _gas_space(vol, m_f, m_g, rgt, ps, rho_ref, p_ref, k_l, rho_v, w0):
-    """Liquid beside its vapor and a purge gas, at one temperature (Dalton).
+def _gas_space(vol, m_f, m_g, rgt, ps, rho_ref, p_ref, k_l, w0):
+    """A liquid beside a purge gas (``rgt``: its R T), at one temperature.
 
     The liquid, compressed by the total pressure ps + p_g, fills what the gas space
-    leaves; vapor at its vapor pressure and the purge gas (``rgt``: R T) share the gas
-    space. Solved for w = ln(p_g) by safeguarded Newton (the volume residual falls
+    leaves. Solved for w = ln(p_g) by safeguarded Newton (the volume residual falls
     monotonically with it), from ``w0``. Returns (w, gas space, pressure, liquid mass,
-    liquid density); the liquid mass is negative when the vapor alone outweighs m_f.
+    liquid density).
     """
-    if m_f - rho_v * vol <= 0.0:
-        return w0, vol, ps + m_g * rgt / vol, m_f - rho_v * vol, rho_ref
+    if m_f <= 0.0:
+        return w0, vol, ps + m_g * rgt / vol, 0.0, rho_ref
     if m_g <= 0.0:
         # no gas: the liquid fills the node above its vapor pressure, or boils
         p = p_ref + k_l * (m_f / (vol * rho_ref) - 1.0)
         if p >= ps:
             return w0, 0.0, p, m_f, m_f / vol
         rho_l = rho_ref * (1.0 + (ps - p_ref) / k_l)
-        y = (vol * rho_l - m_f) / (rho_l - rho_v)
-        return w0, y, ps, m_f - rho_v * y, rho_l
+        return w0, vol - m_f / rho_l, ps, m_f, rho_l
     lo = -10.0
     hi = 30.0
     w = min(max(w0, lo + 1e-3), hi - 1e-3)
@@ -244,16 +227,15 @@ def _gas_space(vol, m_f, m_g, rgt, ps, rho_ref, p_ref, k_l, rho_v, w0):
         p_g = math.exp(w)
         y = m_g * rgt / p_g
         rho_liq = rho_ref * (1.0 + (ps + p_g - p_ref) / k_l)
-        m_liq = m_f - rho_v * y
-        r = y + m_liq / rho_liq - vol
+        r = y + m_f / rho_liq - vol
         if abs(r) <= 1e-15 * vol:
             break
         if r > 0.0:
             lo = w
         else:
             hi = w
-        d = -y * (1.0 - rho_v / rho_liq) - m_liq * rho_ref * p_g / (rho_liq * rho_liq * k_l)
-        nw = w - r / d if d < 0.0 else 0.5 * (lo + hi)
+        d = -y - m_f * rho_ref * p_g / (rho_liq * rho_liq * k_l)
+        nw = w - r / d
         if not (lo <= nw <= hi):
             nw = 0.5 * (lo + hi)
         if abs(nw - w) < 1e-13:
@@ -261,31 +243,19 @@ def _gas_space(vol, m_f, m_g, rgt, ps, rho_ref, p_ref, k_l, rho_v, w0):
             break
         w = nw
     p_g = math.exp(w)
-    y = m_g * rgt / p_g
     rho_liq = rho_ref * (1.0 + (ps + p_g - p_ref) / k_l)
-    return w, y, ps + p_g, m_f - rho_v * y, rho_liq
-
-
-@inl
-def _mixed_wet(f, t, vol, m_f, m_g, e, w0, fl, gpar):
-    """Energy residual of a node holding liquid at temperature t, with its state."""
-    cv, rg, off, k_l = gpar
-    ps, rho_ref, p_ref, rho_v, u_l, u_v, mu_l, gam_v = _sat_ref(f, t, fl)
-    w, y, p, m_liq, rho_liq = _gas_space(vol, m_f, m_g, rg * t, ps, rho_ref, p_ref, k_l, rho_v, w0)
-    m_vap = m_f - m_liq
-    res = m_liq * u_l + m_vap * u_v + m_g * (cv * t + off) - e
-    return res, w, y, p, m_liq, rho_liq, ps, mu_l, gam_v, u_l, u_v
+    return w, m_g * rgt / p_g, ps + p_g, m_f, rho_liq
 
 
 @inl
 def _mixed_one(i, x, NI, NF, fl, W):
     """Node i holding its own fluid and a purge gas, at one temperature.
 
-    With liquid present, the liquid fills its part of the node and its vapor and the
-    purge gas share the rest (pressure: vapor pressure plus the gas's partial
-    pressure), so boiling under a purge is smooth. Without liquid both gases fill the
-    node and their partial pressures add. Each solve starts from the node's state at
-    the last accepted step, so the result depends on x alone.
+    A liquid-model fluid (water, ethanol) is compressed by the total pressure and
+    fills its share of the node; the purge gas fills the rest. Any other fluid takes
+    its state from its own tables over the whole node, as in a line of that fluid
+    alone, and the purge gas adds its partial pressure over the node. Each solve
+    starts from the node's state at the last accepted step.
     """
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
     f = NI[i, N_FLUID]
@@ -299,110 +269,60 @@ def _mixed_one(i, x, NI, NF, fl, W):
     cv = par[g, I_CV]
     rg = par[g, I_R]
     off = par[g, P_OFF]
-    gpar = (cv, rg, off, par[f, P_KL])
     mdl = model[f]
-    reg = W[i, W_REG0]
-    if mdl == MODEL_LIQUID:
-        reg = 0.0
-    elif mdl == MODEL_IDEAL or m_f <= 0.0:
-        reg = 1.0
-    t = W[i, W_T0]
-    u = W[i, W_U0]
     w = W[i, W_LT0]
-    p = 0.0
-    y = vol
-    m_liq = 0.0
-    rho_liq = 1.0
     ps = 0.0
-    mu = 1e-5
-    gam = 1.4
-    xq = 2.0
-    tried_wet = False
-    for _ in range(3):
-        if reg == 0.0:
-            tried_wet = True
-            ok = True
-            if mdl == MODEL_LIQUID:
-                # the liquid's energy is linear in t and it has no vapor: t is explicit
-                c = m_f * par[f, L_CV] + m_g * cv
-                t = (e - m_f * (par[f, L_U0] - par[f, L_CV] * par[f, L_T0]) - m_g * off) / max(c, 1e-30)
-                t = min(max(t, 1.0), 5000.0)
-                res, w, y, p, m_liq, rho_liq, ps, mu, gam, u_l, u_v = _mixed_wet(f, t, vol, m_f, m_g, e, w, fl, gpar)
-            else:
-                # liquid present: solve the temperature by secant steps (the residual
-                # rises with t), kept inside a bracket
-                t_lo = satg[f, 0]
-                t_top = min(satg[f, 1], satg[f, 2] - 1e-3)
-                t_hi = t_top
-                t = min(max(t, t_lo), t_hi)
-                res, w, y, p, m_liq, rho_liq, ps, mu, gam, u_l, u_v = _mixed_wet(f, t, vol, m_f, m_g, e, w, fl, gpar)
-                dt = 1e-4 * t if t + 1e-4 * t <= t_hi else -1e-4 * t
-                d = (_mixed_wet(f, t + dt, vol, m_f, m_g, e, w, fl, gpar)[0] - res) / dt
-                for _ in range(MIX_ITER):
-                    if res > 0.0:
-                        t_hi = t
-                    else:
-                        t_lo = t
-                    nt = t - res / d if d > 0.0 else 0.5 * (t_lo + t_hi)
-                    if not (t_lo <= nt <= t_hi):
-                        nt = 0.5 * (t_lo + t_hi)
-                    if abs(nt - t) < 1e-10 * t:
-                        break
-                    r_n, w, y, p, m_liq, rho_liq, ps, mu, gam, u_l, u_v = _mixed_wet(
-                        f, nt, vol, m_f, m_g, e, w, fl, gpar)
-                    d = (r_n - res) / (nt - t)
-                    t = nt
-                    res = r_n
-                # too much energy for any liquid to stay, or too little mass
-                if (res < 0.0 and t >= t_top * (1.0 - 1e-9)) or m_liq < 0.0:
-                    ok = False
-            if ok:
-                u = (m_liq * u_l + (m_f - m_liq) * u_v) / max(m_f, 1e-30)
-                xq = -1.0 if mdl == MODEL_LIQUID else (m_f - m_liq) / max(m_f, 1e-30)
-                break
-            reg = 1.0
-            u = e / max(m_f, 1e-30)
+    liquid = False
+    if mdl == MODEL_LIQUID:
+        # the liquid's energy is linear in t: t is explicit
+        c = m_f * par[f, L_CV] + m_g * cv
+        t = (e - m_f * (par[f, L_U0] - par[f, L_CV] * par[f, L_T0]) - m_g * off) / max(c, 1e-30)
+        t = min(max(t, 1.0), 5000.0)
+        ps = par[f, L_PSAT]
+        w, y, p, m_liq, rho_liq = _gas_space(vol, m_f, m_g, rg * t, ps, par[f, L_RHO0], par[f, L_PREF],
+                                             par[f, L_K], w)
+        u = par[f, L_U0] + par[f, L_CV] * (t - par[f, L_T0])
+        xq = -1.0
+        mu = par[f, L_MU]
+        gam = 1.3
+        liquid = True
+    else:
+        y = vol
+        rho_liq = m_f / vol
+        if mdl == MODEL_IDEAL or m_f <= 0.0:
+            c = m_g * cv
+            if mdl == MODEL_IDEAL:
+                c += m_f * par[f, I_CV]
+            t = min(max((e - m_g * off) / max(c, 1e-30), 1.0), 5000.0)
+            u = par[f, I_CV] * t if mdl == MODEL_IDEAL else W[i, W_U0]
+            p_f = m_f * par[f, I_R] * t / vol if mdl == MODEL_IDEAL else 0.0
+            mu = par[f, I_MU] if mdl == MODEL_IDEAL else par[g, I_MU]
+            gam = par[f, I_GAMMA] if mdl == MODEL_IDEAL else par[g, I_GAMMA]
+            xq = 2.0
         else:
-            # no liquid: both gases fill the node
-            if mdl == MODEL_IDEAL or m_f <= 0.0:
-                c = m_g * cv
-                if mdl == MODEL_IDEAL:
-                    c += m_f * par[f, I_CV]
-                t = min(max((e - m_g * off) / max(c, 1e-30), 1.0), 5000.0)
-                u = par[f, I_CV] * t if mdl == MODEL_IDEAL else W[i, W_U0]
-                p_f = m_f * par[f, I_R] * t / vol if mdl == MODEL_IDEAL else 0.0
-                mu = par[f, I_MU] if mdl == MODEL_IDEAL else par[g, I_MU]
-                gam = par[f, I_GAMMA] if mdl == MODEL_IDEAL else par[g, I_GAMMA]
-                xq = 2.0
-            else:
-                rho = m_f / vol
-                # secant steps on u; the gas term is small beside m_f u unless m_f is
-                # a trace, so start from dT/du ~ 1/cv of the fluid as a gas
-                p_f, t, xq, gam, mu = state(f, rho, u, model, par, tab, grid, ltab, lgrid, rhol)
-                res = m_f * u + m_g * (cv * t + off) - e
-                d = m_f + m_g * cv / par[f, I_CV]
-                for _ in range(MIX_ITER):
-                    nu = u - res / d
-                    nu = min(max(nu, u - 2e5), u + 2e5)
-                    if abs(nu - u) < 1e-10 * max(abs(u), 1e5):
-                        break
-                    p_f, t, xq, gam, mu = state(f, rho, nu, model, par, tab, grid, ltab, lgrid, rhol)
-                    r_n = m_f * nu + m_g * (cv * t + off) - e
-                    if r_n != res:
-                        d = (r_n - res) / (nu - u)
-                    if d < m_f:
-                        d = m_f  # t never falls as u rises
-                    u = nu
-                    res = r_n
-                if not tried_wet and t < satg[f, 2] and xq <= 1.0:
-                    reg = 0.0  # it would condense: there is liquid
-                    continue
-            p = p_f + m_g * rg * t / vol
-            y = vol
-            m_liq = 0.0
-            rho_liq = m_f / vol
-            ps = 0.0
-            break
+            # secant steps on u, from dT/du ~ 1/cv of the fluid as a gas
+            u = W[i, W_U0]
+            p_f, t, xq, gam, mu = state(f, rho_liq, u, model, par, tab, grid, ltab, lgrid, rhol)
+            res = m_f * u + m_g * (cv * t + off) - e
+            d = m_f + m_g * cv / par[f, I_CV]
+            for _ in range(MIX_ITER):
+                nu = u - res / d
+                nu = min(max(nu, u - 2e5), u + 2e5)
+                if abs(nu - u) < 1e-10 * max(abs(u), 1e5):
+                    break
+                p_f, t, xq, gam, mu = state(f, rho_liq, nu, model, par, tab, grid, ltab, lgrid, rhol)
+                r_n = m_f * nu + m_g * (cv * t + off) - e
+                if r_n != res:
+                    d = (r_n - res) / (nu - u)
+                if d < m_f:
+                    d = m_f  # t never falls as u rises
+                u = nu
+                res = r_n
+            # liquid-like by the same rule as a line of this fluid alone
+            if t < satg[f, 2] and xq < 0.95:
+                liquid = True
+                ps = _psat(f, t, model, par, sat, satg)
+        p = p_f + m_g * rg * t / vol
     m = m_f + m_g
     p_g = m_g * rg * t / max(y, 1e-300)
     W[i, W_P] = p
@@ -416,7 +336,6 @@ def _mixed_one(i, x, NI, NF, fl, W):
     W[i, W_MU] = mu
     u_g = cv * t + off
     # what the own fluid leaves with: its energy plus its share of the flow work
-    # (the liquid at the total pressure, its vapor at the vapor pressure)
     W[i, W_H] = (e - m_g * u_g + p * vol - p_g * y) / max(m_f, 1e-30)
     r = m / NF[i, NF_MREF]
     W[i, W_S] = r * r / (1.0 + r * r)
@@ -425,7 +344,7 @@ def _mixed_one(i, x, NI, NF, fl, W):
     W[i, W_Y] = m_f / m if m > 0.0 else 1.0
     W[i, W_RHOM] = m / vol
     W[i, W_LT] = w
-    W[i, W_REG] = reg
+    W[i, W_REG] = 0.0 if liquid else 1.0  # 0: what flows out is liquid-like
     W[i, W_PS] = ps
     W[i, W_GF] = p_g / p * y / vol if p > 0.0 else 0.0
 
@@ -567,7 +486,7 @@ def _soft_unit(o):
 @inl
 def _opening(k, LI, LF, LV, pa, pb):
     c = LI[k, L_CTRL]
-    if c == CTRL_VALVE:
+    if c == CTRL_VALVE or c == CTRL_PUMP:
         return LV[k, V_POS]
     if c == CTRL_CHECK or c == CTRL_RELIEF:
         return _soft_unit((pa - pb - LF[k, LF_P1]) / LF[k, LF_P2])
@@ -709,7 +628,8 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
         mdot = x[LI[k, L_SX]]
         fwd = mdot > 0.0 or (mdot == 0.0 and pa >= pb)
     else:
-        fwd = pa >= pb
+        # a pump always moves fluid from its inlet (a) to its outlet
+        fwd = pa >= pb or LI[k, L_CTRL] == CTRL_PUMP
         mdot = 0.0
     up = a if fwd else b
     dn = b if fwd else a
@@ -747,7 +667,11 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
             mdot = q if fwd else -q
     else:
         cda = LF[k, LF_CDA] * o
-        q = _q_orifice(cda, p_up, p_dn, side)
+        if LI[k, L_CTRL] == CTRL_PUMP:
+            q = cda  # rated mass flow times how far it has spun up
+            cda = 0.0  # no near-zero-flow blending: its flow does not follow the pressures
+        else:
+            q = _q_orifice(cda, p_up, p_dn, side)
         z = (p_up - p_dn) / max(DP_LIN, R_LIN * p_up)
         if z < 1.0 and cda > 0.0:
             # near zero flow, blend toward the rate the other side would give: the
@@ -1305,7 +1229,16 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
     hrow = 0
     for s in range(n_steps):
         for k in range(nl):
-            if LI[k, L_CTRL] == CTRL_VALVE:
+            c = LI[k, L_CTRL]
+            if c == CTRL_PUMP:
+                # pressure switch on the outlet: starts at or below the low setting and
+                # runs until the outlet reaches the high one
+                p_out = W[LI[k, L_B], W_P]
+                if LV[k, V_CMD] > 0.5 and p_out >= LF[k, LF_P2]:
+                    LV[k, V_CMD] = 0.0
+                elif LV[k, V_CMD] < 0.5 and p_out <= LF[k, LF_P1]:
+                    LV[k, V_CMD] = 1.0
+            if c == CTRL_VALVE or c == CTRL_PUMP:
                 d = LV[k, V_CMD] - LV[k, V_POS]
                 if d > 0:
                     d = min(d, LV[k, V_RATE_OPEN] * dt)

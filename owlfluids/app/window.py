@@ -497,7 +497,7 @@ class MainWindow(QMainWindow):
             links = net.comp_links.get(c.id, [])
             state: dict = {}
             text = ""
-            if ct.is_valve or ct.type_name in ("check_valve", "relief_valve", "regulator"):
+            if ct.is_valve or ct.type_name in ("check_valve", "relief_valve", "regulator", "air_pump"):
                 if links:
                     k = links[0]
                     state["position"] = f.valves.get(c.id, f.link_open[k])
