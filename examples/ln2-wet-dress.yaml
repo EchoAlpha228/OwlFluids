@@ -31,7 +31,8 @@ connections:
 sensors:
 - {id: PT-TK, type: pressure, at: TK.gas, units: psi}
 - {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
-- {id: TC-INJ, type: temperature, at: INJ.in, units: K}
-- {id: TC-LINE, type: wall_temperature, at: L-F.s2, units: K}
+- {id: TC-INJ, type: temperature, at: INJ.in, units: F}
+- {id: TC-LINE, type: wall_temperature, at: L-F.s2, units: F}
 - {id: FM-LN2, type: mass_flow, at: V-M, units: kg/s}
 - {id: M-LN2, type: mass, at: TK, units: kg}
+- {id: LL-LN2, type: level, at: TK, units: '%'}

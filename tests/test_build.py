@@ -103,3 +103,23 @@ def test_tank_liquid_that_would_boil_is_an_error_or_defaults_cold():
     t_boil = fs.saturation_temperature(0, 50 * 6894.757)
     net = build_network(_tank_system("oxygen", "50 psi", liquid_temperature=f"{t_boil!r} K"))  # exactly boiling
     assert any("too close to boiling" in w for w in net.warnings)
+
+
+def test_example_files_match_the_built_in_examples():
+    """examples/*.yaml are written by `owlfluids example`; regenerate them when an example changes."""
+    from pathlib import Path
+
+    from owlfluids.examples import EXAMPLES
+
+    root = Path(__file__).resolve().parents[1] / "examples"
+    for name, make in EXAMPLES.items():
+        assert System.load(root / f"{name}.yaml").to_dict() == make().to_dict(), f"examples/{name}.yaml is stale"
+
+
+def test_synnax_example_maps_lox_feed_file():
+    from pathlib import Path
+
+    from owlfluids.drivers.synnax import SynnaxConfig
+
+    root = Path(__file__).resolve().parents[1] / "examples"
+    SynnaxConfig.load(root / "synnax.yaml").resolve(Simulation(System.load(root / "lox-feed.yaml")))

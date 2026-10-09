@@ -25,6 +25,7 @@ connections:
 sensors:
 - {id: PT-TK, type: pressure, at: TK.gas, units: psi}
 - {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
-- {id: TC-INJ, type: temperature, at: INJ.in, units: K}
+- {id: TC-INJ, type: temperature, at: INJ.in, units: F}
 - {id: FM-LOX, type: mass_flow, at: V-M, units: kg/s}
 - {id: M-LOX, type: mass, at: TK, units: kg}
+- {id: LL-LOX, type: level, at: TK, units: '%'}
