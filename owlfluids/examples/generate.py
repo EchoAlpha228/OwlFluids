@@ -10,7 +10,8 @@ def engine_test_stand(n_purge: int = 4) -> System:
 
     Roughly 80 components: supply bottles, regulators, pressurant lines with check
     valves, two pressurized propellant tanks with vents and reliefs, main valves,
-    feed lines with fittings, injector orifices into a chamber, and GN2 purges.
+    feed lines with fittings, injector orifices into a chamber, and GN2 purges of the
+    feed lines and injector manifolds.
     """
     s = System("LOX/ethanol test stand")
     s.settings["dt"] = "1 ms"
@@ -96,14 +97,17 @@ def engine_test_stand(n_purge: int = 4) -> System:
         con(f"CH-{tag}.b", f"NOZ-{tag}.in")
         con(f"NOZ-{tag}.out", f"ATM-C{tag}.port")
 
-    # GN2 purges into each feed line downstream of the main valves (own GN2 supplies)
+    # GN2 purges (own GN2 supplies) through check valves into each feed line below the
+    # main valve, then into each injector manifold
+    targets = ["F-OXF2.out", "F-FUF2.out", "CH-OX.c", "CH-FU.c"]
     for i in range(n_purge):
         tag = f"P{i + 1}"
         add(f"K-{tag}", "tank", fluid="nitrogen", volume="10 L", pressure="1000 psi", temperature="20 C")
         add(f"V-{tag}", "valve", cv=0.1)
         add(f"L-{tag}", "pipe", length="1 m", diameter="4 mm")
-        add(f"ATM-{tag}", "boundary", fluid="nitrogen")
-        con(f"K-{tag}.port", f"V-{tag}.in"), con(f"V-{tag}.out", f"L-{tag}.in"), con(f"L-{tag}.out", f"ATM-{tag}.port")
+        add(f"CK-{tag}", "check_valve", cv=0.1)
+        con(f"K-{tag}.port", f"V-{tag}.in"), con(f"V-{tag}.out", f"L-{tag}.in"), con(f"L-{tag}.out", f"CK-{tag}.in")
+        con(f"CK-{tag}.out", targets[i % len(targets)])
 
     _place(s, n_purge)
 
@@ -144,7 +148,7 @@ def _place(s: System, n_purge: int, dx: float = 150.0, dy: float = 110.0) -> Non
         grid[f"DUMP-{tag}"] = (17, y + 3.2)
     for i in range(n_purge):
         y = 8.5 + 1.25 * i
-        for j, cid in enumerate((f"K-P{i + 1}", f"V-P{i + 1}", f"L-P{i + 1}", f"ATM-P{i + 1}")):
+        for j, cid in enumerate((f"K-P{i + 1}", f"V-P{i + 1}", f"L-P{i + 1}", f"CK-P{i + 1}")):
             grid[cid] = (j, y)
     for c in s.components:
         if c.id in grid:

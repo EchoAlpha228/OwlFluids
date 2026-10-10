@@ -8,6 +8,7 @@ a band-narrowing order of the unknowns.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
@@ -15,9 +16,28 @@ import numpy as np
 
 from .. import units
 from ..components.library import get_type
-from ..fluids.registry import FLUIDS, FluidSet, canonical
+from ..fluids.props import state as _state
+from ..fluids.registry import (
+    FLUIDS,
+    I_CV,
+    I_R,
+    L_CV,
+    L_K,
+    L_PREF,
+    L_PSAT,
+    L_RHO0,
+    L_T0,
+    L_U0,
+    MODEL_LIQUID,
+    P_OFF,
+    PURGE_GASES,
+    FluidSet,
+    canonical,
+)
 from ..io.system import System
 from . import layout as L
+
+GAS_TRACE = 1e-6  # least gas partial pressure (as a share of the total) a liquid node starts its solve from
 
 
 class BuildError(ValueError):
@@ -40,6 +60,8 @@ class _Node:
     bp: float = 0.0
     bt: float = 0.0
     primed: bool = False  # initial state copied from the volume it is open to
+    gas: str | None = None  # purge gas that can mix into this node's fluid
+    gas_fill: bool = False  # a mixed node that starts full of its purge gas
 
 
 @dataclass
@@ -96,6 +118,8 @@ class Network:
     kl: int = 0
     ku: int = 0
     warnings: list[str] = field(default_factory=list)
+    mix_init: np.ndarray = field(repr=False, default=None)
+    pumps: dict[str, int] = field(default_factory=dict)  # component id -> its link
 
     @property
     def n_states(self) -> int:
@@ -118,6 +142,7 @@ class NetworkBuilder:
         self.comp_nodes: dict[str, list[int]] = defaultdict(list)
         self.comp_links: dict[str, list[int]] = defaultdict(list)
         self.valves: dict[str, int] = {}
+        self.pumps: dict[str, int] = {}
         self.warnings: list[str] = []
         self.p_init = units.parse(system.setting("initial_pressure"), "pressure")
         self.t_init = units.parse(system.setting("initial_temperature"), "temperature")
@@ -262,6 +287,20 @@ class NetworkBuilder:
         if ctrl == L.CTRL_VALVE:
             self.valves[comp.id] = idx
 
+    def add_pump(self, comp, port, fluid, t, mdot, p_on, p_off, spin_up, volume) -> None:
+        """A pump drawing ``fluid`` from the atmosphere at ``t`` into ``port``."""
+        a = self.new_boundary(comp, fluid, 101325.0, t)
+        self.nodes[a].name = f"{comp.id}.inlet"
+        b = self.port_node(comp, port)
+        self.net_volume[self.net_of[(comp.id, port)]] += volume
+        rate = 1.0 / max(spin_up, 1e-6)
+        lk = _Link(comp.id, L.LINK_ORIFICE, a, b, comp.id, cda=mdot, ctrl=L.CTRL_PUMP, p1=p_on, p2=p_off,
+                   valve=(0.0, rate, rate))
+        self.links.append(lk)
+        idx = len(self.links) - 1
+        self.comp_links[comp.id].append(idx)
+        self.pumps[comp.id] = idx
+
     # ---- build
     def build(self) -> Network:
         sysm = self.system
@@ -295,7 +334,7 @@ class NetworkBuilder:
     def _fluid_set(self) -> FluidSet:
         sysm = self.system
         models_cfg = {canonical(k): v for k, v in (sysm.setting("fluid_models") or {}).items()}
-        used = sorted({n.fluid for n in self.nodes})
+        used = sorted({n.fluid for n in self.nodes} | {n.gas for n in self.nodes if n.gas})
         models = []
         for f in used:
             m = models_cfg.get(f, FLUIDS[f][1])
@@ -341,6 +380,15 @@ class NetworkBuilder:
             n.init = ("tank_liquid", p, t, fill)
 
     def _assign_fluids(self) -> None:
+        """Spread fluids from the components that set one along the links.
+
+        Flow passes check valves, relief valves, regulators and pumps forwards only.
+        A node reached by one fluid carries it. A node reached by a purge gas (see
+        ``PURGE_GASES``) and one other fluid carries both: the other fluid is its own and
+        the purge gas mixes into it, so a purge can push propellant out of a line. Any
+        other meeting of fluids is an error. Volumes that set their fluid hold only it;
+        another fluid flowing into one is counted as the volume's fluid (with a warning).
+        """
         adj = defaultdict(list)
         for lk in self.links:
             adj[lk.a].append(lk.b)
@@ -349,33 +397,78 @@ class NetworkBuilder:
         for i, n in enumerate(self.nodes):
             if n.fluid:
                 src[i] = n.fluid
-        reached: dict[int, tuple[str, int]] = {}
-        for start, fl in src.items():
-            q = deque([start])
-            seen = {start}
-            while q:
-                i = q.popleft()
-                for j in adj[i]:
-                    if j in seen or j in src:
-                        continue
-                    seen.add(j)
-                    if j in reached and reached[j][0] != fl:
-                        a = self.nodes[reached[j][1]].owner
-                        b = self.nodes[start].owner
-                        raise BuildError(
-                            f"{self.nodes[j].name} is reached by {reached[j][0]} from {a} and {fl} from {b}; "
-                            "lines may carry one fluid only (set 'fluid' on a component to separate them)")
-                    reached[j] = (fl, start)
-                    q.append(j)
+        fwd = defaultdict(list)
+        one_way = set()
+        for k, lk in enumerate(self.links):
+            fwd[lk.a].append(lk.b)
+            if lk.kind == L.LINK_ORIFICE and lk.ctrl in (L.CTRL_CHECK, L.CTRL_RELIEF, L.CTRL_REGULATOR, L.CTRL_PUMP):
+                one_way.add(k)
+            else:
+                fwd[lk.b].append(lk.a)
+
+        def spread(graph):
+            # node -> fluid -> (links away, the node that sets it)
+            out: dict[int, dict[str, tuple[int, int]]] = defaultdict(dict)
+            for start, fl in src.items():
+                q = deque([(start, 0)])
+                seen = {start}
+                while q:
+                    i, d = q.popleft()
+                    for j in graph[i]:
+                        if j in seen or j in src:
+                            continue
+                        seen.add(j)
+                        if fl not in out[j] or out[j][fl][0] > d + 1:
+                            out[j][fl] = (d + 1, start)
+                        q.append((j, d + 1))
+            return out
+
+        reached = spread(adj)
+        flows = spread(fwd)
+        purge_list = ", ".join(PURGE_GASES)
         for i, n in enumerate(self.nodes):
-            if n.fluid is None:
-                if i not in reached:
-                    raise BuildError(f"{n.name} is not connected to anything that sets its fluid")
-                n.fluid = reached[i][0]
-        for lk in self.links:
-            fa, fb = self.nodes[lk.a].fluid, self.nodes[lk.b].fluid
-            if fa != fb:
-                raise BuildError(f"{lk.owner} connects {fa} to {fb}; lines may carry one fluid only")
+            if n.fluid is not None:
+                continue
+            # what can flow there; a dead end only flow leaves still takes its neighbours' fluid
+            fls = flows.get(i) or reached.get(i)
+            if not fls:
+                raise BuildError(f"{n.name} is not connected to anything that sets its fluid")
+            if len(fls) == 1:
+                n.fluid = next(iter(fls))
+                continue
+            gas = next((g for g in PURGE_GASES if g in fls), None)
+            if len(fls) > 2 or gas is None:
+                what = " and ".join(f"{f} from {self.nodes[src_i].owner}" for f, (_d, src_i) in sorted(fls.items()))
+                raise BuildError(
+                    f"{n.name} is reached by {what}; a line may carry one fluid plus one purge gas "
+                    f"({purge_list}). Set 'fluid' on a component or close off the lines to separate them")
+            n.fluid = next(f for f in fls if f != gas)
+            n.gas = gas
+            # it starts holding whichever can flow there from nearer (the gas on a tie)
+            n.gas_fill = fls[gas][0] <= fls[n.fluid][0]
+        warned = set()
+        for k, lk in enumerate(self.links):
+            na, nb = self.nodes[lk.a], self.nodes[lk.b]
+            sa = {na.fluid} | ({na.gas} if na.gas else set())
+            sb = {nb.fluid} | ({nb.gas} if nb.gas else set())
+            others = (sa | sb) - set(PURGE_GASES)
+            if len(others) > 1:
+                raise BuildError(f"{lk.owner} connects {na.fluid} to {nb.fluid}; lines may carry one fluid "
+                                 f"plus one purge gas ({purge_list})")
+            for n, s_self, s_other in ((na, sa, sb), (nb, sb, sa)):
+                if n is na and k in one_way:
+                    continue  # nothing flows back into its inlet
+                extra = s_other - s_self
+                if n.gas is None and extra and n.owner and (n.owner, n.fluid) not in warned:
+                    warned.add((n.owner, n.fluid))
+                    what = " or ".join(sorted(extra))
+                    if n.kind == L.NODE_TANK_LIQUID:
+                        gas = self.nodes[n.partner].fluid
+                        self.warnings.append(f"{n.owner} holds only {n.fluid} and {gas}: any {what} flowing into "
+                                             f"it rises into its ullage and is counted as {gas}")
+                    else:
+                        self.warnings.append(f"{n.owner} holds only {n.fluid}: any {what} flowing into it "
+                                             f"is counted as {n.fluid}")
 
     def _prime_lines(self) -> None:
         """Start lines in equilibrium with the tank or volume they are open to.
@@ -413,13 +506,17 @@ class NetworkBuilder:
                     continue
             adj[lk.a].append((lk.b, lk.draw_a, None))
             adj[lk.b].append((lk.a, lk.draw_b, None))
+        def content(n):
+            return n.gas if n.gas and n.gas_fill else n.fluid
+
         state: dict[int, tuple] = {}
+        origin: dict[int, str] = {}
         q = deque()
         for i, n in enumerate(self.nodes):
             if explicit(n):
-                q.append((i, None))
+                q.append((i, None, content(n)))
         while q:
-            i, st = q.popleft()
+            i, st, fl = q.popleft()
             for j, draw, setpoint in adj[i]:
                 if j in state or explicit(self.nodes[j]):
                     continue
@@ -429,10 +526,15 @@ class NetworkBuilder:
                         continue
                     new = ("pt", min(new[1], setpoint), new[2])
                 state[j] = new
-                q.append((j, new))
+                origin[j] = fl
+                q.append((j, new, fl))
         for j, st in state.items():
-            self.nodes[j].init = st
-            self.nodes[j].primed = True
+            n = self.nodes[j]
+            n.init = st
+            n.primed = True
+            if n.gas:
+                # a mixed line starts full of whatever it was primed from
+                n.gas_fill = origin[j] == n.gas
 
     def _compile(self, fs: FluidSet) -> Network:
         sysm = self.system
@@ -443,11 +545,15 @@ class NetworkBuilder:
         NF = np.zeros((nn, L.N_NF))
         x0: list[float] = []
         xscale: list[float] = []
+        # mixed nodes: the state their first solves start from (see kernel._mixed_one)
+        mix_init = np.zeros((nn, 4))
         for i, n in enumerate(self.nodes):
             f = used.index(n.fluid)
             NI[i, L.N_KIND] = n.kind
             NI[i, L.N_FLUID] = f
             NI[i, L.N_PARTNER] = n.partner
+            NI[i, L.N_GAS] = used.index(n.gas) if n.gas else -1
+            NI[i, L.N_GX] = -1
             NF[i, L.NF_VOL] = n.volume
             NF[i, L.NF_HA] = n.heat[0]
             NF[i, L.NF_TAMB] = n.heat[1]
@@ -456,7 +562,16 @@ class NetworkBuilder:
                 rho, u = fs.rho_u_from_pt(f, n.bp, n.bt)
                 NF[i, L.NF_BP], NF[i, L.NF_BT], NF[i, L.NF_BRHO], NF[i, L.NF_BU] = n.bp, n.bt, rho, u
                 continue
-            rho, u, t0 = self._initial_state(fs, f, n)
+            if n.gas and n.gas_fill:
+                # starts full of purge gas, with a trace of the line's own fluid at the same state
+                init = n.init if n.init and n.init[0] == "pt" else ("pt", None, None)
+                p0 = self.p_init if init[1] is None else init[1]
+                t0 = self.t_init if init[2] is None else init[2]
+                rho, u = fs.rho_u_from_pt(f, p0, t0)
+            else:
+                rho, u, t0 = self._initial_state(fs, f, n)
+                if n.gas:
+                    p0 = float(_state(f, rho, u, *fs.arrays()[:7])[0])
             if n.kind == L.NODE_TANK_LIQUID:
                 rhoref = fs.liquid_density(f, t0)
                 NF[i, L.NF_RHOREF] = rhoref
@@ -477,19 +592,32 @@ class NetworkBuilder:
                 # below this mass (about 1 kPa of gas) outflows are throttled, so a
                 # volume pumped down to vacuum cannot be driven to negative mass
                 NF[i, L.NF_MREF] = max(vol, 1e-9) * 0.01
+            m_full = m
+            e = m * u
+            if n.gas:
+                g = used.index(n.gas)
+                m, e, m_g, mix_init[i] = _mixed_init(fs, f, g, n.volume, p0, t0, rho, u, n.gas_fill)
+                gas_scale = max(max(p0, 1e5) * n.volume / (fs.par[g, I_R] * t0), 1e-9)
             NI[i, L.N_SX] = len(x0)
-            x0 += [m, m * u]
-            xscale += [max(m, 1e-9), max(abs(m * u), m * 1e5, 1e-3)]
+            x0 += [m, e]
+            # mixed nodes scale by the mass that would fill the node, so a trace is not
+            # held to a relative accuracy
+            xscale += [max(m_full, 1e-9), max(abs(m_full * u), m_full * 1e5, 1e-3)]
             if n.wall:
-                mc, ha_in, ha_out, t_amb = n.wall
+                mc, ha_in, ha_out, t_amb, *at_fluid = n.wall
                 NI[i, L.N_WALL] = 1
                 NF[i, L.NF_WALLMC] = mc
                 NF[i, L.NF_HA] = ha_in
                 NF[i, L.NF_HAAMB] = ha_out
                 NF[i, L.NF_TAMB] = t_amb
-                # a line primed from a tank has been sitting full: its wall is at the fluid's temperature
-                x0.append(t0 if n.primed else t_amb)
+                # a line primed from a tank has been sitting full, and a tank shell holds its
+                # contents: their walls are at the fluid's temperature
+                x0.append(t0 if n.primed or any(at_fluid) else t_amb)
                 xscale.append(100.0)
+            if n.gas:
+                NI[i, L.N_GX] = len(x0)
+                x0.append(m_g)
+                xscale.append(gas_scale)
         # ullage nodes need the liquid reference density of their partner
         LI = np.zeros((nl, L.N_LI), dtype=np.int64)
         LF = np.zeros((nl, L.N_LF))
@@ -521,7 +649,7 @@ class NetworkBuilder:
                       [n.name for n in self.nodes], [lk.name for lk in self.links],
                       [n.owner for n in self.nodes], [lk.owner for lk in self.links],
                       port_nodes, dict(self.comp_nodes), dict(self.comp_links), dict(self.valves),
-                      warnings=self.warnings)
+                      warnings=self.warnings, mix_init=mix_init, pumps=dict(self.pumps))
         _structure(net)
         return net
 
@@ -551,6 +679,33 @@ class NetworkBuilder:
         return rho, u, t
 
 
+def _mixed_init(fs: FluidSet, f: int, g: int, vol: float, p0: float, t0: float, rho: float, u: float,
+                gas_fill: bool) -> tuple[float, float, float, tuple]:
+    """Starting masses and energy of a node holding fluid f and purge gas g at p0, t0.
+
+    It starts full of whichever it was primed with and holds none of the other, in
+    the kernel's own terms (``kernel._mixed_one``), so it starts at p0.
+    Returns (fluid mass, energy, gas mass, (fluid energy, log gas partial pressure,
+    temperature, 0)) the kernel's first solve starts from.
+    """
+    par = fs.par
+    r_g, u_g = par[g, I_R], par[g, I_CV] * t0 + par[g, P_OFF]
+    frac = 0.0 if gas_fill else 1.0
+    if fs.model[f] != MODEL_LIQUID:
+        # the fluid spread over the node, the gas's partial pressure on top
+        m_f = rho * vol * frac
+        m_g = p0 * (1.0 - frac) * vol / (r_g * t0)
+        return m_f, m_f * u + m_g * u_g, m_g, (u, 0.0, t0, 0.0)
+    # a liquid compressed by the total pressure, the gas in the space it leaves
+    y = vol * (1.0 - frac)
+    p_g = max(p0 - par[f, L_PSAT], GAS_TRACE * p0)
+    rho_liq = par[f, L_RHO0] * (1.0 + (par[f, L_PSAT] + p_g - par[f, L_PREF]) / par[f, L_K])
+    m_f = rho_liq * (vol - y)
+    m_g = p_g * y / (r_g * t0)
+    u_f = par[f, L_U0] + par[f, L_CV] * (t0 - par[f, L_T0])
+    return m_f, m_f * u_f + m_g * u_g, m_g, (u_f, math.log(p_g), t0, 0.0)
+
+
 def _structure(net: Network) -> None:
     """Jacobian sparsity (CSC), column colouring and a band-narrowing order."""
     from scipy.sparse import coo_matrix
@@ -563,7 +718,10 @@ def _structure(net: Network) -> None:
         if NI[i, L.N_KIND] == L.NODE_BOUNDARY:
             return []
         sx = NI[i, L.N_SX]
-        return list(range(sx, sx + (3 if NI[i, L.N_WALL] else 2)))
+        out = list(range(sx, sx + (3 if NI[i, L.N_WALL] else 2)))
+        if NI[i, L.N_GX] >= 0:
+            out.append(int(NI[i, L.N_GX]))
+        return out
 
     def group(i):
         g = [i]

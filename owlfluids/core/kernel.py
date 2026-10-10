@@ -15,6 +15,13 @@ states together (graph colouring) and re-evaluating only the nodes and links
 they touch. The system is solved with a banded LU after the unknowns were
 reordered with reverse Cuthill-McKee. Every Newton iterate conserves mass and
 energy exactly, because each link moves what it takes from one node into another.
+
+Purges: a node that a purge gas can reach as well as its own fluid also carries the
+gas's mass (the state after its others); its energy state is that of both. The two
+share the volume at one pressure and temperature, each in its own part of it.
+Outflow is homogeneous: each species leaves in proportion to its mass, carrying its
+own enthalpy. The purge gas is an ideal gas on its fluid's energy reference (see
+``registry.P_OFF``).
 """
 
 from __future__ import annotations
@@ -25,9 +32,27 @@ import numba as nb
 
 from ..fluids.props import psat as _psat
 from ..fluids.props import saturation, state
-from ..fluids.registry import L_PSAT, MODEL_IDEAL, MODEL_LIQUID
+from ..fluids.registry import (
+    I_CV,
+    I_GAMMA,
+    I_MU,
+    I_R,
+    L_CV,
+    L_K,
+    L_MU,
+    L_PREF,
+    L_PSAT,
+    L_RHO0,
+    L_T0,
+    L_U0,
+    MODEL_IDEAL,
+    MODEL_LIQUID,
+    P_CPA,
+    P_OFF,
+)
 from .layout import (
     CTRL_CHECK,
+    CTRL_PUMP,
     CTRL_REGULATOR,
     CTRL_RELIEF,
     CTRL_VALVE,
@@ -53,6 +78,8 @@ from .layout import (
     LO_MDOT,
     LO_OPEN,
     N_FLUID,
+    N_GAS,
+    N_GX,
     N_KIND,
     N_PARTNER,
     N_SX,
@@ -72,6 +99,7 @@ from .layout import (
     NODE_BOUNDARY,
     NODE_TANK_LIQUID,
     NODE_VOLUME,
+    O_GAS,
     O_H,
     O_M,
     O_P,
@@ -94,13 +122,27 @@ jit = nb.njit(cache=True, nogil=True, _nrt=False, error_model="numpy")
 inl = jit
 
 G0 = 9.80665
+EXCH = 0.1  # exchange stream at zero flow, as a share of the flow at the linear band's edge
 DP_LIN = 2000.0  # Pa; below this pressure difference flow is linear in dP (keeps the Jacobian finite)
 R_LIN = 1e-3  # gas pressure ratio band near 1 treated the same way
 CHOKE_TAU = 1e-3  # s; relaxation time that holds pipe gas flow at the choked limit
 
-# scratch columns
-W_P, W_T, W_X, W_RHO, W_U, W_H, W_G, W_MU, W_V, W_TW, W_S = range(11)
-N_W = 11
+MIX_ITER = 40  # most iterations of each solve in a mixed node's state
+
+# scratch columns. For a mixed node the first ones describe its own fluid (W_H: the
+# enthalpy it leaves with), then: purge gas enthalpy, the share of the volume not taken
+# by liquid, the own fluid's mass fraction, the mixture density, the log partial
+# pressure of the gas (liquid present) or its fluid's energy (no liquid), whether liquid
+# is present (0) or not (1), its vapor pressure, the purge gas share of the volume
+# (shown), and the last three at the last accepted step, where each solve starts
+(W_P, W_T, W_X, W_RHO, W_U, W_H, W_G, W_MU, W_V, W_TW, W_S, W_HG, W_SG, W_Y, W_RHOM, W_LT,
+ W_REG, W_PS, W_GF, W_U0, W_LT0, W_T0, W_REG0) = range(23)
+N_W = 23
+
+# per-link flows: for each of 4 nodes, own-fluid mass, energy and purge-gas mass;
+# then d(mdot)/dt of a pipe
+N_FV = 13
+FV_ACC = 12
 
 
 @jit
@@ -161,6 +203,154 @@ def _friction_r(mdot, rho, mu, area, diam, length, rough, k_minor):
 
 
 @inl
+def _gas_space(vol, m_f, m_g, rgt, ps, rho_ref, p_ref, k_l, w0):
+    """A liquid beside a purge gas (``rgt``: its R T), at one temperature.
+
+    The liquid, compressed by the total pressure ps + p_g, fills what the gas space
+    leaves. Solved for w = ln(p_g) by safeguarded Newton (the volume residual falls
+    monotonically with it), from ``w0``. Returns (w, gas space, pressure, liquid mass,
+    liquid density).
+    """
+    if m_f <= 0.0:
+        return w0, vol, ps + m_g * rgt / vol, 0.0, rho_ref
+    if m_g <= 0.0:
+        # no gas: the liquid fills the node above its vapor pressure, or boils
+        p = p_ref + k_l * (m_f / (vol * rho_ref) - 1.0)
+        if p >= ps:
+            return w0, 0.0, p, m_f, m_f / vol
+        rho_l = rho_ref * (1.0 + (ps - p_ref) / k_l)
+        return w0, vol - m_f / rho_l, ps, m_f, rho_l
+    lo = -10.0
+    hi = 30.0
+    w = min(max(w0, lo + 1e-3), hi - 1e-3)
+    for _ in range(MIX_ITER):
+        p_g = math.exp(w)
+        y = m_g * rgt / p_g
+        rho_liq = rho_ref * (1.0 + (ps + p_g - p_ref) / k_l)
+        r = y + m_f / rho_liq - vol
+        if abs(r) <= 1e-15 * vol:
+            break
+        if r > 0.0:
+            lo = w
+        else:
+            hi = w
+        d = -y - m_f * rho_ref * p_g / (rho_liq * rho_liq * k_l)
+        nw = w - r / d
+        if not (lo <= nw <= hi):
+            nw = 0.5 * (lo + hi)
+        if abs(nw - w) < 1e-13:
+            w = nw
+            break
+        w = nw
+    p_g = math.exp(w)
+    rho_liq = rho_ref * (1.0 + (ps + p_g - p_ref) / k_l)
+    return w, m_g * rgt / p_g, ps + p_g, m_f, rho_liq
+
+
+@inl
+def _mixed_one(i, x, NI, NF, fl, W):
+    """Node i holding its own fluid and a purge gas, at one temperature.
+
+    A liquid-model fluid (water, ethanol) is compressed by the total pressure and
+    fills its share of the node; the purge gas fills the rest. Any other fluid takes
+    its state from its own tables over the whole node, as in a line of that fluid
+    alone, and the purge gas adds its partial pressure over the node. Each solve
+    starts from the node's state at the last accepted step.
+    """
+    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
+    f = NI[i, N_FLUID]
+    g = NI[i, N_GAS]
+    sx = NI[i, N_SX]
+    vol = NF[i, NF_VOL]
+    # a trace driven slightly negative by Newton counts as none
+    m_f = max(x[sx], 0.0)
+    m_g = max(x[NI[i, N_GX]], 0.0)
+    e = x[sx + 1]
+    cv = par[g, I_CV]
+    rg = par[g, I_R]
+    off = par[g, P_OFF]
+    mdl = model[f]
+    w = W[i, W_LT0]
+    ps = 0.0
+    liquid = False
+    if mdl == MODEL_LIQUID:
+        # the liquid's energy is linear in t: t is explicit
+        c = m_f * par[f, L_CV] + m_g * cv
+        t = (e - m_f * (par[f, L_U0] - par[f, L_CV] * par[f, L_T0]) - m_g * off) / max(c, 1e-30)
+        t = min(max(t, 1.0), 5000.0)
+        ps = par[f, L_PSAT]
+        w, y, p, m_liq, rho_liq = _gas_space(vol, m_f, m_g, rg * t, ps, par[f, L_RHO0], par[f, L_PREF],
+                                             par[f, L_K], w)
+        u = par[f, L_U0] + par[f, L_CV] * (t - par[f, L_T0])
+        xq = -1.0
+        mu = par[f, L_MU]
+        gam = 1.3
+        liquid = True
+    else:
+        y = vol
+        rho_liq = m_f / vol
+        if mdl == MODEL_IDEAL or m_f <= 0.0:
+            c = m_g * cv
+            if mdl == MODEL_IDEAL:
+                c += m_f * par[f, I_CV]
+            t = min(max((e - m_g * off) / max(c, 1e-30), 1.0), 5000.0)
+            u = par[f, I_CV] * t if mdl == MODEL_IDEAL else W[i, W_U0]
+            p_f = m_f * par[f, I_R] * t / vol if mdl == MODEL_IDEAL else 0.0
+            mu = par[f, I_MU] if mdl == MODEL_IDEAL else par[g, I_MU]
+            gam = par[f, I_GAMMA] if mdl == MODEL_IDEAL else par[g, I_GAMMA]
+            xq = 2.0
+        else:
+            # secant steps on u, from dT/du ~ 1/cv of the fluid as a gas; with no gas
+            # (a line the purge has not reached) u is explicit, as in a single-fluid node
+            u = W[i, W_U0] if m_g > 0.0 else e / m_f
+            p_f, t, xq, gam, mu = state(f, rho_liq, u, model, par, tab, grid, ltab, lgrid, rhol)
+            res = m_f * u + m_g * (cv * t + off) - e
+            d = m_f + m_g * cv / par[f, I_CV]
+            for _ in range(MIX_ITER if m_g > 0.0 else 0):
+                nu = u - res / d
+                nu = min(max(nu, u - 2e5), u + 2e5)
+                if abs(nu - u) < 1e-10 * max(abs(u), 1e5):
+                    break
+                p_f, t, xq, gam, mu = state(f, rho_liq, nu, model, par, tab, grid, ltab, lgrid, rhol)
+                r_n = m_f * nu + m_g * (cv * t + off) - e
+                if r_n != res:
+                    d = (r_n - res) / (nu - u)
+                if d < m_f:
+                    d = m_f  # t never falls as u rises
+                u = nu
+                res = r_n
+            # liquid-like by the same rule as a line of this fluid alone
+            if t < satg[f, 2] and xq < 0.95:
+                liquid = True
+                ps = _psat(f, t, model, par, sat, satg)
+        p = p_f + m_g * rg * t / vol
+    m = m_f + m_g
+    p_g = m_g * rg * t / max(y, 1e-300)
+    W[i, W_P] = p
+    W[i, W_T] = t
+    W[i, W_V] = vol
+    W[i, W_TW] = x[sx + 2] if NI[i, N_WALL] else NF[i, NF_TAMB]
+    W[i, W_X] = xq
+    W[i, W_RHO] = rho_liq
+    W[i, W_U] = u
+    W[i, W_G] = gam
+    W[i, W_MU] = mu
+    u_g = cv * t + off
+    # what the own fluid leaves with: its energy plus its share of the flow work
+    W[i, W_H] = (e - m_g * u_g + p * vol - p_g * y) / max(m_f, 1e-30)
+    r = m / NF[i, NF_MREF]
+    W[i, W_S] = r * r / (1.0 + r * r)
+    W[i, W_HG] = u_g + rg * t
+    W[i, W_SG] = y / vol
+    W[i, W_Y] = m_f / m if m > 0.0 else 1.0
+    W[i, W_RHOM] = m / vol
+    W[i, W_LT] = w
+    W[i, W_REG] = 0.0 if liquid else 1.0  # 0: what flows out is liquid-like
+    W[i, W_PS] = ps
+    W[i, W_GF] = p_g / p * y / vol if p > 0.0 else 0.0
+
+
+@inl
 def _node_one(i, x, NI, NF, fl, W):
     """Fill row i of the scratch array W with the state of node i."""
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
@@ -183,6 +373,12 @@ def _node_one(i, x, NI, NF, fl, W):
         W[i, W_G] = g
         W[i, W_MU] = mu
         W[i, W_H] = u + NF[i, NF_BP] / rho
+        W[i, W_SG] = 0.0
+        W[i, W_Y] = 1.0
+        W[i, W_RHOM] = rho
+        return
+    if NI[i, N_GX] >= 0:
+        _mixed_one(i, x, NI, NF, fl, W)
         return
     sx = NI[i, N_SX]
     m = max(x[sx], 1e-12)
@@ -214,6 +410,9 @@ def _node_one(i, x, NI, NF, fl, W):
     W[i, W_G] = g
     W[i, W_MU] = mu
     W[i, W_H] = u + p / rho
+    W[i, W_SG] = 0.0
+    W[i, W_Y] = 1.0
+    W[i, W_RHOM] = rho
 
 
 @inl
@@ -288,7 +487,7 @@ def _soft_unit(o):
 @inl
 def _opening(k, LI, LF, LV, pa, pb):
     c = LI[k, L_CTRL]
-    if c == CTRL_VALVE:
+    if c == CTRL_VALVE or c == CTRL_PUMP:
         return LV[k, V_POS]
     if c == CTRL_CHECK or c == CTRL_RELIEF:
         return _soft_unit((pa - pb - LF[k, LF_P1]) / LF[k, LF_P2])
@@ -300,17 +499,128 @@ def _opening(k, LI, LF, LV, pa, pb):
 
 
 @inl
+def _deliver(dn, sp, q, h, t, NI, NF, W, fl, fn, fv, slot):
+    """Add ``q`` of fluid ``sp`` carrying enthalpy ``h`` (at temperature ``t``) into node dn,
+    whose rates go in ``slot`` of fn/fv (its tank ullage, if any, in slot + 2).
+
+    It goes to dn's own fluid or its purge gas, whichever it is. Tank liquid passes a
+    gas on to its ullage. A fluid the node does not hold is counted as the node's own
+    fluid, at the same temperature (the network builder warns where this can happen).
+    """
+    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
+    kind = NI[dn, N_KIND]
+    if kind == NODE_BOUNDARY:
+        return
+    tgt = dn
+    if kind == NODE_TANK_LIQUID:
+        pd = NI[dn, N_PARTNER]
+        fn[slot + 2] = pd
+        if sp == NI[dn, N_FLUID]:
+            # the incoming liquid pushes the ullage gas up
+            w = W[pd, W_P] * q / NF[dn, NF_RHOREF]
+            fv[3 * slot + 7] += w
+            fv[3 * slot + 1] -= w
+        else:
+            slot += 2
+            tgt = pd
+    fn[slot] = tgt
+    if sp == NI[tgt, N_FLUID]:
+        fv[3 * slot] += q
+        fv[3 * slot + 1] += q * h
+    elif sp == NI[tgt, N_GAS]:
+        fv[3 * slot + 2] += q
+        fv[3 * slot + 1] += q * h
+    else:
+        f = NI[tgt, N_FLUID]
+        fv[3 * slot] += q
+        fv[3 * slot + 1] += q * (par[f, P_CPA] * t + par[f, P_OFF])
+
+
+@inl
+def _smooth01(z):
+    if z <= 0.0:
+        return 0.0
+    if z >= 1.0:
+        return 1.0
+    return z * z * (3.0 - 2.0 * z)
+
+
+@inl
+def _q_side(n, d, NI, W, fl):
+    """What leaves node n through a port drawing ``d``, and sets the flow rate.
+
+    Returns (density, gamma, liquid-like weight, vapor pressure, flow multiplier,
+    enthalpy, viscosity).
+    """
+    par = fl[1]
+    if NI[n, N_GX] >= 0:
+        g = NI[n, N_GAS]
+        liquid = W[n, W_REG] == 0.0
+        y = W[n, W_Y]
+        # liquid-like by mass, as a single-fluid node: the gas share of what flows
+        xg = 1.0 - y * (1.0 - min(max(W[n, W_X], 0.0), 1.0))
+        w_l = _smooth01((0.95 - xg) / 0.1) if liquid else 0.0
+        gam = par[g, I_GAMMA] if liquid else y * W[n, W_G] + (1.0 - y) * par[g, I_GAMMA]
+        rho, psat = W[n, W_RHOM], W[n, W_PS]
+        h = W[n, W_H]
+        mu = 1.0 / (y / max(W[n, W_MU], 1e-9) + (1.0 - y) / par[g, I_MU])
+    else:
+        rho, h, mu, gam, liquid, psat = _draw(n, d, NI, W, fl)
+        # an emptying tank liquid region hands its outflow over to the ullage gas
+        if NI[n, N_KIND] == NODE_TANK_LIQUID and W[n, W_S] < 0.5:
+            rho, h_v, mu, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
+        w_l = 1.0 if liquid else 0.0
+    s = W[n, W_S] if NI[n, N_KIND] == NODE_VOLUME else 1.0
+    return rho, gam, w_l, psat, s, h, mu
+
+
+@inl
+def _q_orifice(cda, p_up, p_dn, side):
+    rho, gam, w_l, psat, s, h, mu = side
+    q = 0.0
+    if w_l > 0.0:
+        q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat)
+    if w_l < 1.0:
+        q += (1.0 - w_l) * _orifice_flow(cda, p_up, p_dn, rho, gam, False, 0.0)
+    return q * s
+
+
+@inl
+def _exchange(src, d_src, dst, q, NI, NF, W, fl, fn, fv):
+    """A stream ``q`` from volume src (slot 1) back into volume dst (slot 0)."""
+    fn[0] = dst
+    fn[1] = src
+    t = W[src, W_T]
+    if NI[src, N_GX] >= 0:
+        y = W[src, W_Y]
+        h = W[src, W_H]
+        h_g = W[src, W_HG]
+        fv[3] -= y * q
+        fv[4] -= y * q * h + (1.0 - y) * q * h_g
+        fv[5] -= (1.0 - y) * q
+        _deliver(dst, NI[src, N_FLUID], y * q, h, t, NI, NF, W, fl, fn, fv, 0)
+        _deliver(dst, NI[src, N_GAS], (1.0 - y) * q, h_g, t, NI, NF, W, fl, fn, fv, 0)
+    else:
+        h = _draw(src, d_src, NI, W, fl)[1]
+        fv[3] -= q
+        fv[4] -= q * h
+        _deliver(dst, NI[src, N_FLUID], q, h, t, NI, NF, W, fl, fn, fv, 0)
+
+
+@inl
 def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
     """Flows carried by link k.
 
     ``fn[0..3]`` are the nodes it changes (upstream, downstream, and the ullage
-    partners of either when it is tank liquid; -1 for none) and ``fv[2s]``,
-    ``fv[2s + 1]`` their mass and energy rates; ``fv[8]`` is d(mdot)/dt of a pipe.
+    partners of either when it is tank liquid; -1 for none) and ``fv[3s..3s + 2]``
+    their own-fluid mass, energy and purge-gas mass rates;
+    ``fv[FV_ACC]`` is d(mdot)/dt of a pipe.
     Returns (signed mass flow, opening).
     """
+    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
     for s in range(4):
         fn[s] = -1
-    for s in range(9):
+    for s in range(N_FV):
         fv[s] = 0.0
     a = LI[k, L_A]
     b = LI[k, L_B]
@@ -322,71 +632,99 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
         mdot = x[LI[k, L_SX]]
         fwd = mdot > 0.0 or (mdot == 0.0 and pa >= pb)
     else:
-        fwd = pa >= pb
+        # a pump always moves fluid from its inlet (a) to its outlet
+        fwd = pa >= pb or LI[k, L_CTRL] == CTRL_PUMP
         mdot = 0.0
     up = a if fwd else b
     dn = b if fwd else a
+    mixed = NI[up, N_GX] >= 0
     d_up = LI[k, L_DRAWA] if fwd else LI[k, L_DRAWB]
-    rho, h, mu, gam, liquid, psat = _draw(up, d_up, NI, W, fl)
+    side = _q_side(up, d_up, NI, W, fl)
+    rho_q, gam_q, w_l = side[0], side[1], side[2]
     s_up = W[up, W_S]
     up_kind = NI[up, N_KIND]
     pt = NI[up, N_PARTNER]
-    # an emptying tank liquid region hands its outflow over to the ullage gas
-    if up_kind == NODE_TANK_LIQUID and s_up < 0.5:
-        rho2, h2, mu2, gam2, liq2, ps2 = _draw(pt, DRAW_VAPOR, NI, W, fl)
-        rho, mu, gam, liquid, psat = rho2, mu2, gam2, liq2, ps2
+    y = W[up, W_Y] if mixed else 1.0
+    h = side[5]
+    mu_q = side[6]
     p_up = W[up, W_P]
     p_dn = W[dn, W_P]
+    back = 0.0
     if pipe:
         area = LF[k, LF_AREA]
-        r = _friction_r(mdot, rho, mu, area, LF[k, LF_DIAM], LF[k, LF_LEN], LF[k, LF_ROUGH], LF[k, LF_K])
+        r = _friction_r(mdot, rho_q, mu_q, area, LF[k, LF_DIAM], LF[k, LF_LEN], LF[k, LF_ROUGH], LF[k, LF_K])
         acc = area / LF[k, LF_LEN] * (pa - pb - r)
-        if not liquid:
-            m_ch = _choked_flux(p_up, rho, gam) * area
+        if w_l < 0.5:
+            m_ch = _choked_flux(p_up, rho_q, gam_q) * area
             if abs(mdot) > m_ch:
                 acc -= (abs(mdot) - m_ch) * (1.0 if mdot > 0 else -1.0) / CHOKE_TAU
-        fv[8] = acc
+        fv[FV_ACC] = acc
         q = abs(mdot)
         if up_kind == NODE_VOLUME:
             q *= s_up
             mdot = q if fwd else -q
     else:
-        q = _orifice_flow(LF[k, LF_CDA] * o, p_up, p_dn, rho, gam, liquid, psat)
-        if up_kind == NODE_VOLUME:
-            q *= s_up
+        cda = LF[k, LF_CDA] * o
+        if LI[k, L_CTRL] == CTRL_PUMP:
+            q = cda  # rated mass flow times how far it has spun up
+            cda = 0.0  # no near-zero-flow blending: its flow does not follow the pressures
+        else:
+            q = _q_orifice(cda, p_up, p_dn, side)
+        z = (p_up - p_dn) / max(DP_LIN, R_LIN * p_up)
+        if z < 1.0 and cda > 0.0:
+            # near zero flow, blend toward the rate the other side would give: the
+            # upstream properties switch sides at zero flow, and an unblended switch
+            # puts a kink in the flow law that Newton circles across
+            d_dn = LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA]
+            q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl)) * side[4]
+            a_up = 0.5 + 0.5 * z
+            q = a_up * q + (1.0 - a_up) * q_dn
+            if (mixed or NI[dn, N_GX] >= 0) and up_kind == NODE_VOLUME and NI[dn, N_KIND] == NODE_VOLUME:
+                # smooth upwinding where a purge gas meets another fluid: near zero flow
+                # the flow is two opposite streams, each carrying its own side's fluid,
+                # so what crosses does not jump from one side's to the other's as the
+                # flow reverses (Newton circles such a jump). It fades out by z = 1.
+                eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side) * (1.0 - _smooth01(z))
+                back = 0.5 * (math.sqrt(q * q + eps * eps) - q) * W[dn, W_S]
         mdot = q if fwd else -q
+    if back > 0.0:
+        _exchange(dn, LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA], up, back, NI, NF, W, fl, fn, fv)
+        q += back
     if q == 0.0:
         return mdot, o
+    f_up = NI[up, N_FLUID]
+    t_up = W[up, W_T]
     if up_kind == NODE_TANK_LIQUID:
         # liquid share at the liquid enthalpy, the rest as ullage gas
         h_g = _draw(pt, DRAW_VAPOR, NI, W, fl)[1]
         fn[0] = up
-        fv[0] = -s_up * q
-        fv[1] = -s_up * q * h
+        fv[0] -= s_up * q
+        fv[1] -= s_up * q * h
         fn[2] = pt
-        fv[4] = -(1.0 - s_up) * q
-        fv[5] = -(1.0 - s_up) * q * h_g
-        e = s_up * q * h + (1.0 - s_up) * q * h_g
+        fv[6] -= (1.0 - s_up) * q
+        fv[7] -= (1.0 - s_up) * q * h_g
         # the ullage does the work of pushing the liquid out
         w = W[pt, W_P] * fv[0] / NF[up, NF_RHOREF]
-        fv[5] += w
+        fv[7] += w
         fv[1] -= w
+        _deliver(dn, f_up, s_up * q, h, t_up, NI, NF, W, fl, fn, fv, 1)
+        if s_up < 1.0:
+            _deliver(dn, NI[pt, N_FLUID], (1.0 - s_up) * q, h_g, W[pt, W_T], NI, NF, W, fl, fn, fv, 1)
+    elif mixed:
+        q_g = (1.0 - y) * q
+        h_g = W[up, W_HG]
+        fn[0] = up
+        fv[0] -= y * q
+        fv[1] -= y * q * h + q_g * h_g
+        fv[2] -= q_g
+        _deliver(dn, f_up, y * q, h, t_up, NI, NF, W, fl, fn, fv, 1)
+        _deliver(dn, NI[up, N_GAS], q_g, h_g, t_up, NI, NF, W, fl, fn, fv, 1)
     else:
         if up_kind != NODE_BOUNDARY:
             fn[0] = up
-            fv[0] = -q
-            fv[1] = -q * h
-        e = q * h
-    if NI[dn, N_KIND] != NODE_BOUNDARY:
-        fn[1] = dn
-        fv[2] = q
-        fv[3] = e
-        if NI[dn, N_KIND] == NODE_TANK_LIQUID:
-            pd = NI[dn, N_PARTNER]
-            fn[3] = pd
-            w = W[pd, W_P] * q / NF[dn, NF_RHOREF]
-            fv[7] += w
-            fv[3] -= w
+            fv[0] -= q
+            fv[1] -= q * h
+        _deliver(dn, f_up, q, h, t_up, NI, NF, W, fl, fn, fv, 1)
     return mdot, o
 
 
@@ -413,10 +751,13 @@ def _scatter_link(k, NI, LI, fn, fv, out, sign):
         i = fn[s]
         if i >= 0:
             sx = NI[i, N_SX]
-            out[sx] += sign * fv[2 * s]
-            out[sx + 1] += sign * fv[2 * s + 1]
+            out[sx] += sign * fv[3 * s]
+            out[sx + 1] += sign * fv[3 * s + 1]
+            gx = NI[i, N_GX]
+            if gx >= 0:
+                out[gx] += sign * fv[3 * s + 2]
     if LI[k, L_KIND] == LINK_PIPE:
-        out[LI[k, L_SX]] += sign * fv[8]
+        out[LI[k, L_SX]] += sign * fv[FV_ACC]
 
 
 @inl
@@ -449,12 +790,22 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
         _scatter_node(i, NI, NS[i], xdot, 1.0)
     for i in range(n):
         nout[i, O_P] = W[i, W_P]
-        nout[i, O_T] = W[i, W_T]
         nout[i, O_X] = W[i, W_X]
-        nout[i, O_RHO] = W[i, W_RHO]
-        nout[i, O_H] = W[i, W_H]
-        nout[i, O_M] = x[NI[i, N_SX]] if NI[i, N_KIND] != NODE_BOUNDARY else 0.0
         nout[i, O_TW] = W[i, W_TW]
+        gx = NI[i, N_GX]
+        if gx >= 0:
+            y = W[i, W_Y]
+            nout[i, O_T] = W[i, W_T]
+            nout[i, O_RHO] = W[i, W_RHOM]
+            nout[i, O_H] = y * W[i, W_H] + (1.0 - y) * W[i, W_HG]
+            nout[i, O_M] = max(x[NI[i, N_SX]], 0.0) + max(x[gx], 0.0)
+            nout[i, O_GAS] = W[i, W_GF]
+        else:
+            nout[i, O_T] = W[i, W_T]
+            nout[i, O_RHO] = W[i, W_RHO]
+            nout[i, O_H] = W[i, W_H]
+            nout[i, O_M] = x[NI[i, N_SX]] if NI[i, N_KIND] != NODE_BOUNDARY else 0.0
+            nout[i, O_GAS] = 0.0
 
 
 @jit
@@ -566,8 +917,11 @@ def _liquid_margin(f, rho, u, model, grid, lgrid, rhol):
     return rho / r_l - 1.0
 
 
+TRACE = 1e-3  # a mixed node's fluid or gas below this share of its scale is a trace: never chopped for
+
+
 @jit
-def _chop(xk, bvec, iperm, NI, NF, fl):
+def _chop(xk, bvec, iperm, NI, NF, fl, xscale, W):
     """Damp the Newton update (Appleyard-style chop).
 
     A node may not lose more than 80% of its mass in one iteration, and an update
@@ -575,7 +929,11 @@ def _chop(xk, bvec, iperm, NI, NF, fl):
     iteration is linearized on the right side of the kink. The most restrictive
     node sets one factor for the whole update: scaling every state together keeps
     each flux's mass and energy leaving one node equal to what enters the next,
-    so a damped iterate conserves like a full one. Returns True if anything was chopped.
+    so a damped iterate conserves like a full one. In a mixed node the same holds for
+    its fluid and its purge gas, except for a trace of either, which may dip slightly
+    below zero instead (it then counts as none); its fluid's energy, for the
+    saturated-liquid test, is the node's less the gas's at the iterate's temperature.
+    Returns True if anything was chopped.
     """
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
     amin = 1.0
@@ -583,22 +941,44 @@ def _chop(xk, bvec, iperm, NI, NF, fl):
         if NI[i, N_KIND] != NODE_VOLUME or NI[i, N_PARTNER] >= 0:
             continue
         sx = NI[i, N_SX]
+        gx = NI[i, N_GX]
         m0 = xk[sx]
-        if not m0 > 0.0:
-            continue  # the step will be rejected as non-physical
         dm = bvec[iperm[sx]]
         du = bvec[iperm[sx + 1]]
         a = 1.0
-        if m0 + dm < 0.2 * m0:
-            a = 0.8 * m0 / -dm
-        f = NI[i, N_FLUID]
         vol = NF[i, NF_VOL]
-        u0 = xk[sx + 1] / m0
+        e0 = xk[sx + 1]
+        mg0 = 0.0
+        dmg = 0.0
+        ug = 0.0
+        if gx >= 0:
+            mg0 = xk[gx]
+            dmg = bvec[iperm[gx]]
+            if mg0 > TRACE * xscale[gx] and mg0 + dmg < 0.2 * mg0:
+                a = 0.8 * mg0 / -dmg
+            if m0 > TRACE * xscale[sx] and m0 + a * dm < 0.2 * m0:
+                a = 0.8 * m0 / -dm
+            g = NI[i, N_GAS]
+            ug = par[g, I_CV] * W[i, W_T] + par[g, P_OFF]
+            if not m0 > TRACE * xscale[sx]:
+                if a < amin:
+                    amin = a
+                continue
+        else:
+            if not m0 > 0.0:
+                continue  # the step will be rejected as non-physical
+            if m0 + a * dm < 0.2 * m0:
+                a = 0.8 * m0 / -dm
+        f = NI[i, N_FLUID]
+        u0 = (e0 - max(mg0, 0.0) * ug) / m0
         m1 = m0 + a * dm
-        u1 = (xk[sx + 1] + a * du) / m1
+        u1 = (e0 + a * du - max(mg0 + a * dmg, 0.0) * ug) / m1
         l0 = _liquid_margin(f, m0 / vol, u0, model, grid, lgrid, rhol)
         l1 = _liquid_margin(f, m1 / vol, u1, model, grid, lgrid, rhol)
-        if (l0 <= 0.0) != (l1 <= 0.0) and abs(l1) > 1e-3:
+        # a purge gas over the liquid pins it at the boundary (the gas pressure adds
+        # to its vapor pressure), so there it stops much closer
+        tol = 1e-5 if gx >= 0 and mg0 > TRACE * xscale[gx] else 1e-3
+        if (l0 <= 0.0) != (l1 <= 0.0) and abs(l1) > tol:
             c = l0 / (l0 - l1)
             c = c + 0.1 * (1.0 - c)
             a *= c
@@ -696,6 +1076,8 @@ JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickl
 JAC_COST = 5.0  # a Jacobian plus factorization, in right-hand-side evaluations
 MIN_SUBSTEP = 1.0 / 16.0  # smallest retry, as a fraction of dt
 WORK_BANK = 4.0  # unspent budget carried to later steps, in step budgets
+DAMP_MIN = 0.125  # smallest damping of a Newton update that keeps overshooting
+DAMP_EXTRA = 6  # extra iterations a damped solve may take
 
 
 @jit
@@ -728,7 +1110,11 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     for i in range(n):
         xk[i] = x[i]
     err_prev = 1e30
-    for it in range(NEWTON_MAX):
+    damp = 1.0
+    limit = NEWTON_MAX
+    converged = False
+    it = 0
+    while it < limit:
         ctl[8] += 1.0
         if ctl[8] > ctl[11]:
             return False
@@ -739,7 +1125,27 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         for i in range(n):
             if not math.isfinite(bvec[i]):
                 return False  # before touching xk, so it is never left half-updated
-        chopped = _chop(xk, bvec, iperm, NI, NF, fl)
+        # the size of the full update measures how Newton converges, before any chop
+        raw = 0.0
+        for i in range(n):
+            e = abs(bvec[iperm[i]]) / xscale[i]
+            if e > raw:
+                raw = e
+        chopped = _chop(xk, bvec, iperm, NI, NF, fl, xscale, W)
+        if it >= 1 and raw >= ACCEPT_TOL:
+            if raw > 0.9 * err_prev:
+                # the update is not shrinking: Newton is circling a switch (a check
+                # valve snapping open and shut against a stiff liquid line). Shorter
+                # steps settle where full ones overshoot; uniform, so it still conserves
+                damp = max(0.5 * damp, DAMP_MIN)
+                limit = NEWTON_MAX + DAMP_EXTRA
+            elif raw < 0.5 * err_prev:
+                damp = min(2.0 * damp, 1.0)
+        elif it >= 1:
+            damp = 1.0  # close enough: full steps converge from here
+        if damp < 1.0:
+            for i in range(n):
+                bvec[i] *= damp
         err = 0.0
         for i in range(n):
             d = bvec[iperm[i]]
@@ -749,13 +1155,15 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                 err = e
                 ctl[7] = i
         ctl[2] = it + 1
-        if err < NEWTON_TOL and not chopped:
+        if err < NEWTON_TOL and not chopped and damp == 1.0:
+            converged = True
             break
-        if it >= 1 and not chopped and err < ACCEPT_TOL and err > 0.5 * err_prev:
+        if it >= 1 and not chopped and damp == 1.0 and err < ACCEPT_TOL and err > 0.5 * err_prev:
             # stalled on a kink of the interpolated tables, already close: take it
             ctl[6] += 1.0
+            converged = True
             break
-        if it + 1 < NEWTON_MAX and ((it == 0 and err > NEWTON_REJAC) or (it >= 1 and err > 0.25 * err_prev)):
+        if it + 1 < limit and ((it == 0 and raw > NEWTON_REJAC) or (it >= 1 and raw > 0.25 * err_prev)):
             # a huge first update, or slow convergence: re-linearize at the current iterate
             ctl[8] += JAC_COST + 1.0
             rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
@@ -765,9 +1173,10 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             ctl[3] = 0.0
             if not _factor(h, NI, jvals, st[0], st[1], iperm, kl, ku, ab, piv):
                 return False
-        err_prev = err
-    else:
-        if chopped or err > ACCEPT_TOL:
+        err_prev = raw
+        it += 1
+    if not converged:
+        if chopped or damp < 1.0 or err > ACCEPT_TOL:
             return False
         if NEWTON_MAX > 1:
             ctl[6] += 1.0
@@ -789,9 +1198,26 @@ def _physical(x, NI):
         if not math.isfinite(x[i]):
             return False
     for i in range(NI.shape[0]):
-        if NI[i, N_KIND] == NODE_VOLUME and x[NI[i, N_SX]] <= 0.0:
+        if NI[i, N_KIND] != NODE_VOLUME:
+            continue
+        m = x[NI[i, N_SX]]
+        gx = NI[i, N_GX]
+        if gx >= 0:
+            m = max(m, 0.0) + max(x[gx], 0.0)
+        if m <= 0.0:
             return False
     return True
+
+
+@jit
+def _keep_split(NI, W):
+    """Remember mixed nodes' state at an accepted step, to start the next solves from."""
+    for i in range(NI.shape[0]):
+        if NI[i, N_GX] >= 0:
+            W[i, W_U0] = W[i, W_U]
+            W[i, W_LT0] = W[i, W_LT]
+            W[i, W_T0] = W[i, W_T]
+            W[i, W_REG0] = W[i, W_REG]
 
 
 @jit
@@ -815,7 +1241,16 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
     hrow = 0
     for s in range(n_steps):
         for k in range(nl):
-            if LI[k, L_CTRL] == CTRL_VALVE:
+            c = LI[k, L_CTRL]
+            if c == CTRL_PUMP:
+                # pressure switch on the outlet: starts at or below the low setting and
+                # runs until the outlet reaches the high one
+                p_out = W[LI[k, L_B], W_P]
+                if LV[k, V_CMD] > 0.5 and p_out >= LF[k, LF_P2]:
+                    LV[k, V_CMD] = 0.0
+                elif LV[k, V_CMD] < 0.5 and p_out <= LF[k, LF_P1]:
+                    LV[k, V_CMD] = 1.0
+            if c == CTRL_VALVE or c == CTRL_PUMP:
                 d = LV[k, V_CMD] - LV[k, V_POS]
                 if d > 0:
                     d = min(d, LV[k, V_RATE_OPEN] * dt)
@@ -853,6 +1288,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                 if _physical(xnew, NI):
                     for i in range(x.shape[0]):
                         x[i] = xnew[i]
+                    _keep_split(NI, W)
                 break
             if not _physical(xnew, NI):  # converged onto a non-physical state: retry smaller
                 stats[3] += 1.0
@@ -865,6 +1301,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                 break
             for i in range(x.shape[0]):
                 x[i] = xnew[i]
+            _keep_split(NI, W)
             stats[5] += ctl[6]
             ctl[6] = 0.0
             remaining -= h

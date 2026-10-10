@@ -25,8 +25,10 @@ from ..fluids import props
 from ..io.system import System
 from . import sensors as sensor_model
 
+MIN_BUDGET = 8.0  # smallest work per step: one Jacobian and two Newton iterations
+
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
-                "wall_temperature", "level")
+                "wall_temperature", "level", "purge_fraction")
 
 
 class Simulation:
@@ -54,17 +56,18 @@ class Simulation:
         n = net.n_states
         nn, nl = net.NI.shape[0], net.LI.shape[0]
         self.W = np.zeros((nn, kernel.N_W))
+        self._init_scratch()
         self.nout = np.zeros((nn, L.N_NO))
         self.lout = np.zeros((nl, L.N_LO))
         self.FN = np.full((nl, 4), -1, dtype=np.int64)
-        self.FV = np.zeros((nl, 9))
+        self.FV = np.zeros((nl, kernel.N_FV))
         self.NS = np.zeros((nn, 2))
         self.jvals = np.zeros(len(net.col_rows))
         self.f0 = np.zeros(n)
         self.st = (net.col_ptr, net.col_rows, net.color_ptr, net.color_cols, net.sowner, net.nl_ptr, net.nl_idx)
         self.sc = (np.zeros(n), np.zeros(n), np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64),
                    np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64), np.zeros((nn, kernel.N_W)),
-                   np.zeros(4, dtype=np.int64), np.zeros(9), np.zeros(2), np.zeros(1, dtype=np.int64))
+                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(2), np.zeros(1, dtype=np.int64))
         self.ab = np.zeros((n, 2 * net.kl + net.ku + 1))
         self.piv = np.zeros(n, dtype=np.int64)
         self.bvec = np.zeros(n)
@@ -80,6 +83,14 @@ class Simulation:
 
         table_node = (net.fluids.model[net.NI[:, L.N_FLUID]] == MODEL_TABLE) & (net.NI[:, L.N_KIND] != L.NODE_BOUNDARY)
         self._t_limit = np.where(table_node, tables.T_MAX - 1.0, np.inf)
+
+    def _init_scratch(self) -> None:
+        # a mixed node's volume split starts from the network's initial one
+        mixed = self.net.NI[:, L.N_GX] >= 0
+        for j, cols in enumerate(((kernel.W_U, kernel.W_U0), (kernel.W_LT, kernel.W_LT0), (kernel.W_T, kernel.W_T0),
+                                  (kernel.W_REG, kernel.W_REG0))):
+            for c in cols:
+                self.W[mixed, c] = self.net.mix_init[mixed, j]
 
     def _step_budget(self, share: float = 0.35) -> float:
         """Work one step may spend, in right-hand-side evaluations.
@@ -101,12 +112,20 @@ class Simulation:
             runs.append((time.perf_counter() - t0) / 20)
         # the median, not the best: leaves margin when other threads (GUI, Synnax) share the CPU
         self.rhs_seconds = cost = sorted(runs)[len(runs) // 2]
-        return float(min(max(share * self.dt / (1.5 * max(cost, 1e-9)), 12.0), 1000.0))
+        budget = share * self.dt / (1.5 * max(cost, 1e-9))
+        if budget < MIN_BUDGET:
+            # below this a step cannot build a Jacobian and still iterate: the floor holds,
+            # so hard transients can run behind the wall clock on this machine
+            self._slow_note = (f"this computer is too slow to guarantee real time for this system: a step costs "
+                               f"{1.5 * cost * MIN_BUDGET / self.dt:.0%} of its time at the smallest work budget; "
+                               "hard transients may run behind the clock")
+        return float(min(max(budget, MIN_BUDGET), 1000.0))
 
     def reset(self) -> None:
         """Back to the initial conditions of the system."""
         net = self.net
         self.x = net.x0.copy()
+        self._init_scratch()
         self.LV = net.LV.copy()
         self.NF = net.NF.copy()
         self.t = 0.0
@@ -117,6 +136,8 @@ class Simulation:
         self.ctl[9] = self.step_budget
         self.stats = np.zeros(6)
         self.notices: list[str] = []  # physics the model cannot represent, newest last
+        if getattr(self, "_slow_note", None):
+            self.notices.append(self._slow_note)
         self._limited = np.zeros(self.net.NI.shape[0], dtype=bool)
         self.rng = np.random.default_rng(self.seed)
         self._sensors = {}
@@ -219,6 +240,15 @@ class Simulation:
 
     def valve_position(self, valve: str) -> float:
         return float(self.LV[self._valve(valve), L.V_POS])
+
+    def pumps(self) -> list[str]:
+        return list(self.net.pumps)
+
+    def pump_running(self, pump: str) -> bool:
+        """Whether a pump's pressure switch has it on."""
+        if pump not in self.net.pumps:
+            raise KeyError(f"no pump {pump!r}; pumps: {', '.join(self.net.pumps)}")
+        return bool(self.LV[self.net.pumps[pump], L.V_CMD] > 0.5)
 
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
         """Change a pressure boundary during a run (a supply regulator setting, say)."""
@@ -324,7 +354,8 @@ class Simulation:
         if s.type == "mass_flow":
             return "link", self.link(s.at)
         if s.type == "valve_position":
-            return "valve", self._valve(s.at)
+            # on a pump it reads how far it has spun up (0 stopped, 1 running)
+            return "valve", self.net.pumps[s.at] if s.at in self.net.pumps else self._valve(s.at)
         if s.type == "mass":
             return "mass", 0
         if s.type == "level":
@@ -378,7 +409,7 @@ class Simulation:
         if kind == "level":
             return self._level(st.spec.at.split(".")[0])
         col = {"pressure": L.O_P, "temperature": L.O_T, "quality": L.O_X, "density": L.O_RHO,
-               "wall_temperature": L.O_TW}[t]
+               "wall_temperature": L.O_TW, "purge_fraction": L.O_GAS}[t]
         return float(self.nout[idx, col])
 
 

@@ -31,11 +31,14 @@ def test_engine_stand_runs_faster_than_real_time():
     run(1.0)
     sim.close("V-OXM", "V-FUM")
     run(0.3)
+    shut = sim.read("FM-OX")
+    sim.open("V-P1", "V-P2", "V-P3", "V-P4")  # GN2 purges of both feeds and the chambers
+    run(1.0)
     t = np.array(times) / 0.01  # wall seconds per simulated second
-    # generous margins for slow CI machines; typical is ~0.1 mean, ~0.5 worst
+    # generous margins for slow CI machines; typical is ~0.2 mean, ~0.7 worst
     assert t.mean() < 0.5
     assert t.max() < 1.5
-    assert sim.read("FM-OX") == pytest.approx(0.0, abs=0.05)
+    assert shut == pytest.approx(0.0, abs=0.05)
 
 
 def _feed_transient(budget):
@@ -65,3 +68,26 @@ def test_small_budget_keeps_the_valve_transient():
     assert ref[arrival[0]] > 100 * 6894.757 and small[arrival[1]] > 100 * 6894.757
     assert abs(arrival[0] - arrival[1]) <= 3  # within 30 ms
     assert np.mean(small[-30:]) == pytest.approx(np.mean(ref[-30:]), rel=0.03)
+
+
+@pytest.mark.slow
+def test_stand_purge_converges():
+    """With a generous budget, GN2 purging the LOX feed after a run rarely forces a step.
+
+    LOX trapped at saturation under the purge gas is still a hard spot, and the count
+    varies from machine to machine (0 to about 30 here), so this guards against the
+    ~190 (13 % of the purge) the stand took before the chop covered purge nodes.
+    """
+    sim = Simulation(engine_test_stand(), step_budget=200)
+    sim.run(0.1)
+    sim.open("V-OXP", "V-FUP")
+    sim.run(1.0)
+    sim.close("V-OXV", "V-FUV")
+    sim.run(0.5)
+    sim.open("V-OXM", "V-FUM")
+    sim.run(1.0)
+    sim.close("V-OXM", "V-FUM")
+    sim.run(0.3)
+    sim.open("V-P1", "V-P2", "V-P3", "V-P4")
+    sim.run(1.5)
+    assert sim.solver_stats()["forced_steps"] < 75

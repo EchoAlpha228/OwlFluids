@@ -14,7 +14,7 @@ instrumentation on a 16-bit DAQ, not of any one transducer; give a sensor its ow
 - Mass flow: 1% of reading, so a meter on a still line reads 0.
 - Level: 0.2% of the tank plus slosh while the level is moving.
 - Mass (load cell): 0.02 kg plus 0.01% of reading.
-- Valve position, quality, density: exact.
+- Valve position, quality, density, purge fraction: exact.
 """
 
 from __future__ import annotations

@@ -4,7 +4,8 @@ Three runtime models keep property evaluation cheap:
 
 * ``liquid``: nearly incompressible liquid with a constant bulk modulus
   (water and ethanol by default).
-* ``ideal``: ideal gas with constant heat capacities (opt-in for gases).
+* ``ideal``: ideal gas with constant heat capacities (opt-in for gases; the only
+  model for helium and air, which OwlFluids uses as gases).
 * ``table``: real-fluid lookup table on (density, internal energy) covering gas,
   liquid, supercritical and two-phase states (default for oxygen, methane,
   nitrogen and nitrous oxide, so GOX/LOX and GN2/LN2 are the same fluid).
@@ -27,7 +28,14 @@ MODEL_CODES = {"ideal": MODEL_IDEAL, "liquid": MODEL_LIQUID, "table": MODEL_TABL
 I_R, I_CV, I_GAMMA, I_MU = range(4)
 # liquid params
 L_RHO0, L_K, L_PREF, L_CV, L_T0, L_U0, L_PSAT, L_MU = range(8)
-N_PAR = 8
+# every fluid: approximate heat capacity and enthalpy offset, h ~= cp T + off near room
+# temperature in that fluid's own energy reference. A purge gas mixed into another
+# fluid's line is an ideal gas on this reference, so it carries the same enthalpy as
+# in its own (table) lines, and a fluid that ends up in a volume holding only another
+# fluid is converted at its temperature.
+P_CPA, P_OFF = 8, 9
+N_PAR = 10
+T_REF = 300.0
 
 R_UNIVERSAL = 8.314462618
 
@@ -39,7 +47,12 @@ FLUIDS = {
     "methane": ("Methane", "table", ("table", "ideal")),
     "nitrogen": ("Nitrogen", "table", ("table", "ideal")),
     "nitrous": ("NitrousOxide", "table", ("table", "ideal")),
+    "helium": ("Helium", "ideal", ("ideal",)),
+    "air": ("Air", "ideal", ("ideal",)),
 }
+# gases that may purge (mix into) a line of another fluid. When two of them meet,
+# the one listed first is the purge gas and the other the line's own fluid.
+PURGE_GASES = ("helium", "nitrogen", "air")
 TABLE_FLUIDS = [v[0] for v in FLUIDS.values() if "table" in v[2]]
 
 ALIASES = {
@@ -49,6 +62,8 @@ ALIASES = {
     "n2o": "nitrous", "nitrous": "nitrous", "nitrous oxide": "nitrous", "nitrousoxide": "nitrous",
     "water": "water", "h2o": "water",
     "ethanol": "ethanol", "etoh": "ethanol", "c2h5oh": "ethanol",
+    "helium": "helium", "he": "helium", "ghe": "helium",
+    "air": "air",
 }
 
 
@@ -107,16 +122,25 @@ class FluidSet:
                 self.ltab[i] = data["ltab"]
                 self.lgrid[i] = data["lgrid"]
                 self.rhol[i] = data["rho_l_of_u"]
-            elif mdl == "ideal":
+            if mdl != "liquid":
+                # ideal-gas parameters for every gas, also table ones: a purge gas mixed
+                # into another fluid's line is modelled as an ideal gas
                 import CoolProp.CoolProp as CP
 
-                st.update(CP.PT_INPUTS, 101325.0, 300.0)
+                st.update(CP.PT_INPUTS, 101325.0, T_REF)
                 r = R_UNIVERSAL / st.molar_mass()
                 cp0 = st.cp0mass()
                 self.par[i, I_R] = r
                 self.par[i, I_CV] = cp0 - r
                 self.par[i, I_GAMMA] = cp0 / (cp0 - r)
-                self.par[i, I_MU] = st.viscosity()
+                try:
+                    self.par[i, I_MU] = st.viscosity()
+                except ValueError:  # CoolProp has no viscosity model for some fluids (nitrous)
+                    self.par[i, I_MU] = 1.5e-5
+                self.par[i, P_CPA] = cp0
+                if mdl == "table":
+                    rho, u = self.rho_u_from_pt(i, 101325.0, T_REF)
+                    self.par[i, P_OFF] = u + 101325.0 / rho - cp0 * T_REF
             else:
                 import CoolProp.CoolProp as CP
 
@@ -133,6 +157,8 @@ class FluidSet:
                 self.par[i, L_MU] = st.viscosity()
                 st.update(CP.QT_INPUTS, 0.0, t0)
                 self.par[i, L_PSAT] = st.p()
+                self.par[i, P_CPA] = self.par[i, L_CV]
+                self.par[i, P_OFF] = self.par[i, L_U0] - self.par[i, L_CV] * t0
 
     def arrays(self) -> tuple:
         """The packed arrays in the order the kernel expects them."""

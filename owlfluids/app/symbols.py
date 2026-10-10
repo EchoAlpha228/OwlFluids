@@ -29,6 +29,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "check_valve": ((50, 34), {"in": (-25, 0), "out": (25, 0)}),
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
     "regulator": ((56, 50), {"in": (-28, 0), "out": (28, 0)}),
+    "air_pump": ((44, 44), {"out": (22, 0)}),
 }
 DEFAULT_SHAPE = ((50, 40), {})
 
@@ -126,6 +127,12 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         for i in range(5):
             path.lineTo(QPointF(-6 if i % 2 == 0 else 6, -6 - i * 3.5))
         p.drawPath(path)
+    elif type_name == "air_pump":
+        # compressor: a circle with a wedge pointing at its outlet, green while it runs
+        p.setBrush(QBrush(valve_colour(state.get("position"))))
+        p.drawEllipse(QRectF(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4))
+        p.drawPolyline(QPolygonF([QPointF(-w / 2 + 6, -h / 2 + 10), QPointF(w / 2 - 2, 0),
+                                  QPointF(-w / 2 + 6, h / 2 - 10)]))
     elif type_name == "regulator":
         p.drawRect(QRectF(-w / 2 + 6, -6, w - 12, h / 2 + 2))
         p.setBrush(QBrush(valve_colour(state.get("position"))))

@@ -5,15 +5,21 @@ Build a system from tanks, tubing, fittings, valves, regulators and orifices, se
 starting conditions, and run it against the wall clock while you (or a sequence,
 or Synnax) open and close valves.
 
-- **Real time first.** An 81-component LOX/ethanol stand takes about 0.06–0.1 ms
-  per 1 ms step in steady operation and about 0.2 ms during valve transients on a
-  desktop CPU, and every step has a work budget, timed on your machine at start-up,
+- **Real time first.** An 81-component LOX/ethanol stand takes about 0.08–0.1 ms
+  per 1 ms step in steady operation and about 0.2 ms during valve transients and
+  purges on a desktop CPU, and every step has a work budget, timed on your machine at start-up,
   so hard transients (LOX hitting a warm line) can't stall the clock. A slower CPU
-  gets more forced steps instead of falling behind.
+  gets more forced steps instead of falling behind; if a machine is too slow even
+  for the smallest budget, the simulation says so when it starts.
 - **Real fluids.** Water, ethanol, oxygen (GOX/LOX), methane, nitrogen (GN2/LN2) and
   nitrous oxide, from ambient to ~3,000 psi and cryogenic to room temperature.
   Gases and cryogens use tables built once from CoolProp or REFPROP, including
-  two-phase states (saturated tanks, flashing, chilldown).
+  two-phase states (saturated tanks, flashing, chilldown). Helium and air are
+  available as gases.
+- **Purges and shop air.** Helium, nitrogen or air can purge a propellant or
+  water line: the gas pushes the liquid out, and a `purge_fraction` sensor shows
+  how clear the line is. After a purge the line fills again normally. Air pumps
+  (compressors) switch on at a low pressure and off at a high one.
 - **Desktop app.** Drag parts onto a schematic, wire their ports, run, and click
   valves; live values on the drawing and strip charts below.
 - **Scriptable and headless.** The same simulation runs from Python, the command
@@ -81,14 +87,20 @@ sensors:
 - {id: PT-K1, type: pressure, at: K1.port, units: psi}
 ```
 
-Component types: `tank` (gas, or saturated liquid/vapor with `fill`),
+Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally with a
+`wall_mass` shell that stores heat),
 `pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`,
 `pipe` (friction, inertia, optional wall for chilldown), `tee`, `fitting`,
-`orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`.
+`orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`,
+`air_pump` (a compressor with a pressure switch: `flow`, `start_pressure`,
+`stop_pressure`; a `valve_position` sensor on it reads 1 while it runs).
 `owlfluids app` shows every parameter with its default and meaning.
 
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
-`valve_position`, `mass`, `level` (a tank's liquid fill, shown in %), `quality`
+`valve_position`, `mass`, `level` (a tank's liquid fill, shown in %),
+`purge_fraction` (share of a node's volume that is purge gas, in %; in LOX, nitrous,
+LN2 and methane lines it is the gas's share of the pressure, so a node still full of
+LOX can read 30 % while gas pushes on it), `quality`
 and `density`. Display units default to psi, °F, kg/s, kg and %; set `units:`
 to change one (temperatures defaulted to K before October 2026, so a sensor
 without `units:` now logs and sends °F). Sensors read with realistic noise and lag for their type: a
@@ -104,6 +116,39 @@ Lines start in equilibrium with the tank or volume they are open to: a feed line
 on a LOX tank starts full of LOX at tank pressure, a regulated line starts at its
 setpoint, and anything behind a closed valve starts at the system's initial
 pressure and temperature (`prime_lines: false` turns this off).
+
+### Purges
+
+Saturated tanks (`tank` with `fill`) hold liquid and vapor in equilibrium, so a
+nitrous bottle's pressure follows its temperature as it empties and cools, and a run
+tank filled from the bottom while its vent is open settles on the vapor pressure of
+what it holds. `wall_mass` adds the tank shell, which warms the boiling nitrous;
+`film_coefficient` (default 1000 W/m2K) sets how fast, and is the value to tune
+against test data.
+
+Purges are meant to run the way stands run them: vent the line to ambient first,
+then flow purge gas for a few seconds. Lines the purge gas has not reached cost
+about the same as plain lines.
+
+Connect a purge bottle (a `tank` of helium, nitrogen or air), usually
+through a regulator, a valve and a check valve, to any line; `examples/lox-purge.yaml`
+purges a LOX feed with helium, and `examples/nitrous-fill.yaml` is a nitrous fill
+cart whose line is dumped, swept with shop air and filled again. Where the purge
+gas and the line's own fluid can both flow (check valves, relief valves,
+regulators and pumps pass flow one way), each node carries both at one
+temperature. Water and ethanol fill their share of the node, compressed by the
+total pressure, and the gas fills the rest. Other fluids (LOX, nitrous, LN2,
+methane) keep their own property tables over the node, as in a line of that fluid
+alone, and the purge gas adds its partial pressure. Flow out of such a node is
+homogeneous (each fluid leaves in proportion to its mass).
+
+Only a purge gas may meet another fluid. Two propellants meeting (GOX in a methane
+line) is still a build error, since that would need combustion. When two purge
+gases meet (helium into a nitrogen line), the one listed first in helium,
+nitrogen, air is the purge gas. A tank, pressurized tank or `boundary` holds only its
+own fluid: purge gas flowing into it is counted as that fluid at the same
+temperature, and the builder lists each place this can happen. Give a vent
+boundary the line's own fluid.
 
 ### Python
 
@@ -166,13 +211,26 @@ so subcooled LOX and two-phase states match CoolProp to about 1% in pressure
 Validation tests (`pytest`) cover isentropic gas blowdown, closed-system
 equalization (mass and energy conserved), Torricelli drain, Colebrook pipe flow,
 Joukowsky water hammer, table accuracy against CoolProp, LOX feed priming and
-flow, a self-pressurizing LN2 dewar, nitrous blowdown, line chilldown, and the
-real-time gate on the 81-component stand.
+flow, a self-pressurizing LN2 dewar, nitrous blowdown, line chilldown, purges with
+every purge gas (mass conserved, LOX, water, ethanol and methane pushed out), the
+nitrous fill-purge-refill sequence, air pump switching, and the real-time gate on
+the 81-component stand, purges included.
 
 ## Limits worth knowing
 
-- One fluid per connected line (separate gases from propellants with a tank or
-  a pressurized tank); no mixing of species.
+- One fluid per connected line, plus one purge gas (separate propellants with a
+  tank or a pressurized tank). A purge gas is an ideal gas with constant heat
+  capacity and does not dissolve in the liquid. In LOX, nitrous, LN2 and methane
+  lines it spreads over the whole node, so a gas pocket pushing on liquid there
+  presses less hard than a real one: purges clear these lines, a little more
+  gently. For the same reason, LOX trapped at saturation under a purge gas (a dead
+  leg behind a closed valve) is stiff, so a purge into a LOX line can take some
+  forced steps even with a large budget. Near zero flow, nodes on either side of a
+  link swap a small stream (this keeps Newton from circling the flow reversal), so
+  a purge gas and a line's fluid sitting still across an open valve slowly blend.
+  The purge gas never condenses: GN2 in a line still at LOX temperature would
+  really liquefy above about 50 psi. An air pump delivers its rated mass flow at a
+  fixed temperature (after its aftercooler) whatever the outlet pressure.
 - Two-phase flow is homogeneous equilibrium. Violent events (LOX into a warm line,
   geysering) are stable and conserve mass and energy but are not resolved in
   detail; the status bar counts "forced steps" when a step used its whole budget.

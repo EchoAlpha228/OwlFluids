@@ -131,9 +131,18 @@ class Tank(ComponentType):
         Param("pressure", "pressure", None, "initial pressure (gas, or saturated if fill is given)"),
         Param("temperature", "temperature", None, "initial temperature"),
         Param("fill", None, None, "liquid volume fraction 0-1 for a saturated liquid/vapor fill"),
+        Param("wall_mass", "mass", None,
+              "mass of the tank shell; enables a wall that stores heat and warms the fluid as it boils"),
+        Param("wall_material", "choice", "steel", "tank shell material", tuple(MATERIALS)),
+        Param("film_coefficient", None, 1000.0,
+              "fluid-to-wall heat transfer coefficient, W/m2K (boiling nitrous: about 1000-3000; tune to test data)"),
+        Param("outer_coefficient", None, 5.0,
+              "wall-to-ambient heat transfer coefficient, W/m2K (heat_transfer, if set, adds to it)"),
     ) + HEAT_PARAMS
-    help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous); "
-            "'top' draws vapor, 'bottom' draws liquid, 'port' draws the mixture.")
+    help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous) in "
+            "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; "
+            "'top' draws vapor, 'bottom' draws liquid, 'port' draws the mixture. A 'wall_mass' gives "
+            "it a shell that feeds heat into the boiling fluid (a nitrous bottle stays warmer as it empties).")
 
     @classmethod
     def build(cls, b, comp):
@@ -148,8 +157,19 @@ class Tank(ComponentType):
             if p is None or t is None:
                 raise ValueError(f"{comp.id} needs pressure and temperature (or temperature and fill)")
             init = ("pt", p, t)
+        wall = None
+        m_wall = cls.param(comp, "wall_mass")
+        if m_wall:
+            # shell area of a cylinder four diameters long
+            d = (vol / math.pi) ** (1.0 / 3.0)
+            area = 4.5 * math.pi * d * d
+            mat = MATERIALS[cls.param(comp, "wall_material")]
+            wall = (float(m_wall) * mat["cp"], float(cls.param(comp, "film_coefficient")) * area,
+                    float(cls.param(comp, "outer_coefficient")) * area + float(cls.param(comp, "heat_transfer") or 0.0),
+                    cls.param(comp, "ambient_temperature"),
+                    True)  # the shell starts at the fluid's temperature
         n = b.new_node(comp, "", fluid=fluid, volume=vol, init=init,
-                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")), wall=wall)
         b.bind_port(comp, "top", n, DRAW_VAPOR)
         b.bind_port(comp, "bottom", n, DRAW_LIQUID)
         b.bind_port(comp, "port", n, DRAW_MIX)
@@ -447,14 +467,42 @@ class Regulator(ComponentType):
                       p1=cls.require(comp, "setpoint"), p2=max(cls.param(comp, "droop"), 100.0))
 
 
+class AirPump(ComponentType):
+    type_name = "air_pump"
+    label = "Air pump / compressor"
+    category = "Flow control"
+    ports = ("out",)
+    params = (
+        Param("flow", "mass_flow", None, "mass flow while running"),
+        Param("start_pressure", "pressure", None, "outlet pressure at or below which it switches on"),
+        Param("stop_pressure", "pressure", None, "outlet pressure at which it switches off"),
+        Param("fluid", "text", "air", "what it pumps (drawn from the atmosphere)"),
+        Param("temperature", "temperature", "293.15 K", "delivery temperature (after its aftercooler)"),
+        Param("spin_up", "time", "0.5 s", "time to reach full flow, and to stop"),
+        Param("volume", "volume", "50 cc", "internal volume at its outlet"),
+    )
+    help = ("Compressor with a pressure switch: it starts when its outlet falls to the start pressure "
+            "and runs at its rated flow until the outlet reaches the stop pressure.")
+
+    @classmethod
+    def build(cls, b, comp):
+        p_on = cls.require(comp, "start_pressure")
+        p_off = cls.require(comp, "stop_pressure")
+        if p_off <= p_on:
+            raise ValueError(f"{comp.id}: stop_pressure must be above start_pressure")
+        b.add_pump(comp, "out", cls.param(comp, "fluid"), cls.param(comp, "temperature"), cls.require(comp, "flow"),
+                   p_on, p_off, cls.param(comp, "spin_up"), cls.param(comp, "volume"))
+
+
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
     for c in (Tank, PressurizedTank, Boundary, Volume, Pipe, Tee, Fitting, Orifice, Valve, ThrottleValve,
-              CheckValve, ReliefValve, Regulator)
+              CheckValve, ReliefValve, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",
            "solenoid": "valve", "ball_valve": "valve", "needle_valve": "throttle_valve", "tubing": "pipe",
-           "line": "pipe", "manifold": "volume", "cross": "tee", "junction": "tee"}
+           "line": "pipe", "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
+           "pump": "air_pump"}
 
 
 def get_type(name: str) -> type[ComponentType]:

@@ -61,7 +61,7 @@ def test_edit_save_and_run(app, tmp_path):
 @pytest.mark.gui
 def test_examples_load_and_lay_out(app):
     w = MainWindow()
-    for name in ("gn2-blowdown", "lox-feed", "test-stand"):
+    for name in ("gn2-blowdown", "lox-feed", "test-stand", "nitrous-fill"):
         w.load_example(name)
         assert len(w.scene.items_by_id) == len(w.scene.system.components)
         assert all(c.position is not None for c in w.scene.system.components)

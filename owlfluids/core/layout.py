@@ -1,8 +1,10 @@
 """Column layout of the packed network arrays shared by the compiler and kernel."""
 
 # ---- node integer columns
-N_KIND, N_FLUID, N_PARTNER, N_SX, N_WALL = range(5)
-N_NI = 5
+N_KIND, N_FLUID, N_PARTNER, N_SX, N_WALL, N_GAS, N_GX = range(7)
+N_NI = 7
+# N_GAS: the purge gas mixed into the node's own fluid (-1 for a node holding one fluid);
+# N_GX: index of its mass state (its energy follows), after the node's other states
 # node kinds
 NODE_VOLUME = 0
 NODE_BOUNDARY = 1
@@ -14,8 +16,8 @@ NODE_TANK_LIQUID = 2  # liquid region of a pressurized tank; pressure comes from
 N_NF = 12
 
 # ---- node outputs
-(O_P, O_T, O_X, O_RHO, O_H, O_M, O_TW) = range(7)
-N_NO = 7
+(O_P, O_T, O_X, O_RHO, O_H, O_M, O_TW, O_GAS) = range(8)
+N_NO = 8  # O_GAS: volume fraction of purge gas in a mixed node (0 elsewhere)
 
 # ---- link integer columns
 L_KIND, L_A, L_B, L_DRAWA, L_DRAWB, L_CTRL, L_SX = range(7)
@@ -32,6 +34,7 @@ CTRL_VALVE = 1  # commanded, with actuator travel time
 CTRL_CHECK = 2  # opens on forward pressure difference
 CTRL_RELIEF = 3  # opens when upstream exceeds downstream by the set pressure
 CTRL_REGULATOR = 4  # throttles to hold the downstream pressure at the setpoint
+CTRL_PUMP = 5  # fixed mass flow from its inlet while running; on below LF_P1, off above LF_P2 (LF_CDA: kg/s)
 
 # ---- link float columns
 LF_CDA, LF_AREA, LF_LEN, LF_DIAM, LF_ROUGH, LF_K, LF_P1, LF_P2, LF_P3 = range(9)

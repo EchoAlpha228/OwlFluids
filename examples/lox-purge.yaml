@@ -1,0 +1,42 @@
+name: LOX feed with helium purge
+components:
+- {id: TK, type: pressurized_tank, liquid: oxygen, pressurant: nitrogen, volume: 60 L, fill: 0.85, pressure: 300 psi, liquid_temperature: 90 K, diameter: 0.3 m, at: [0, 0]}
+- {id: K-N2, type: tank, fluid: nitrogen, volume: 49 L, pressure: 4000 psi, temperature: 20 C, at: [0, -200]}
+- {id: REG, type: regulator, cv: 0.4, setpoint: 300 psi, droop: 20 psi, at: [150, -200]}
+- {id: V-P, type: valve, cv: 0.5, normally: open, at: [300, -200]}
+- {id: L-P, type: pipe, length: 2 m, diameter: 8 mm, at: [300, -100]}
+- {id: L1, type: pipe, length: 1.5 m, diameter: 19 mm, at: [0, 150]}
+- {id: F1, type: fitting, kind: elbow90, diameter: 19 mm, at: [150, 150]}
+- {id: V-M, type: valve, cv: 6, open_time: 150 ms, at: [300, 150]}
+- {id: L2, type: pipe, length: 1 m, diameter: 19 mm, at: [450, 150]}
+- {id: INJ, type: orifice, cda: 60 mm2, at: [600, 150]}
+- {id: AMB, type: boundary, fluid: oxygen, at: [750, 150]}
+- {id: K-HE, type: tank, fluid: helium, volume: 15 L, pressure: 2000 psi, temperature: 20 C, at: [300, 300]}
+- {id: REG-PG, type: regulator, cv: 0.2, setpoint: 150 psi, droop: 10 psi, at: [450, 300]}
+- {id: V-PG, type: valve, cv: 0.2, open_time: 50 ms, at: [600, 300]}
+- {id: CK-PG, type: check_valve, cv: 0.2, at: [600, 230]}
+connections:
+- [K-N2.port, REG.in]
+- [REG.out, V-P.in]
+- [V-P.out, L-P.in]
+- [L-P.out, TK.gas]
+- [TK.liquid, L1.in]
+- [L1.out, F1.in]
+- [F1.out, V-M.in]
+- [V-M.out, L2.in]
+- [L2.out, INJ.in]
+- [INJ.out, AMB.port]
+- [K-HE.port, REG-PG.in]
+- [REG-PG.out, V-PG.in]
+- [V-PG.out, CK-PG.in]
+- [CK-PG.out, L2.in]
+sensors:
+- {id: PT-TK, type: pressure, at: TK.gas, units: psi}
+- {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
+- {id: TC-INJ, type: temperature, at: INJ.in, units: F}
+- {id: FM-LOX, type: mass_flow, at: V-M, units: kg/s}
+- {id: M-LOX, type: mass, at: TK, units: kg}
+- {id: LL-LOX, type: level, at: TK, units: '%'}
+- {id: PT-PG, type: pressure, at: V-PG.out, units: psi}
+- {id: FM-PG, type: mass_flow, at: CK-PG, units: kg/s}
+- {id: PF-INJ, type: purge_fraction, at: INJ.in, units: '%'}

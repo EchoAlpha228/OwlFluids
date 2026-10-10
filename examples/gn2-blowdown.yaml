@@ -10,5 +10,5 @@ connections:
 - [L1.out, ATM.port]
 sensors:
 - {id: PT-K1, type: pressure, at: K1.port, units: psi}
-- {id: TC-K1, type: temperature, at: K1.port, units: K}
+- {id: TC-K1, type: temperature, at: K1.port, units: F}
 - {id: FM-V1, type: mass_flow, at: V1, units: kg/s}

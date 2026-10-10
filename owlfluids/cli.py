@@ -240,7 +240,7 @@ def cmd_bench(args) -> int:
     sim.run(0.1)
     phases = [("pressurize", ["V-OXP", "V-FUP"], [], 1.0), ("lock up", [], ["V-OXV", "V-FUV"], 1.0),
               ("main valves open", ["V-OXM", "V-FUM"], [], 0.5), ("steady flow", [], [], 1.5),
-              ("shutdown", [], ["V-OXM", "V-FUM"], 1.0)]
+              ("shutdown", [], ["V-OXM", "V-FUM"], 1.0), ("purge", ["V-P1", "V-P2", "V-P3", "V-P4"], [], 1.5)]
     worst = 0.0
     for name, op, cl, dur in phases:
         for v in op:
