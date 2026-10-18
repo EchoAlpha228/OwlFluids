@@ -2,7 +2,7 @@ name: GN2 bottle blowdown
 components:
 - {id: K1, type: tank, fluid: nitrogen, volume: 49 L, pressure: 2400 psi, temperature: 20 C, at: [0, 0]}
 - {id: V1, type: valve, cv: 0.3, open_time: 50 ms, at: [150, 0]}
-- {id: L1, type: pipe, length: 2 m, diameter: 0.25 in, at: [300, 0]}
+- {id: L1, type: pipe, at: [300, 0]}
 - {id: ATM, type: boundary, fluid: nitrogen, at: [450, 0]}
 connections:
 - [K1.port, V1.in]

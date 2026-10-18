@@ -12,10 +12,10 @@ def lox_feed():
     s = System("lox feed")
     s.add("TK", "pressurized_tank", liquid="oxygen", pressurant="nitrogen", volume="60 L", fill=0.85,
           pressure="80 psi", liquid_temperature="90 K")
-    s.add("L1", "pipe", length="1.5 m", diameter="19 mm")
+    s.add("L1", "pipe")
     s.add("F1", "fitting", kind="elbow90", diameter="19 mm")
     s.add("V1", "valve", cv=6)
-    s.add("L2", "pipe", length="1 m", diameter="19 mm")
+    s.add("L2", "pipe")
     s.add("INJ", "orifice", cda="60 mm2")
     s.add("AMB", "boundary", fluid="oxygen")
     for a, b in [("TK.liquid", "L1.in"), ("L1.out", "F1.in"), ("F1.out", "V1.in"), ("V1.out", "L2.in"),

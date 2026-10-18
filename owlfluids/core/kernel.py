@@ -1,9 +1,9 @@
 """The compiled time-stepping kernel.
 
 State vector ``x``: for every non-boundary node its mass ``m`` and total internal
-energy ``U`` (plus wall temperature when the node has a wall), and for every
-pipe link its mass flow. Orifices, valves and fittings are quasi-steady: their
-flow is an algebraic function of the node states on either side.
+energy ``U`` (plus wall temperature when the node has a wall). Lines are not
+modelled: every link (orifice, valve, fitting, regulator) is quasi-steady, its
+flow an algebraic function of the node states on either side.
 
 Each step is backward Euler, solved by chord Newton iterations
 
@@ -64,17 +64,9 @@ from .layout import (
     L_CTRL,
     L_DRAWA,
     L_DRAWB,
-    L_KIND,
-    L_SX,
-    LF_AREA,
     LF_CDA,
-    LF_DIAM,
-    LF_K,
-    LF_LEN,
     LF_P1,
     LF_P2,
-    LF_ROUGH,
-    LINK_PIPE,
     LO_MDOT,
     LO_OPEN,
     N_FLUID,
@@ -125,7 +117,6 @@ G0 = 9.80665
 EXCH = 0.1  # exchange stream at zero flow, as a share of the flow at the linear band's edge
 DP_LIN = 2000.0  # Pa; below this pressure difference flow is linear in dP (keeps the Jacobian finite)
 R_LIN = 1e-3  # gas pressure ratio band near 1 treated the same way
-CHOKE_TAU = 1e-3  # s; relaxation time that holds pipe gas flow at the choked limit
 
 MIX_ITER = 40  # most iterations of each solve in a mixed node's state
 
@@ -139,10 +130,8 @@ MIX_ITER = 40  # most iterations of each solve in a mixed node's state
  W_REG, W_PS, W_GF, W_U0, W_LT0, W_T0, W_REG0) = range(23)
 N_W = 23
 
-# per-link flows: for each of 4 nodes, own-fluid mass, energy and purge-gas mass;
-# then d(mdot)/dt of a pipe
-N_FV = 13
-FV_ACC = 12
+# per-link flows: for each of 4 nodes, own-fluid mass, energy and purge-gas mass
+N_FV = 12
 
 
 @jit
@@ -178,28 +167,6 @@ def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat):
     if rr != r:
         val *= (1.0 - r) / R_LIN
     return val
-
-
-@jit
-def _choked_flux(p_up, rho, gam):
-    g = max(gam, 1.01)
-    return math.sqrt(g * rho * p_up * (2.0 / (g + 1.0)) ** ((g + 1.0) / (g - 1.0)))
-
-
-@jit
-def _friction_r(mdot, rho, mu, area, diam, length, rough, k_minor):
-    """Pressure drop (signed with mdot) along a pipe of the given size."""
-    am = abs(mdot)
-    re = am * diam / (area * mu)
-    if re < 2000.0:
-        # laminar: dP = 32 mu L v / D^2, written to stay finite at zero flow
-        lam = 32.0 * mu * length * mdot / (rho * area * diam * diam)
-        return lam + k_minor * mdot * am / (2.0 * rho * area * area)
-    e = rough / diam
-    a = (2.457 * math.log(1.0 / ((7.0 / re) ** 0.9 + 0.27 * e))) ** 16
-    b = (37530.0 / re) ** 16
-    f = 8.0 * ((8.0 / re) ** 12 + 1.0 / (a + b) ** 1.5) ** (1.0 / 12.0)
-    return (f * length / diam + k_minor) * mdot * am / (2.0 * rho * area * area)
 
 
 @inl
@@ -550,7 +517,7 @@ def _q_side(n, d, NI, W, fl):
     """What leaves node n through a port drawing ``d``, and sets the flow rate.
 
     Returns (density, gamma, liquid-like weight, vapor pressure, flow multiplier,
-    enthalpy, viscosity).
+    enthalpy).
     """
     par = fl[1]
     if NI[n, N_GX] >= 0:
@@ -563,20 +530,19 @@ def _q_side(n, d, NI, W, fl):
         gam = par[g, I_GAMMA] if liquid else y * W[n, W_G] + (1.0 - y) * par[g, I_GAMMA]
         rho, psat = W[n, W_RHOM], W[n, W_PS]
         h = W[n, W_H]
-        mu = 1.0 / (y / max(W[n, W_MU], 1e-9) + (1.0 - y) / par[g, I_MU])
     else:
-        rho, h, mu, gam, liquid, psat = _draw(n, d, NI, W, fl)
+        rho, h, _, gam, liquid, psat = _draw(n, d, NI, W, fl)
         # an emptying tank liquid region hands its outflow over to the ullage gas
         if NI[n, N_KIND] == NODE_TANK_LIQUID and W[n, W_S] < 0.5:
-            rho, h_v, mu, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
+            rho, h_v, _, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
         w_l = 1.0 if liquid else 0.0
     s = W[n, W_S] if NI[n, N_KIND] == NODE_VOLUME else 1.0
-    return rho, gam, w_l, psat, s, h, mu
+    return rho, gam, w_l, psat, s, h
 
 
 @inl
 def _q_orifice(cda, p_up, p_dn, side):
-    rho, gam, w_l, psat, s, h, mu = side
+    rho, gam, w_l, psat, s, h = side
     q = 0.0
     if w_l > 0.0:
         q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat)
@@ -608,13 +574,12 @@ def _exchange(src, d_src, dst, q, NI, NF, W, fl, fn, fv):
 
 
 @inl
-def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
+def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
     """Flows carried by link k.
 
     ``fn[0..3]`` are the nodes it changes (upstream, downstream, and the ullage
     partners of either when it is tank liquid; -1 for none) and ``fv[3s..3s + 2]``
-    their own-fluid mass, energy and purge-gas mass rates;
-    ``fv[FV_ACC]`` is d(mdot)/dt of a pipe.
+    their own-fluid mass, energy and purge-gas mass rates.
     Returns (signed mass flow, opening).
     """
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
@@ -627,66 +592,44 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
     pa = W[a, W_P]
     pb = W[b, W_P]
     o = _opening(k, LI, LF, LV, pa, pb)
-    pipe = LI[k, L_KIND] == LINK_PIPE
-    if pipe:
-        mdot = x[LI[k, L_SX]]
-        fwd = mdot > 0.0 or (mdot == 0.0 and pa >= pb)
-    else:
-        # a pump always moves fluid from its inlet (a) to its outlet
-        fwd = pa >= pb or LI[k, L_CTRL] == CTRL_PUMP
-        mdot = 0.0
+    # a pump always moves fluid from its inlet (a) to its outlet
+    fwd = pa >= pb or LI[k, L_CTRL] == CTRL_PUMP
     up = a if fwd else b
     dn = b if fwd else a
     mixed = NI[up, N_GX] >= 0
     d_up = LI[k, L_DRAWA] if fwd else LI[k, L_DRAWB]
     side = _q_side(up, d_up, NI, W, fl)
-    rho_q, gam_q, w_l = side[0], side[1], side[2]
     s_up = W[up, W_S]
     up_kind = NI[up, N_KIND]
     pt = NI[up, N_PARTNER]
     y = W[up, W_Y] if mixed else 1.0
     h = side[5]
-    mu_q = side[6]
     p_up = W[up, W_P]
     p_dn = W[dn, W_P]
     back = 0.0
-    if pipe:
-        area = LF[k, LF_AREA]
-        r = _friction_r(mdot, rho_q, mu_q, area, LF[k, LF_DIAM], LF[k, LF_LEN], LF[k, LF_ROUGH], LF[k, LF_K])
-        acc = area / LF[k, LF_LEN] * (pa - pb - r)
-        if w_l < 0.5:
-            m_ch = _choked_flux(p_up, rho_q, gam_q) * area
-            if abs(mdot) > m_ch:
-                acc -= (abs(mdot) - m_ch) * (1.0 if mdot > 0 else -1.0) / CHOKE_TAU
-        fv[FV_ACC] = acc
-        q = abs(mdot)
-        if up_kind == NODE_VOLUME:
-            q *= s_up
-            mdot = q if fwd else -q
+    cda = LF[k, LF_CDA] * o
+    if LI[k, L_CTRL] == CTRL_PUMP:
+        q = cda  # rated mass flow times how far it has spun up
+        cda = 0.0  # no near-zero-flow blending: its flow does not follow the pressures
     else:
-        cda = LF[k, LF_CDA] * o
-        if LI[k, L_CTRL] == CTRL_PUMP:
-            q = cda  # rated mass flow times how far it has spun up
-            cda = 0.0  # no near-zero-flow blending: its flow does not follow the pressures
-        else:
-            q = _q_orifice(cda, p_up, p_dn, side)
-        z = (p_up - p_dn) / max(DP_LIN, R_LIN * p_up)
-        if z < 1.0 and cda > 0.0:
-            # near zero flow, blend toward the rate the other side would give: the
-            # upstream properties switch sides at zero flow, and an unblended switch
-            # puts a kink in the flow law that Newton circles across
-            d_dn = LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA]
-            q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl)) * side[4]
-            a_up = 0.5 + 0.5 * z
-            q = a_up * q + (1.0 - a_up) * q_dn
-            if (mixed or NI[dn, N_GX] >= 0) and up_kind == NODE_VOLUME and NI[dn, N_KIND] == NODE_VOLUME:
-                # smooth upwinding where a purge gas meets another fluid: near zero flow
-                # the flow is two opposite streams, each carrying its own side's fluid,
-                # so what crosses does not jump from one side's to the other's as the
-                # flow reverses (Newton circles such a jump). It fades out by z = 1.
-                eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side) * (1.0 - _smooth01(z))
-                back = 0.5 * (math.sqrt(q * q + eps * eps) - q) * W[dn, W_S]
-        mdot = q if fwd else -q
+        q = _q_orifice(cda, p_up, p_dn, side)
+    z = (p_up - p_dn) / max(DP_LIN, R_LIN * p_up)
+    if z < 1.0 and cda > 0.0:
+        # near zero flow, blend toward the rate the other side would give: the
+        # upstream properties switch sides at zero flow, and an unblended switch
+        # puts a kink in the flow law that Newton circles across
+        d_dn = LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA]
+        q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl)) * side[4]
+        a_up = 0.5 + 0.5 * z
+        q = a_up * q + (1.0 - a_up) * q_dn
+        if (mixed or NI[dn, N_GX] >= 0) and up_kind == NODE_VOLUME and NI[dn, N_KIND] == NODE_VOLUME:
+            # smooth upwinding where a purge gas meets another fluid: near zero flow
+            # the flow is two opposite streams, each carrying its own side's fluid,
+            # so what crosses does not jump from one side's to the other's as the
+            # flow reverses (Newton circles such a jump). It fades out by z = 1.
+            eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side) * (1.0 - _smooth01(z))
+            back = 0.5 * (math.sqrt(q * q + eps * eps) - q) * W[dn, W_S]
+    mdot = q if fwd else -q
     if back > 0.0:
         _exchange(dn, LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA], up, back, NI, NF, W, fl, fn, fv)
         q += back
@@ -746,7 +689,7 @@ def _node_source(i, x, NI, NF, W, ns):
 
 
 @inl
-def _scatter_link(k, NI, LI, fn, fv, out, sign):
+def _scatter_link(NI, fn, fv, out, sign):
     for s in range(4):
         i = fn[s]
         if i >= 0:
@@ -756,8 +699,6 @@ def _scatter_link(k, NI, LI, fn, fv, out, sign):
             gx = NI[i, N_GX]
             if gx >= 0:
                 out[gx] += sign * fv[3 * s + 2]
-    if LI[k, L_KIND] == LINK_PIPE:
-        out[LI[k, L_SX]] += sign * fv[FV_ACC]
 
 
 @inl
@@ -780,10 +721,10 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
     xdot[:] = 0.0
     _node_props(x, NI, NF, fl, W)
     for k in range(LI.shape[0]):
-        mdot, o = _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, FN[k], FV[k])
+        mdot, o = _link_flux(k, NI, NF, LI, LF, LV, fl, W, FN[k], FV[k])
         lout[k, LO_MDOT] = mdot
         lout[k, LO_OPEN] = o
-        _scatter_link(k, NI, LI, FN[k], FV[k], xdot, 1.0)
+        _scatter_link(NI, FN[k], FV[k], xdot, 1.0)
     n = NI.shape[0]
     for i in range(n):
         _node_source(i, x, NI, NF, W, NS[i])
@@ -845,18 +786,11 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
             j = color_cols[q]
             xp[j] = x[j] + 1e-7 * max(abs(x[j]), xscale[j])
             o = sowner[j]
-            if o >= 0:
-                for i in (o, NI[o, N_PARTNER]):
-                    if i >= 0 and stn[i] != g:
-                        stn[i] = g
-                        dl[nd] = i
-                        nd += 1
-            else:
-                k = -o - 1
-                if stl[k] != g:
-                    stl[k] = g
-                    ll[nk] = k
-                    nk += 1
+            for i in (o, NI[o, N_PARTNER]):
+                if i >= 0 and stn[i] != g:
+                    stn[i] = g
+                    dl[nd] = i
+                    nd += 1
         for d in range(nd):
             i = dl[d]
             for col in range(nw):
@@ -874,9 +808,9 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
                 _tank_liquid_p(i, NI, NF, W)
         for d in range(nk):
             k = ll[d]
-            _scatter_link(k, NI, LI, FN[k], FV[k], dfp, -1.0)
-            _link_flux(k, xp, NI, NF, LI, LF, LV, fl, W, fnt, fvt)
-            _scatter_link(k, NI, LI, fnt, fvt, dfp, 1.0)
+            _scatter_link(NI, FN[k], FV[k], dfp, -1.0)
+            _link_flux(k, NI, NF, LI, LF, LV, fl, W, fnt, fvt)
+            _scatter_link(NI, fnt, fvt, dfp, 1.0)
         for d in range(nd):
             i = dl[d]
             _scatter_node(i, NI, NS[i], dfp, -1.0)
@@ -1075,6 +1009,7 @@ ACCEPT_TOL = 1e-2  # an unconverged step is still taken if its last update was t
 JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickly
 JAC_COST = 5.0  # a Jacobian plus factorization, in right-hand-side evaluations
 MIN_SUBSTEP = 1.0 / 16.0  # smallest retry, as a fraction of dt
+FORCE_WORK = 3.0  # iterations a forced step may spend on the rest of its step
 WORK_BANK = 4.0  # unspent budget carried to later steps, in step budgets
 DAMP_MIN = 0.125  # smallest damping of a Newton update that keeps overshooting
 DAMP_EXTRA = 6  # extra iterations a damped solve may take
@@ -1285,6 +1220,16 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                 # Jacobian is kept: a forced step must not make the next one pay for
                 # a new Jacobian too, or a small budget never catches up
                 stats[4] += 1.0
+                if h < remaining:
+                    # the failed try was a short sub-step: force one over all the time
+                    # left instead, or the rest of the step is lost and a node that keeps
+                    # failing sub-steps stops evolving (trapped LOX under a purge stalls)
+                    h = remaining
+                    ctl[4] = 0.0  # on the Jacobian it has
+                    ctl[11] = ctl[8] + FORCE_WORK
+                    _newton(x, h, xnew, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
+                            st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl)
+                    stats[1] += ctl[2]
                 if _physical(xnew, NI):
                     for i in range(x.shape[0]):
                         x[i] = xnew[i]

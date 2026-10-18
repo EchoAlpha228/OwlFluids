@@ -19,7 +19,7 @@ def _rig(liquid="water", gas="nitrogen", vent=True):
     s.add("TK", "pressurized_tank", liquid=liquid, pressurant="nitrogen", volume="20 L", fill=0.8,
           pressure="200 psi", **kw)
     s.add("MV", "valve", cv=1.0, open_time="100 ms")
-    s.add("L1", "pipe", length="2 m", diameter="0.4 in")
+    s.add("L1", "pipe")
     s.add("B", "tank", fluid=gas, volume="10 L", pressure="2000 psi", temperature="293 K")
     s.add("REG", "regulator", setpoint="300 psi", cv=0.5)
     s.add("PV", "valve", cv=0.3, open_time="50 ms")
