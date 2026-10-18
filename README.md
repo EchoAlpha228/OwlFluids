@@ -5,8 +5,8 @@ Build a system from tanks, tubing, fittings, valves, regulators and orifices, se
 starting conditions, and run it against the wall clock while you (or a sequence,
 or Synnax) open and close valves.
 
-- **Real time first.** An 81-component LOX/ethanol stand takes about 0.08–0.1 ms
-  per 1 ms step in steady operation and about 0.2 ms during valve transients and
+- **Real time first.** An 81-component LOX/ethanol stand takes about 0.03–0.05 ms
+  per 1 ms step in steady operation and about 0.1 ms during valve transients and
   purges on a desktop CPU, and every step has a work budget, timed on your machine at start-up,
   so hard transients (LOX hitting a warm line) can't stall the clock. A slower CPU
   gets more forced steps instead of falling behind; if a machine is too slow even
@@ -77,20 +77,19 @@ name: GN2 bottle blowdown
 components:
 - {id: K1, type: tank, fluid: nitrogen, volume: 49 L, pressure: 2400 psi, temperature: 20 C}
 - {id: V1, type: valve, cv: 0.3, open_time: 50 ms}
-- {id: L1, type: pipe, length: 2 m, diameter: 0.25 in}
 - {id: ATM, type: boundary, fluid: nitrogen}
 connections:
 - [K1.port, V1.in]
-- [V1.out, L1.in]
-- [L1.out, ATM.port]
+- [V1.out, ATM.port]
 sensors:
 - {id: PT-K1, type: pressure, at: K1.port, units: psi}
 ```
 
 Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally with a
 `wall_mass` shell that stores heat),
-`pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`,
-`pipe` (friction, inertia, optional wall for chilldown), `tee`, `fitting`,
+`pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`
+(also takes `wall_mass`, for example to chill down a cryogenic line), `pipe` (drawing
+only, see below), `tee`, `fitting`,
 `orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`,
 `air_pump` (a compressor with a pressure switch: `flow`, `start_pressure`,
 `stop_pressure`; a `valve_position` sensor on it reads 1 while it runs).
@@ -112,6 +111,16 @@ still line reads 0), and a level reading jitters as the level moves. Give a sens
 for a given `noise_seed` setting. It changes only what sensors read, never the
 simulation.
 
+Lines are not modelled. The valves, orifices, regulators and fittings are the
+restrictions that matter on a stand, so their Cv sets every flow; tubing adds no
+pressure drop, volume or inertia, and a `pipe` on the drawing just joins its two
+ends. Each point where components meet holds a small volume (`junction_volume`,
+1 cc by default; valve and fitting bodies hold more, and a flashing liquid such as
+nitrous runs smoother with about 20 cc). To keep a line's volume or its steel (for
+a chilldown), draw it as a `volume`. Line friction is usually a few percent of a
+feed's pressure drop: the example stand's LOX flow comes out about 4 % higher than
+with friction modelled.
+
 Lines start in equilibrium with the tank or volume they are open to: a feed line
 on a LOX tank starts full of LOX at tank pressure, a regulated line starts at its
 setpoint, and anything behind a closed valve starts at the system's initial
@@ -127,8 +136,8 @@ what it holds. `wall_mass` adds the tank shell, which warms the boiling nitrous;
 against test data.
 
 Purges are meant to run the way stands run them: vent the line to ambient first,
-then flow purge gas for a few seconds. Lines the purge gas has not reached cost
-about the same as plain lines.
+then flow purge gas for a few seconds. Points the purge gas has not reached cost
+about the same as any other.
 
 Connect a purge bottle (a `tank` of helium, nitrogen or air), usually
 through a regulator, a valve and a check valve, to any line; `examples/lox-purge.yaml`
@@ -198,9 +207,9 @@ Synnax release means updating that one class.
 ## How it works
 
 Each component becomes lumped **nodes** (volumes holding mass and internal energy,
-plus a wall temperature for chilldown lines) and **links** (pipes carry their mass
-flow as a state, so water hammer and line inertia are captured; orifices, valves,
-fittings and regulators are quasi-steady). Every 1 ms step is backward Euler,
+plus a wall temperature for a tank or volume with a shell) and **links** (orifices,
+valves, fittings, regulators and pumps, all quasi-steady: their flow follows from
+the pressures on either side). Every 1 ms step is backward Euler,
 solved by chord Newton iterations on a banded LU of a finite-difference Jacobian
 that is coloured, reordered (reverse Cuthill-McKee) and updated incrementally.
 The kernel is compiled with Numba and releases the GIL. Fluid properties come from
@@ -209,8 +218,7 @@ so subcooled LOX and two-phase states match CoolProp to about 1% in pressure
 (0.5% for 99% of states).
 
 Validation tests (`pytest`) cover isentropic gas blowdown, closed-system
-equalization (mass and energy conserved), Torricelli drain, Colebrook pipe flow,
-Joukowsky water hammer, table accuracy against CoolProp, LOX feed priming and
+equalization (mass and energy conserved), Torricelli drain, table accuracy against CoolProp, LOX feed priming and
 flow, a self-pressurizing LN2 dewar, nitrous blowdown, line chilldown, purges with
 every purge gas (mass conserved, LOX, water, ethanol and methane pushed out), the
 nitrous fill-purge-refill sequence, air pump switching, and the real-time gate on
@@ -238,4 +246,6 @@ the 81-component stand, purges included.
 - Property tables blend pressure within about one grid cell of saturated liquid,
   so a saturated tank filled above ~98 % can read a few percent high (up to ~13 % at
   99 %). States within a kelvin or so of the critical point are also approximate.
-- Pipe heat transfer uses a fixed film coefficient (set per line).
+- Lines have no friction, volume or inertia, so there is no water hammer and no
+  line chilldown unless a line is drawn as a `volume` with a `wall_mass`. Wall heat
+  transfer uses a fixed film coefficient.

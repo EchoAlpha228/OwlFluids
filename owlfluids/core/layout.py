@@ -20,10 +20,9 @@ N_NF = 12
 N_NO = 8  # O_GAS: volume fraction of purge gas in a mixed node (0 elsewhere)
 
 # ---- link integer columns
-L_KIND, L_A, L_B, L_DRAWA, L_DRAWB, L_CTRL, L_SX = range(7)
-N_LI = 7
-LINK_ORIFICE = 0  # quasi-steady flow element (orifices, valves, fittings, regulators)
-LINK_PIPE = 1  # flow has inertia; mass flow is a state
+# every link is a quasi-steady flow element (orifices, valves, fittings, regulators, pumps)
+L_A, L_B, L_DRAWA, L_DRAWB, L_CTRL = range(5)
+N_LI = 5
 # what a link end draws from a two-phase node
 DRAW_MIX = 0
 DRAW_LIQUID = 1
@@ -37,8 +36,8 @@ CTRL_REGULATOR = 4  # throttles to hold the downstream pressure at the setpoint
 CTRL_PUMP = 5  # fixed mass flow from its inlet while running; on below LF_P1, off above LF_P2 (LF_CDA: kg/s)
 
 # ---- link float columns
-LF_CDA, LF_AREA, LF_LEN, LF_DIAM, LF_ROUGH, LF_K, LF_P1, LF_P2, LF_P3 = range(9)
-N_LF = 9
+LF_CDA, LF_P1, LF_P2 = range(3)
+N_LF = 3
 
 # ---- valve actuator columns (runtime)
 V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE = range(4)

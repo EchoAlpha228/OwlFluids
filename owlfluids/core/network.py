@@ -67,16 +67,10 @@ class _Node:
 @dataclass
 class _Link:
     name: str
-    kind: int
     a: int
     b: int
     owner: str
     cda: float = 0.0
-    area: float = 0.0
-    length: float = 0.0
-    diameter: float = 0.0
-    roughness: float = 0.0
-    k_minor: float = 0.0
     ctrl: int = L.CTRL_FIXED
     p1: float = 0.0
     p2: float = 1.0
@@ -225,7 +219,7 @@ class NetworkBuilder:
             other = self.nodes[self.net_node[net]].owner
             raise BuildError(
                 f"{comp.id}.{port} and {other} are connected directly, but both are volumes; "
-                "put a pipe, valve or orifice between them")
+                "put a valve, orifice or fitting between them")
         self.net_node[net] = node
         self.net_draw[net] = draw
 
@@ -255,12 +249,6 @@ class NetworkBuilder:
         self.net_volume[self.net_of[(comp.id, port)]] += float(vol)
         self.port_node(comp, port)
 
-    def add_pipe(self, comp, suffix, a, b, area, diameter, length, roughness, k_minor, draw_a=0, draw_b=0):
-        lk = _Link(f"{comp.id}.{suffix}", L.LINK_PIPE, a, b, comp.id, area=area, length=length,
-                   diameter=diameter, roughness=roughness, k_minor=k_minor, draw_a=draw_a, draw_b=draw_b)
-        self.links.append(lk)
-        self.comp_links[comp.id].append(len(self.links) - 1)
-
     def add_orifice(self, comp, suffix, port_a, port_b, cda, ctrl=L.CTRL_FIXED, p1=0.0, p2=1.0, valve=None,
                     port_volume=None):
         a = self.port_node(comp, port_a)
@@ -278,7 +266,7 @@ class NetworkBuilder:
             self.net_volume[net] += port_volume
         if a == b:
             raise BuildError(f"both ports of {comp.id} are connected to the same point")
-        lk = _Link(comp.id + (f".{suffix}" if suffix else ""), L.LINK_ORIFICE, a, b, comp.id, cda=cda, ctrl=ctrl,
+        lk = _Link(comp.id + (f".{suffix}" if suffix else ""), a, b, comp.id, cda=cda, ctrl=ctrl,
                    p1=p1, p2=p2, draw_a=self.port_draw(comp, port_a), draw_b=self.port_draw(comp, port_b),
                    valve=valve)
         self.links.append(lk)
@@ -294,7 +282,7 @@ class NetworkBuilder:
         b = self.port_node(comp, port)
         self.net_volume[self.net_of[(comp.id, port)]] += volume
         rate = 1.0 / max(spin_up, 1e-6)
-        lk = _Link(comp.id, L.LINK_ORIFICE, a, b, comp.id, cda=mdot, ctrl=L.CTRL_PUMP, p1=p_on, p2=p_off,
+        lk = _Link(comp.id, a, b, comp.id, cda=mdot, ctrl=L.CTRL_PUMP, p1=p_on, p2=p_off,
                    valve=(0.0, rate, rate))
         self.links.append(lk)
         idx = len(self.links) - 1
@@ -401,7 +389,7 @@ class NetworkBuilder:
         one_way = set()
         for k, lk in enumerate(self.links):
             fwd[lk.a].append(lk.b)
-            if lk.kind == L.LINK_ORIFICE and lk.ctrl in (L.CTRL_CHECK, L.CTRL_RELIEF, L.CTRL_REGULATOR, L.CTRL_PUMP):
+            if lk.ctrl in (L.CTRL_CHECK, L.CTRL_RELIEF, L.CTRL_REGULATOR, L.CTRL_PUMP):
                 one_way.add(k)
             else:
                 fwd[lk.b].append(lk.a)
@@ -474,7 +462,7 @@ class NetworkBuilder:
         """Start lines in equilibrium with the tank or volume they are open to.
 
         Every node without its own initial state takes the state of the nearest
-        volume reachable through pipes, fittings, orifices and open valves; a line
+        volume reachable through fittings, orifices and open valves; a line
         on a tank's liquid port starts full of that liquid, as it is after loading.
         Lines behind closed valves, check valves and regulators keep the system's
         initial pressure and temperature.
@@ -497,11 +485,11 @@ class NetworkBuilder:
 
         adj = defaultdict(list)
         for lk in self.links:
-            if lk.kind == L.LINK_ORIFICE and lk.ctrl == L.CTRL_REGULATOR:
+            if lk.ctrl == L.CTRL_REGULATOR:
                 # a regulated line sits locked up at its setpoint (gas sources only)
                 adj[lk.a].append((lk.b, lk.draw_a, lk.p1))
                 continue
-            if lk.kind == L.LINK_ORIFICE and lk.ctrl != L.CTRL_FIXED:
+            if lk.ctrl != L.CTRL_FIXED:
                 if lk.ctrl != L.CTRL_VALVE or not lk.valve or lk.valve[0] <= 0.0:
                     continue
             adj[lk.a].append((lk.b, lk.draw_a, None))
@@ -610,7 +598,7 @@ class NetworkBuilder:
                 NF[i, L.NF_HA] = ha_in
                 NF[i, L.NF_HAAMB] = ha_out
                 NF[i, L.NF_TAMB] = t_amb
-                # a line primed from a tank has been sitting full, and a tank shell holds its
+                # a volume primed from a tank has been sitting full, and a tank shell holds its
                 # contents: their walls are at the fluid's temperature
                 x0.append(t0 if n.primed or any(at_fluid) else t_amb)
                 xscale.append(100.0)
@@ -623,19 +611,8 @@ class NetworkBuilder:
         LF = np.zeros((nl, L.N_LF))
         LV = np.zeros((nl, L.N_V))
         for k, lk in enumerate(self.links):
-            LI[k] = (lk.kind, lk.a, lk.b, lk.draw_a, lk.draw_b, lk.ctrl, -1)
-            LF[k, L.LF_CDA] = lk.cda
-            LF[k, L.LF_AREA] = lk.area
-            LF[k, L.LF_LEN] = lk.length
-            LF[k, L.LF_DIAM] = lk.diameter
-            LF[k, L.LF_ROUGH] = lk.roughness
-            LF[k, L.LF_K] = lk.k_minor
-            LF[k, L.LF_P1] = lk.p1
-            LF[k, L.LF_P2] = lk.p2
-            if lk.kind == L.LINK_PIPE:
-                LI[k, L.L_SX] = len(x0)
-                x0.append(0.0)
-                xscale.append(1.0)
+            LI[k] = (lk.a, lk.b, lk.draw_a, lk.draw_b, lk.ctrl)
+            LF[k] = (lk.cda, lk.p1, lk.p2)
             if lk.valve:
                 start, r_open, r_close = lk.valve
                 LV[k] = (start, start, r_open, r_close)
@@ -742,8 +719,6 @@ def _structure(net: Network) -> None:
     for k in range(LI.shape[0]):
         a, b = int(LI[k, L.L_A]), int(LI[k, L.L_B])
         s = [st for g in group(a) + group(b) for st in node_states(g)]
-        if LI[k, L.L_SX] >= 0:
-            s.append(int(LI[k, L.L_SX]))
         mark(s, s)
     for i in range(n):
         entries.add((i, i))
@@ -778,16 +753,13 @@ def _structure(net: Network) -> None:
     bw = int(np.max(np.abs(iperm[rows] - iperm[cols]))) if len(rows) else 0
     net.kl = net.ku = bw
 
-    # owner of each state (node index, or -(link + 1) for a pipe flow) and the
-    # links at each node, for the incremental Jacobian
+    # owner node of each state and the links at each node, for the incremental Jacobian
     sowner = np.zeros(n, dtype=np.int64)
     for i in range(NI.shape[0]):
         for st in node_states(i):
             sowner[st] = i
     adj: list[list[int]] = [[] for _ in range(NI.shape[0])]
     for k in range(LI.shape[0]):
-        if LI[k, L.L_SX] >= 0:
-            sowner[LI[k, L.L_SX]] = -(k + 1)
         adj[int(LI[k, L.L_A])].append(k)
         adj[int(LI[k, L.L_B])].append(k)
     net.sowner = sowner

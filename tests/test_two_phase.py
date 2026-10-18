@@ -80,17 +80,18 @@ def test_tank_wall_keeps_a_draining_nitrous_bottle_warmer():
 
 @pytest.mark.slow
 def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
+    """The line is one volume with the steel of 5 m of 1/2 in x 0.065 in tubing."""
     s = System("chill")
     s.add("TK", "pressurized_tank", liquid="nitrogen", pressurant="nitrogen", volume="200 L", fill=0.8,
           pressure="60 psi", liquid_temperature="80 K")
     s.add("V1", "valve", cv=2.0, open_time="100 ms")
-    s.add("L1", "pipe", length="5 m", diameter="0.5 in", wall_thickness="0.065 in", segments=5)
+    s.add("L1", "volume", volume="0.35 L", wall_mass="2.3 kg", film_coefficient=2300)
     s.add("O1", "orifice", cda="20 mm2")
     s.add("A", "boundary", fluid="nitrogen")
-    for a, b in [("TK.liquid", "V1.in"), ("V1.out", "L1.in"), ("L1.out", "O1.in"), ("O1.out", "A.port")]:
+    for a, b in [("TK.liquid", "V1.in"), ("V1.out", "L1.a"), ("L1.b", "O1.in"), ("O1.out", "A.port")]:
         s.connect(a, b)
     sim = Simulation(s, step_budget=BUDGET)
-    i_wall = sim.net.node_names.index("L1.s2")
+    i_wall = sim.net.node_names.index("L1")
     sx = sim.net.NI[i_wall, 3] + 2
     assert sim.x[sx] == pytest.approx(293.15)
     sim.open("V1")

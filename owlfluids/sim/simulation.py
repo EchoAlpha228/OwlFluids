@@ -277,14 +277,16 @@ class Simulation:
 
     # ------------------------------------------------------------------ reading
     def node(self, ref: str) -> int:
-        """Node index for "COMP.port", "COMP" (its first volume) or "COMP.s2" (pipe segment)."""
+        """Node index for "COMP.port", or "COMP" (its first volume; for a line, the point it joins)."""
         net = self.net
         if ref in net.port_nodes:
             return net.port_nodes[ref]
         if ref in net.node_names:
             return net.node_names.index(ref)
-        if ref in net.comp_nodes:
+        if net.comp_nodes.get(ref):
             return net.comp_nodes[ref][0]
+        if f"{ref}.in" in net.port_nodes:
+            return net.port_nodes[f"{ref}.in"]
         raise KeyError(f"no node {ref!r}")
 
     def link(self, ref: str) -> int:

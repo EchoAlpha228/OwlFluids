@@ -371,7 +371,6 @@ NEW_DEFAULTS = {
                          "pressure": "100 psi"},
     "boundary": {"fluid": "nitrogen"},
     "volume": {"volume": "0.5 L"},
-    "pipe": {"length": "1 m", "diameter": "10 mm"},
     "fitting": {"kind": "elbow90", "diameter": "10 mm"},
     "orifice": {"cda": "10 mm2"},
     "valve": {"cv": 0.5},

@@ -40,11 +40,11 @@ def test_unknown_port_is_an_error():
 def test_lines_prime_through_open_paths_only():
     s = System("prime")
     s.add("K", "tank", fluid="nitrogen", volume="10 L", pressure="100 bar", temperature="300 K")
-    s.add("L1", "pipe", length="1 m", diameter="6 mm")
+    s.add("F1", "orifice", cv=1.0)
     s.add("V1", "valve", cv=0.1)
-    s.add("L2", "pipe", length="1 m", diameter="6 mm")
+    s.add("F2", "orifice", cv=1.0)
     s.add("AMB", "boundary", fluid="nitrogen")
-    for a, b in [("K.port", "L1.in"), ("L1.out", "V1.in"), ("V1.out", "L2.in"), ("L2.out", "AMB.port")]:
+    for a, b in [("K.port", "F1.in"), ("F1.out", "V1.in"), ("V1.out", "F2.in"), ("F2.out", "AMB.port")]:
         s.connect(a, b)
     sim = Simulation(s)
     assert sim.pressure("V1.in") == pytest.approx(100e5, rel=5e-3)
@@ -77,10 +77,10 @@ def _tank_system(liquid, pressure, **kw):
     s = System("tank")
     s.add("TK", "pressurized_tank", liquid=liquid, pressurant="nitrogen", volume="20 L", fill=0.8,
           pressure=pressure, **kw)
-    s.add("L", "pipe", length="1 m", diameter="10 mm")
+    s.add("F", "fitting", kind="elbow90", diameter="10 mm")
     s.add("V", "valve", cv="5e-2")  # numbers written as text still parse
     s.add("A", "boundary", fluid=liquid)
-    s.connect("TK.liquid", "L.in"), s.connect("L.out", "V.in"), s.connect("V.out", "A.port")
+    s.connect("TK.liquid", "F.in"), s.connect("F.out", "V.in"), s.connect("V.out", "A.port")
     return s
 
 
@@ -88,7 +88,7 @@ def test_tank_liquid_starts_at_its_set_temperature():
     for liquid, p, t in (("nitrous", "1200 psi", 280.0), ("oxygen", "1000 psi", 80.0)):
         sim = Simulation(_tank_system(liquid, p, liquid_temperature=f"{t} K"))
         assert sim.temperature("TK.liquid") == pytest.approx(t, abs=0.05)
-        assert sim.quality("L.in") < 0  # the feed line is primed with liquid
+        assert sim.quality("V.in") < 0  # the feed line is primed with liquid
 
 
 def test_tank_liquid_that_would_boil_is_an_error_or_defaults_cold():

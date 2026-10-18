@@ -70,7 +70,7 @@ class ComponentType:
             try:  # plain numbers written as text, e.g. YAML reads "5e-2" as a string
                 return float(raw)
             except ValueError:
-                return raw  # keywords such as segments: auto
+                return raw  # a keyword rather than a number
         if spec.dimension in (None, "text", "choice", "bool"):
             return raw
         try:
@@ -119,6 +119,32 @@ HEAT_PARAMS = (
 
 # ---------------------------------------------------------------- volumes
 
+WALL_PARAMS = (
+    Param("wall_mass", "mass", None,
+          "mass of the shell; enables a wall that stores heat (a nitrous bottle stays warmer as it "
+          "empties, a cold line or manifold chills down)"),
+    Param("wall_material", "choice", "steel", "shell material", tuple(MATERIALS)),
+    Param("film_coefficient", None, 1000.0,
+          "fluid-to-wall heat transfer coefficient, W/m2K (boiling nitrous: about 1000-3000; tune to test data)"),
+    Param("outer_coefficient", None, 5.0,
+          "wall-to-ambient heat transfer coefficient, W/m2K (heat_transfer, if set, adds to it)"),
+)
+
+
+def _wall(cls, comp, vol):
+    """A shell that starts at the fluid's temperature, or None without a wall_mass."""
+    m_wall = cls.param(comp, "wall_mass")
+    if not m_wall:
+        return None
+    # shell area of a cylinder four diameters long
+    d = (vol / math.pi) ** (1.0 / 3.0)
+    area = 4.5 * math.pi * d * d
+    mat = MATERIALS[cls.param(comp, "wall_material")]
+    return (float(m_wall) * mat["cp"], float(cls.param(comp, "film_coefficient")) * area,
+            float(cls.param(comp, "outer_coefficient")) * area + float(cls.param(comp, "heat_transfer") or 0.0),
+            cls.param(comp, "ambient_temperature"),
+            True)
+
 
 class Tank(ComponentType):
     type_name = "tank"
@@ -131,14 +157,7 @@ class Tank(ComponentType):
         Param("pressure", "pressure", None, "initial pressure (gas, or saturated if fill is given)"),
         Param("temperature", "temperature", None, "initial temperature"),
         Param("fill", None, None, "liquid volume fraction 0-1 for a saturated liquid/vapor fill"),
-        Param("wall_mass", "mass", None,
-              "mass of the tank shell; enables a wall that stores heat and warms the fluid as it boils"),
-        Param("wall_material", "choice", "steel", "tank shell material", tuple(MATERIALS)),
-        Param("film_coefficient", None, 1000.0,
-              "fluid-to-wall heat transfer coefficient, W/m2K (boiling nitrous: about 1000-3000; tune to test data)"),
-        Param("outer_coefficient", None, 5.0,
-              "wall-to-ambient heat transfer coefficient, W/m2K (heat_transfer, if set, adds to it)"),
-    ) + HEAT_PARAMS
+    ) + WALL_PARAMS + HEAT_PARAMS
     help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous) in "
             "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; "
             "'top' draws vapor, 'bottom' draws liquid, 'port' draws the mixture. A 'wall_mass' gives "
@@ -157,17 +176,7 @@ class Tank(ComponentType):
             if p is None or t is None:
                 raise ValueError(f"{comp.id} needs pressure and temperature (or temperature and fill)")
             init = ("pt", p, t)
-        wall = None
-        m_wall = cls.param(comp, "wall_mass")
-        if m_wall:
-            # shell area of a cylinder four diameters long
-            d = (vol / math.pi) ** (1.0 / 3.0)
-            area = 4.5 * math.pi * d * d
-            mat = MATERIALS[cls.param(comp, "wall_material")]
-            wall = (float(m_wall) * mat["cp"], float(cls.param(comp, "film_coefficient")) * area,
-                    float(cls.param(comp, "outer_coefficient")) * area + float(cls.param(comp, "heat_transfer") or 0.0),
-                    cls.param(comp, "ambient_temperature"),
-                    True)  # the shell starts at the fluid's temperature
+        wall = _wall(cls, comp, vol)
         n = b.new_node(comp, "", fluid=fluid, volume=vol, init=init,
                        heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")), wall=wall)
         b.bind_port(comp, "top", n, DRAW_VAPOR)
@@ -241,14 +250,17 @@ class Volume(ComponentType):
         Param("fluid", "text", None, "fluid (default: taken from connected lines)"),
         Param("pressure", "pressure", None, "initial pressure (default: system initial pressure)"),
         Param("temperature", "temperature", None, "initial temperature"),
-    ) + HEAT_PARAMS
-    help = "A lumped volume with up to four ports, such as a manifold or a chamber."
+    ) + WALL_PARAMS + HEAT_PARAMS
+    help = ("A lumped volume with up to four ports, such as a manifold or a chamber. A 'wall_mass' "
+            "gives it a shell, for example to chill down a cryogenic line.")
 
     @classmethod
     def build(cls, b, comp):
-        n = b.new_node(comp, "", fluid=cls.param(comp, "fluid"), volume=cls.require(comp, "volume"),
+        vol = cls.require(comp, "volume")
+        n = b.new_node(comp, "", fluid=cls.param(comp, "fluid"), volume=vol,
                        init=("pt", cls.param(comp, "pressure"), cls.param(comp, "temperature")),
-                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")),
+                       wall=_wall(cls, comp, vol))
         for port in cls.ports:
             b.bind_port(comp, port, n, DRAW_MIX)
 
@@ -258,65 +270,17 @@ class Volume(ComponentType):
 
 class Pipe(ComponentType):
     type_name = "pipe"
-    label = "Tubing"
+    label = "Line"
     category = "Lines"
     ports = ("in", "out")
-    params = (
-        Param("length", "length", None, "length"),
-        Param("diameter", "length", None, "inner diameter"),
-        Param("roughness", "length", "1.5 um", "wall roughness"),
-        Param("segments", None, "auto", "number of lumped segments (auto: about one per metre, 1-10)"),
-        Param("minor_loss", None, 0.0, "sum of loss coefficients K of bends and fittings along the line"),
-        Param("fluid", "text", None, "fluid (default: taken from connected components)"),
-        Param("pressure", "pressure", None, "initial pressure (default: system initial pressure)"),
-        Param("temperature", "temperature", None, "initial temperature"),
-        Param("wall_thickness", "length", None, "wall thickness; enables a wall temperature for chilldown"),
-        Param("wall_material", "choice", "steel", "wall material", tuple(MATERIALS)),
-        Param("film_coefficient", None, 500.0, "fluid-to-wall heat transfer coefficient, W/m2K"),
-        Param("outer_coefficient", None, 5.0, "wall-to-ambient heat transfer coefficient, W/m2K"),
-        Param("ambient_temperature", "temperature", "293.15 K", "ambient temperature"),
-    )
-    help = "Line with friction (Churchill), flow inertia and volume, split into lumped segments."
+    merges_ports = True
+    params = ()
+    help = ("Tubing on the drawing only: its two ends are one point. Lines are not modelled; "
+            "the Cv of the valves, orifices and fittings sets the flow.")
 
     @classmethod
     def build(cls, b, comp):
-        length = cls.require(comp, "length")
-        d = cls.require(comp, "diameter")
-        seg = cls.param(comp, "segments")
-        n = max(1, min(10, math.ceil(length / 1.0))) if seg in (None, "auto") else max(1, int(seg))
-        area = math.pi * d * d / 4.0
-        k_minor = float(cls.param(comp, "minor_loss"))
-        rough = cls.param(comp, "roughness")
-        wall = None
-        thick = cls.param(comp, "wall_thickness")
-        if thick:
-            # walls sit on the interior volumes, so a walled line needs at least two
-            # segments; the whole line's wall is shared among the interior volumes
-            n = max(n, 2)
-            mat = MATERIALS[cls.param(comp, "wall_material")]
-            seg_len = length / (n - 1)
-            d_out = d + 2 * thick
-            m_wall = mat["density"] * math.pi / 4 * (d_out**2 - d**2) * seg_len
-            wall = (m_wall * mat["cp"],
-                    float(cls.param(comp, "film_coefficient")) * math.pi * d * seg_len,
-                    float(cls.param(comp, "outer_coefficient")) * math.pi * d_out * seg_len,
-                    cls.param(comp, "ambient_temperature"))
-        init = ("pt", cls.param(comp, "pressure"), cls.param(comp, "temperature"))
-        fluid = cls.param(comp, "fluid")
-        # staggered lumping: n flow links of length L/n, n-1 interior volumes of A*L/n,
-        # and half a segment of volume added to the connection point at each end
-        seg_vol = area * length / n
-        b.add_port_volume(comp, "in", seg_vol / 2)
-        b.add_port_volume(comp, "out", seg_vol / 2)
-        nodes = [b.new_node(comp, f"s{i + 1}", fluid=fluid, volume=seg_vol, init=init, wall=wall)
-                 for i in range(n - 1)]
-        ends = [b.port_node(comp, "in")] + nodes + [b.port_node(comp, "out")]
-        b.set_port_init(comp, "in", init, fluid)
-        b.set_port_init(comp, "out", init, fluid)
-        for i in range(n):
-            b.add_pipe(comp, f"f{i + 1}", ends[i], ends[i + 1], area=area, diameter=d, length=length / n,
-                       roughness=rough, k_minor=k_minor / n, draw_a=b.port_draw(comp, "in") if i == 0 else 0,
-                       draw_b=b.port_draw(comp, "out") if i == n - 1 else 0)
+        b.port_node(comp, "in")
 
 
 class Tee(ComponentType):

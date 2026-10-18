@@ -507,8 +507,12 @@ class MainWindow(QMainWindow):
                     text = _flow_text(f.link_mdot[links[0]])
             elif ct.type_name == "boundary":
                 text = ""
-            elif ct.type_name == "pipe" and not nodes and links:
-                text = _flow_text(f.link_mdot[links[0]])
+            elif ct.type_name == "pipe":
+                i = net.port_nodes.get(f"{c.id}.in")
+                if i is not None:
+                    text = f"{units.to_psi(f.node_p[i]):.0f} psi"
+                    if f.node_x[i] <= 0.5:
+                        state["pipe_colour"] = symbols.CRYO if f.node_t[i] < 150 else symbols.LIQUID
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])
@@ -519,11 +523,6 @@ class MainWindow(QMainWindow):
                     state["fill"] = min(max(f.node_m[liq] / max(f.node_rho[liq], 1e-9) / vol, 0.0), 1.0)
                     state["liquid_colour"] = symbols.CRYO if f.node_t[liq] < 150 else symbols.LIQUID
                     text = f"{p:.0f} psi  {f.node_t[liq]:.0f} K liq"
-                elif ct.type_name == "pipe" and links:
-                    mid = links[len(links) // 2]
-                    text = f"{_flow_text(f.link_mdot[mid])}  {p:.0f} psi"
-                    if f.node_x[i] < 0.0 or (0.0 <= f.node_x[i] <= 0.5):
-                        state["pipe_colour"] = symbols.CRYO if f.node_t[i] < 150 else symbols.LIQUID
                 elif ct.type_name == "tank" and 0.0 <= f.node_x[i] <= 1.0:
                     state["fill"] = 1.0 - f.node_x[i]
             out[c.id] = (text, state)

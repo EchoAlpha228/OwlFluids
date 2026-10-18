@@ -4,7 +4,7 @@ components:
 - {id: NOS, type: tank, fluid: nitrous, volume: 30 L, fill: 0.8, temperature: 20 C, wall_mass: 15 kg, wall_material: aluminum, at: [0, 260]}
 - {id: OFTV, type: valve, cv: 1.5, open_time: 1 s, at: [0, 150]}
 - {id: 'OFF', type: orifice, cv: 2.0, at: [60, 0]}
-- {id: L-OF1, type: pipe, length: 3 m, diameter: 0.43 in, at: [200, 0]}
+- {id: L-OF1, type: pipe, at: [200, 0]}
 - {id: OFRV-1, type: relief_valve, cv: 0.3, set_pressure: 1000 psi, at: [370, -80]}
 - {id: ATM-1, type: boundary, fluid: nitrous, at: [370, -160]}
 - {id: OFV, type: valve, cv: 1.2, open_time: 300 ms, at: [420, 0]}
@@ -14,7 +14,7 @@ components:
 - {id: OFRV-2, type: relief_valve, cv: 0.3, set_pressure: 1000 psi, at: [650, -80]}
 - {id: ATM-3, type: boundary, fluid: nitrous, at: [650, -160]}
 - {id: OFIF, type: orifice, cv: 2.0, at: [660, 0]}
-- {id: L-OF2, type: pipe, length: 3 m, diameter: 0.43 in, at: [780, 0]}
+- {id: L-OF2, type: pipe, at: [780, 0]}
 - {id: OQD, type: fitting, kind: quick_disconnect, diameter: 0.43 in, at: [880, 0]}
 - {id: RFCV, type: check_valve, cv: 1.2, at: [960, 0]}
 - {id: RT, type: tank, fluid: nitrous, volume: 15 L, pressure: 1 atm, temperature: 20 C, wall_mass: 6 kg, wall_material: aluminum, at: [1040, 100]}
@@ -27,7 +27,7 @@ components:
 - {id: APR, type: regulator, cv: 0.3, setpoint: 90 psig, droop: 10 psi, at: [350, 340]}
 - {id: AIV, type: valve, cv: 0.5, normally: open, at: [400, 340]}
 - {id: ACF, type: orifice, cv: 0.8, at: [450, 340]}
-- {id: L-A, type: pipe, length: 2 m, diameter: 0.18 in, at: [470, 260]}
+- {id: L-A, type: pipe, at: [470, 260]}
 - {id: OPGS, type: valve, cv: 0.3, open_time: 50 ms, at: [470, 180]}
 - {id: OPGCV, type: check_valve, cv: 0.3, at: [470, 90]}
 connections:
