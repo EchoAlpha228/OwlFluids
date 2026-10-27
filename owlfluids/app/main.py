@@ -16,7 +16,6 @@ def main(path: str | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("OwlFluids")
-    app.setStyle("Fusion")
     w = MainWindow()
     if path:
         if path in EXAMPLES:

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -22,12 +22,13 @@ from PySide6.QtWidgets import (
 from ..components import get_type
 from ..io.system import Component, System
 from . import symbols
+from . import theme as T
 
 GRID = 10.0
-WIRE = QColor("#2b3440")
-WIRE_SELECTED = QColor("#1f77d0")
-PORT = QColor("#ffffff")
-PORT_HOVER = QColor("#1f77d0")
+WIRE = T.qc(T.GRAY_300)
+WIRE_SELECTED = T.qc(T.ACCENT)
+PORT = T.qc(T.GRAY_900)
+PORT_HOVER = T.qc(T.ACCENT)
 
 
 def snap(p: QPointF) -> QPointF:
@@ -165,12 +166,12 @@ class Scene(QGraphicsScene):
         self.addItem(item)
         item.setPos(QPointF(*(comp.position or (0.0, 0.0))))
         name = self.addSimpleText(comp.id)
-        name.setFont(QFont("Sans", 8, QFont.Bold))
-        name.setBrush(QBrush(symbols.LINE))
+        name.setFont(T.mono_font(7.5))
+        name.setBrush(QBrush(T.qc(T.TEXT_DIM)))
         name.setZValue(3)
         value = self.addSimpleText("")
-        value.setFont(QFont("Sans", 8))
-        value.setBrush(QBrush(QColor("#0b5394")))
+        value.setFont(T.mono_font(8))
+        value.setBrush(QBrush(T.qc(T.WHITE)))
         value.setZValue(3)
         self.labels[comp.id] = (name, value)
         self.items_by_id[comp.id] = item
@@ -389,7 +390,7 @@ class View(QGraphicsView):
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setAcceptDrops(True)
-        self.setBackgroundBrush(QBrush(QColor("#fbfcfd")))
+        self.setBackgroundBrush(QBrush(T.qc(T.BACKGROUND)))
 
     def wheelEvent(self, e):
         f = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
@@ -397,7 +398,7 @@ class View(QGraphicsView):
 
     def drawBackground(self, p: QPainter, rect: QRectF) -> None:
         super().drawBackground(p, rect)
-        p.setPen(QPen(QColor("#e8ecf0"), 0))
+        p.setPen(QPen(T.qc(T.GRAY_800), 0))
         step = GRID * 5
         x = int(rect.left() // step) * step
         while x < rect.right():

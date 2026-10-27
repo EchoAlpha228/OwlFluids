@@ -31,6 +31,7 @@ from ..io.system import System
 from ..sim.realtime import Runner
 from ..sim.simulation import Simulation
 from . import symbols
+from . import theme as T
 from .panels import Palette, Properties, ValvePanel
 from .plots import FLOW_ZERO, PlotPanel
 from .schematic import Scene, View
@@ -49,6 +50,7 @@ def _flow_text(mdot: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        T.apply(QApplication.instance())
         self.path: Path | None = None
         self.dirty = False
         self.runner: Runner | None = None
@@ -67,12 +69,12 @@ class MainWindow(QMainWindow):
         self.properties = Properties()
         self.valves = ValvePanel()
         self.plots = PlotPanel()
-        self._dock("Parts", self.palette, Qt.LeftDockWidgetArea)
+        self._dock("PARTS", self.palette, Qt.LeftDockWidgetArea)
         self.side_tabs = QTabWidget()
         self.side_tabs.addTab(self.properties, "Properties")
         self.side_tabs.addTab(self.valves, "Valves")
-        self._dock("Inspector", self.side_tabs, Qt.RightDockWidgetArea)
-        self.plot_dock = self._dock("Plots", self.plots, Qt.BottomDockWidgetArea)
+        self._dock("INSPECTOR", self.side_tabs, Qt.RightDockWidgetArea)
+        self.plot_dock = self._dock("PLOTS", self.plots, Qt.BottomDockWidgetArea)
 
         self._make_actions()
         self._make_status()
@@ -180,10 +182,27 @@ class MainWindow(QMainWindow):
                           "Real-time 1-D fluid network simulator for test automation.")
 
     def _make_status(self) -> None:
+        self.status_badge = QLabel()
+        self.status_badge.setAlignment(Qt.AlignCenter)
+        self.status_badge.setMinimumWidth(84)
+        self._badge = None
         self.status_time = QLabel("stopped")
+        self.status_time.setFont(T.mono_font())
         self.status_perf = QLabel("")
+        self.status_perf.setFont(T.mono_font())
+        self.statusBar().addWidget(self.status_badge)
         self.statusBar().addWidget(self.status_time, 1)
         self.statusBar().addPermanentWidget(self.status_perf)
+        self._set_badge("stopped")
+
+    def _set_badge(self, state: str) -> None:
+        if state == self._badge:  # a style sheet change re-polishes the label; only on a change
+            return
+        self._badge = state
+        bg, fg = T.BADGES[state]
+        self.status_badge.setText(state.upper())
+        self.status_badge.setStyleSheet(f"background: {bg}; color: {fg}; font-weight: bold; padding: 2px 8px;"
+                                        " border-radius: 2px; letter-spacing: 1px;")
 
     def _set_running_ui(self, running: bool) -> None:
         self.a_run.setEnabled(not running)
@@ -342,6 +361,7 @@ class MainWindow(QMainWindow):
         self._building = True
         self._build_result = None
         token = self._build_token = object()
+        self._set_badge("building")
         self.status_time.setText("building network and loading property tables…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         system = System.from_dict(self.scene.system.to_dict())
@@ -363,6 +383,7 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         _token, res = self._build_result
         if isinstance(res, Exception):
+            self._set_badge("stopped")
             self.status_time.setText("stopped")
             QMessageBox.critical(self, "Cannot run this system", str(res))
             return
@@ -406,6 +427,7 @@ class MainWindow(QMainWindow):
         self.scene.set_running(False)
         self.valves.set_valves([], {})
         self._set_running_ui(False)
+        self._set_badge("stopped")
         self.status_time.setText("stopped")
 
     def reset(self) -> None:
@@ -495,7 +517,12 @@ class MainWindow(QMainWindow):
             self.plots.update_from(r.history)
         st = f.stats
         rate = self.rate_box.currentData()
-        self.status_time.setText(f"t = {f.t:8.2f} s" + ("   (paused)" if r.paused else ""))
+        self._set_badge("paused" if r.paused else "running")
+        self.status_time.setText(f"T+ {f.t:9.2f} s")
+        warn = f.load > 0.8 or f.lag > 0.05  # near the real-time limit: caution colour
+        if warn != self.status_perf.property("warn"):
+            self.status_perf.setProperty("warn", warn)
+            self.status_perf.setStyleSheet(f"color: {T.AMBER};" if warn else "")
         self.status_perf.setText(
             f"CPU {f.load * 100:4.0f}% of {'real time' if rate else 'max speed'}   lag {f.lag * 1000:4.1f} ms   "
             f"slips {r.slips}   forced steps {st.get('forced_steps', 0)}"

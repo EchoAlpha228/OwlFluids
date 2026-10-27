@@ -5,14 +5,16 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
 
-LINE = QColor("#2b3440")
-GAS = QColor("#cfe3f7")
-LIQUID = QColor("#5b9bd5")
-CRYO = QColor("#8fd3ff")
-OPEN = QColor("#3fae5a")
-CLOSED = QColor("#d64545")
-PARTIAL = QColor("#e0a030")
-METAL = QColor("#eef1f4")
+from . import theme as T
+
+LINE = T.qc(T.GRAY_100)
+GAS = T.qc(T.GRAY_600)
+LIQUID = T.qc(T.DARK_BLUE)
+CRYO = T.qc(T.DARK_CYAN)
+OPEN = T.qc(T.VALVE_OPEN)
+CLOSED = T.qc(T.VALVE_CLOSED)
+PARTIAL = T.qc(T.VALVE_MOVING)
+METAL = T.qc(T.GRAY_700)
 
 # (width, height) and port positions relative to the centre, before rotation
 SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = {

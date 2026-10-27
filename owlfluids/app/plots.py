@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -18,18 +19,25 @@ from PySide6.QtWidgets import (
 )
 
 from .. import units
+from . import theme as T
 
 FLOW_ZERO = 1e-4  # kg/s; smaller flows are solver residue (or a closed path) and are shown as 0
 GROUPS = [("pressure", "Pressure"), ("temperature", "Temperature"), ("mass_flow", "Mass flow"),
           ("other", "Other"), ("valve", "Valve position")]
-COLOURS = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22",
-           "#7f7f7f"]
+COLOURS = T.TRACES
+
+
+def _swatch(colour: str) -> QIcon:
+    pm = QPixmap(10, 10)
+    pm.fill(QColor(colour))
+    return QIcon(pm)
 
 
 class PlotPanel(QWidget):
     def __init__(self):
         super().__init__()
-        pg.setConfigOptions(antialias=True, background="w", foreground="#2b3440")
+        # no antialiasing: live curves repaint 20 times a second and it roughly halves their cost
+        pg.setConfigOptions(antialias=False, background=T.GRAY_950, foreground=T.GRAY_300)
         outer = QHBoxLayout(self)
         split = QSplitter(Qt.Horizontal)
         outer.addWidget(split)
@@ -39,7 +47,9 @@ class PlotPanel(QWidget):
         sv.setContentsMargins(0, 0, 0, 0)
         self.series_list = QListWidget()
         self.series_list.itemChanged.connect(lambda _: self._rebuild_visibility())
-        sv.addWidget(QLabel("Show"))
+        show = QLabel("SIGNALS")
+        show.setObjectName("heading")
+        sv.addWidget(show)
         sv.addWidget(self.series_list)
         row = QHBoxLayout()
         row.addWidget(QLabel("Window"))
@@ -85,21 +95,36 @@ class PlotPanel(QWidget):
         for i, (g, title) in enumerate((g, t) for g, t in GROUPS if g in used):
             p = self.graphics.addPlot(row=i, col=0)
             unit = next((self.unit_of[n] for n in self.names if self.groups[n] == g and self.unit_of[n]), "")
+            if g == "valve":
+                unit = "%"
+                p.setYRange(-5, 105, padding=0)
+                p.enableAutoRange(axis="y", enable=False)
             p.setLabel("left", title, units=None if not unit else unit)
-            p.showGrid(x=True, y=True, alpha=0.25)
-            p.addLegend(offset=(5, 5), labelTextSize="8pt")
+            p.showGrid(x=True, y=True, alpha=0.15)
+            for side in ("left", "bottom"):
+                ax = p.getAxis(side)
+                ax.enableAutoSIPrefix(False)  # psi stays psi, not kpsi
+                ax.setTickFont(T.mono_font(8))
+                ax.setPen(T.GRAY_600)
+                ax.setTextPen(T.GRAY_300)
+            p.getAxis("left").setWidth(64)
+            p.getAxis("bottom").setStyle(showValues=False)
             if first is None:
                 first = p
             else:
                 p.setXLink(first)
             self.plots[g] = p
         if self.plots:
-            list(self.plots.values())[-1].setLabel("bottom", "time", units="s")
+            last = list(self.plots.values())[-1]
+            last.getAxis("bottom").setStyle(showValues=True)
+            last.setLabel("bottom", "time", units="s")
         for i, n in enumerate(self.names):
             g = self.groups[n]
-            pen = pg.mkPen(COLOURS[i % len(COLOURS)], width=1.6)
+            colour = COLOURS[i % len(COLOURS)]
+            pen = pg.mkPen(colour, width=1.5)
             self.curves[n] = self.plots[g].plot([], [], pen=pen, name=n.replace("valve:", ""))
-            it = QListWidgetItem(n.replace("valve:", "valve "))
+            it = QListWidgetItem(_swatch(colour), n.replace("valve:", "valve "))
+            it.setFont(T.mono_font())
             it.setData(Qt.UserRole, n)
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Unchecked if g == "valve" and len(valves) > 6 else Qt.Checked)
@@ -132,6 +157,8 @@ class PlotPanel(QWidget):
             y = v[:, j]
             if self.groups.get(n) == "mass_flow":  # display only: residue would fill an autoscaled axis
                 y = np.where(np.abs(y) < FLOW_ZERO, 0.0, y)
+            elif self.groups.get(n) == "valve":
+                y = y * 100.0
             c.setData(t, units.convert(y, self.unit_of.get(n, "")))
 
     def load_overlay(self, names: list[str], data: np.ndarray) -> int:
@@ -143,7 +170,8 @@ class PlotPanel(QWidget):
                 continue
             g = self.groups[key]
             pen = pg.mkPen(self.curves[key].opts["pen"].color(), width=1.2, style=Qt.DashLine)
-            self.overlay[key] = self.plots[g].plot(data[:, 0], data[:, j], pen=pen, name=f"{name} (log)")
+            y = data[:, j] * 100.0 if g == "valve" else data[:, j]  # valve axis is in %
+            self.overlay[key] = self.plots[g].plot(data[:, 0], y, pen=pen, name=f"{name} (log)")
             n_match += 1
         self.clear_overlay_btn.setEnabled(bool(self.overlay))
         self._rebuild_visibility()
