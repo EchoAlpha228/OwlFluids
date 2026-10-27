@@ -41,6 +41,15 @@ def test_engine_stand_runs_faster_than_real_time():
     assert shut == pytest.approx(0.0, abs=0.05)
 
 
+def _machine() -> str:
+    """CPU and C library, for failure messages: these counts can differ from machine to machine."""
+    import platform
+
+    from llvmlite import binding
+
+    return f"{binding.get_host_cpu_name()} / {platform.platform()}"
+
+
 def _feed_transient(budget):
     """Injector pressure every 10 ms for 1 s after the main valves open."""
     sim = Simulation(engine_test_stand(), step_budget=budget)
@@ -63,7 +72,7 @@ def test_small_budget_keeps_the_valve_transient():
     ref, forced_ref = _feed_transient(200)
     small, forced_small = _feed_transient(12)
     assert forced_ref < 10
-    assert forced_small < 300
+    assert forced_small < 300, f"{forced_small} forced steps on {_machine()}"
     arrival = [np.argmax(p > 100 * 6894.757) for p in (ref, small)]  # liquid reaches the injector
     assert ref[arrival[0]] > 100 * 6894.757 and small[arrival[1]] > 100 * 6894.757
     assert abs(arrival[0] - arrival[1]) <= 3  # within 30 ms
@@ -90,4 +99,5 @@ def test_stand_purge_converges():
     sim.run(0.3)
     sim.open("V-P1", "V-P2", "V-P3", "V-P4")
     sim.run(1.5)
-    assert sim.solver_stats()["forced_steps"] < 75
+    stats = sim.solver_stats()
+    assert stats["forced_steps"] < 75, f"{stats} on {_machine()}"
