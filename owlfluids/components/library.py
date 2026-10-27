@@ -20,6 +20,7 @@ from ..core.layout import (
     DRAW_MIX,
     DRAW_VAPOR,
 )
+from ..io.system import PIPE_TYPES
 
 CV_TO_CDA = 1.6987e-5  # m^2 of effective flow area per unit of valve Cv
 STEEL = {"density": 8000.0, "cp": 500.0}
@@ -268,21 +269,6 @@ class Volume(ComponentType):
 # ---------------------------------------------------------------- lines
 
 
-class Pipe(ComponentType):
-    type_name = "pipe"
-    label = "Line"
-    category = "Lines"
-    ports = ("in", "out")
-    merges_ports = True
-    params = ()
-    help = ("Tubing on the drawing only: its two ends are one point. Lines are not modelled; "
-            "the Cv of the valves, orifices and fittings sets the flow.")
-
-    @classmethod
-    def build(cls, b, comp):
-        b.port_node(comp, "in")
-
-
 class Tee(ComponentType):
     type_name = "tee"
     label = "Tee / cross"
@@ -460,17 +446,20 @@ class AirPump(ComponentType):
 
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
-    for c in (Tank, PressurizedTank, Boundary, Volume, Pipe, Tee, Fitting, Orifice, Valve, ThrottleValve,
+    for c in (Tank, PressurizedTank, Boundary, Volume, Tee, Fitting, Orifice, Valve, ThrottleValve,
               CheckValve, ReliefValve, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",
-           "solenoid": "valve", "ball_valve": "valve", "needle_valve": "throttle_valve", "tubing": "pipe",
-           "line": "pipe", "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
+           "solenoid": "valve", "ball_valve": "valve", "needle_valve": "throttle_valve",
+           "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
            "pump": "air_pump"}
 
 
 def get_type(name: str) -> type[ComponentType]:
     key = ALIASES.get(name, name)
+    if key in PIPE_TYPES:
+        raise ValueError(f"{name!r} is no longer a component: lines are not modelled, so connect the ports "
+                         "directly (draw a line as a 'volume' to keep its volume or steel)")
     if key not in TYPES:
         raise ValueError(f"unknown component type {name!r}; known: {', '.join(sorted(TYPES))}")
     return TYPES[key]

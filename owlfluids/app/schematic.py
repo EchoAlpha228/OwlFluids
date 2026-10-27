@@ -206,7 +206,7 @@ class Scene(QGraphicsScene):
     # ------------------------------------------------------------------ edits
     def add_component(self, type_name: str, pos: QPointF) -> Component:
         ct = get_type(type_name)
-        prefix = {"pipe": "L", "valve": "V", "tank": "K", "pressurized_tank": "TK", "boundary": "ATM",
+        prefix = {"valve": "V", "tank": "K", "pressurized_tank": "TK", "boundary": "ATM",
                   "orifice": "O", "fitting": "F", "tee": "T", "check_valve": "CV", "relief_valve": "RV",
                   "regulator": "REG", "volume": "VOL", "throttle_valve": "TV"}.get(type_name, type_name.upper())
         n = 1

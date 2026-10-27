@@ -137,7 +137,7 @@ class NetworkBuilder:
         self.comp_links: dict[str, list[int]] = defaultdict(list)
         self.valves: dict[str, int] = {}
         self.pumps: dict[str, int] = {}
-        self.warnings: list[str] = []
+        self.warnings: list[str] = list(system.notes)
         self.p_init = units.parse(system.setting("initial_pressure"), "pressure")
         self.t_init = units.parse(system.setting("initial_temperature"), "temperature")
         self.junction_volume = units.parse(system.setting("junction_volume"), "volume")
