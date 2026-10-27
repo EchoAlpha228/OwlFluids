@@ -91,15 +91,18 @@ class ComponentItem(QGraphicsObject):
         return QRectF(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12)
 
     def paint(self, p: QPainter, option, widget=None) -> None:
-        symbols.paint(p, self.ctype.type_name, self.size, self.state or self._static_state())
+        symbols.paint(p, self.ctype.type_name, self.size, {**self._static_state(), **self.state})
         if self.isSelected():
             p.setPen(QPen(WIRE_SELECTED, 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
             p.drawRect(self.boundingRect().adjusted(2, 2, -2, -2))
 
     def _static_state(self) -> dict:
-        """While editing, tanks show the colours of the fluids they are set to hold."""
+        """What the drawing needs from the parameters: valve actuators, and tank fluids while editing."""
         prm = self.comp.params
+        if self.ctype.type_name == "valve":  # the "solenoid" type name is a valve drawn as one
+            default = "solenoid" if self.comp.type == "solenoid" else "pneumatic"
+            return {"actuator": prm.get("actuator", default)}
         if self.ctype.type_name == "pressurized_tank":
             return {"liquid_colour": symbols.fluid_colour(_fluid(prm.get("liquid"))),
                     "gas_colour": symbols.fluid_colour(_fluid(prm.get("pressurant")), gas=True)}

@@ -348,6 +348,8 @@ class Valve(ComponentType):
         Param("open_time", "time", "50 ms", "time to travel fully open"),
         Param("close_time", "time", None, "time to travel fully closed (default: open_time)"),
         Param("normally", "choice", "closed", "state at the start of a run", ("closed", "open")),
+        Param("actuator", "choice", "pneumatic", "how it is driven (only changes the drawing)",
+              ("pneumatic", "solenoid")),
     )
     help = "Solenoid or actuated ball valve. Its flow area ramps over the open and close times."
 

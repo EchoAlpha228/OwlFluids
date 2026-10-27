@@ -89,6 +89,25 @@ def _arrow_head(p: QPainter, tip: QPointF, direction: QPointF, size: float = 5.0
     p.restore()
 
 
+def _actuator(p: QPainter, h: float) -> None:
+    """Pneumatic actuator: a square on the stem, with the amber A at its top right."""
+    p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 12))
+    p.setBrush(QBrush(METAL))
+    p.drawRect(QRectF(-6, -h / 2, 12, 12))
+    _pneumatic_badge(p, QPointF(10, -h / 2 - 1))
+
+
+def _coil(p: QPainter, bottom: float) -> None:
+    """Solenoid: a coil on the stem."""
+    p.setBrush(Qt.NoBrush)
+    p.drawLine(QPointF(0, 0), QPointF(0, bottom))
+    coil = QPainterPath(QPointF(0, bottom))
+    for i in range(3):
+        y = bottom - i * 4
+        coil.cubicTo(QPointF(7, y), QPointF(7, y - 4), QPointF(0, y - 4))
+    p.drawPath(coil)
+
+
 def _pneumatic_badge(p: QPainter, centre: QPointF) -> None:
     """Amber disc lettered A beside the actuator: a pneumatically operated valve."""
     p.save()
@@ -172,20 +191,17 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.drawPath(top)
         p.drawPath(bot)
     elif type_name == "valve":
-        # actuated on/off valve: body with a square actuator on the stem
         _body(p, w, state)
-        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 12))
-        p.setBrush(QBrush(METAL))
-        p.drawRect(QRectF(-6, -h / 2, 12, 12))
-        _pneumatic_badge(p, QPointF(10, -h / 2 - 1))
+        if state.get("actuator") == "solenoid":  # solenoid: coil on the stem
+            _coil(p, -10)
+        else:  # pneumatic, normally open or closed: square actuator with the A
+            _actuator(p, h)
     elif type_name == "throttle_valve":
-        # throttle / needle valve: body with an S across it
+        # throttle: pneumatic actuator, arrow across the body for a variable opening
         _body(p, w, state)
-        p.setBrush(Qt.NoBrush)
-        s_path = QPainterPath(QPointF(6, -8))
-        s_path.cubicTo(QPointF(-10, -10), QPointF(-8, 0), QPointF(0, 0))
-        s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
-        p.drawPath(s_path)
+        _actuator(p, h)
+        p.drawLine(QPointF(-14, 11), QPointF(12, -9))
+        _arrow_head(p, QPointF(15, -11), QPointF(1.3, -1), 5)
     elif type_name == "check_valve":
         # check valve: offset stubs joined by a diagonal, flow arrow above
         p.setBrush(Qt.NoBrush)
@@ -199,15 +215,13 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.drawLine(QPointF(-4, -h / 2 + 2), QPointF(6, -h / 2 + 2))
         _arrow_head(p, QPointF(8, -h / 2 + 2), QPointF(1, 0), 4)
     elif type_name == "relief_valve":
-        # spring-loaded relief valve: body with a coil spring on the stem
+        # relief valve: body with an S across it
         _body(p, w, state)
         p.setBrush(Qt.NoBrush)
-        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 18))
-        coil = QPainterPath(QPointF(0, -h / 2 + 18))
-        for i in range(4):
-            y = -h / 2 + 18 - i * 4
-            coil.cubicTo(QPointF(7, y), QPointF(7, y - 4), QPointF(0, y - 4))
-        p.drawPath(coil)
+        s_path = QPainterPath(QPointF(6, -8))
+        s_path.cubicTo(QPointF(-10, -10), QPointF(-8, 0), QPointF(0, 0))
+        s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
+        p.drawPath(s_path)
     elif type_name == "regulator":
         # self-contained regulator: body, dome on the stem, sensing line to the outlet
         _body(p, w, state)
