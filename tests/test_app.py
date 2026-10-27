@@ -97,3 +97,20 @@ def test_update_check_reports_through_the_gui_thread(app, monkeypatch, tmp_path)
     assert update.load_config() == {"token": "tok", "check_on_start": True}
     w.dirty = False
     w.close()
+
+
+@pytest.mark.gui
+def test_quiet_update_notice_does_not_interrupt_a_run(app, monkeypatch):
+    from owlfluids import update
+    from owlfluids.app import updates
+
+    monkeypatch.setattr(update, "frozen", lambda: True)
+    monkeypatch.setattr(updates.QMessageBox, "exec", lambda *a: pytest.fail("no dialog during a run"))
+    rel = update.Release(version="99.0.0", tag="v99.0.0", url="u", asset_name="a.exe", asset_api_url="x", size=1)
+    w = MainWindow()
+    w.runner = object()  # a run in progress
+    w.updater._on_checked(rel, True)
+    assert "99.0.0" in w.statusBar().currentMessage()
+    w.runner = None
+    w.dirty = False
+    w.close()

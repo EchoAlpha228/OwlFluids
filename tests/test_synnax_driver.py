@@ -231,6 +231,7 @@ def test_version_mismatch():
     assert "upgrade the OwlFluids build" in version_mismatch("0.59.0", "0.60.0")
     assert "did not report" in version_mismatch("0.60.0", "")
     assert version_mismatch("", "0.60.0") is None  # client version unknown: nothing to compare
+    assert version_mismatch("0.60.0", "0.0.0") is None  # development Core
 
 
 def test_check_versions_modes():
@@ -248,9 +249,15 @@ def test_check_versions_modes():
     assert check_versions(SimpleNamespace(), "strict") is None  # an old client can't report versions
 
     def broken():
-        raise ConnectionError("down")
+        raise AttributeError("no checker in this client")
 
     assert check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=broken)), "strict") is None
+    failed = SimpleNamespace(status="failed", message="connection refused", node_version="")
+    with pytest.raises(RuntimeError, match="cannot reach the Synnax Core: connection refused"):
+        check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=lambda: failed)), "warn")
+    ok = SimpleNamespace(status="connected", client_server_compatible=True, client_version="0.60.0",
+                         node_version="0.0.0")
+    assert check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=lambda: ok)), "strict") is None
     assert SynnaxConfig.from_dict({"check_version": False}).check_version == "off"
     assert SynnaxConfig.from_dict({"check_version": True}).check_version == "warn"
     with pytest.raises(ValueError, match="check_version"):

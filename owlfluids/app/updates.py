@@ -113,6 +113,11 @@ class Updater(QObject):
                                         "This copy runs from a Python install: update it with git pull and "
                                         f"pip install -e ., or use the installer from\n{res.url}")
             return
+        if quiet and self.window.runner is not None:
+            # a dialog over a live run invites a stray click that stops it: leave a note instead
+            self.window.statusBar().showMessage(
+                f"OwlFluids {res.version} is available: Help > Check for updates", 30000)
+            return
         msg = f"OwlFluids {res.version} is available (you have {__version__}). Install it now?"
         if self.window.runner is not None:
             msg += "\n\nThe running simulation will be stopped."

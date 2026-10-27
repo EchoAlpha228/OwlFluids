@@ -58,6 +58,9 @@ Name: "{group}\Uninstall OwlFluids"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\OwlFluids"; Filename: "{app}\owlfluids-app.exe"; Tasks: desktopicon
 
 [Run]
+; compile the solver for this PC now, under the progress bar, rather than on the first run
+; (every version starts with a cold numba cache)
+Filename: "{app}\owlfluids.exe"; Parameters: "run lox-feed --duration 0.1 --rate 0 --print-every 0"; Flags: runhidden waituntilterminated; StatusMsg: "Compiling the solver for this PC..."
 ; no skipifsilent: a silent upgrade from the app's updater reopens the app
 Filename: "{app}\owlfluids-app.exe"; Description: "Open OwlFluids"; Flags: nowait postinstall
 

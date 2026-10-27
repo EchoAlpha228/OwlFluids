@@ -81,7 +81,7 @@ def version_mismatch(client: str, core: str) -> str | None:
         return None
     if n is None:
         return f"the Synnax Core did not report its version (it is probably older than client {client})"
-    if c == n:
+    if c == n or (0, 0) in (c, n):  # 0.0 marks a development build, which Synnax pairs with anything
         return None
     side = "Core" if c > n else "OwlFluids build"
     return (f"Synnax Core {core} and the Synnax client {client} in this OwlFluids build differ in major.minor, "
@@ -92,14 +92,19 @@ def check_versions(client, mode: str) -> str | None:
     """Compare a connected client with its Core. Returns a warning, raises for ``strict``, or None.
 
     Clients older than about 0.50 can't report versions; that counts as unknown, never as a mismatch.
+    A check that could not reach the Core raises a connection error, not a version complaint.
     """
     if mode == "off":
         return None
     try:
         state = client.connectivity.check()
-        problem = version_mismatch(getattr(state, "client_version", ""), getattr(state, "node_version", ""))
-    except Exception:  # noqa: BLE001 - no connectivity checker, or it failed: version unknown
+    except Exception:  # noqa: BLE001 - no connectivity checker (old client): version unknown
         return None
+    if getattr(state, "status", "connected") != "connected":
+        raise RuntimeError(f"cannot reach the Synnax Core: {getattr(state, 'message', '') or state.status}")
+    if getattr(state, "client_server_compatible", False):  # Synnax's own rule says they pair
+        return None
+    problem = version_mismatch(getattr(state, "client_version", ""), getattr(state, "node_version", ""))
     if problem and mode == "strict":
         raise RuntimeError(f"{problem} (refused because check_version is strict)")
     return problem
