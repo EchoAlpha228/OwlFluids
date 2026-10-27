@@ -63,6 +63,46 @@ def valve_colour(position: float | None) -> QColor:
     return PARTIAL
 
 
+def _state_colour(state: dict, default: QColor) -> QColor:
+    pos = state.get("position")
+    return default if pos is None else valve_colour(pos)
+
+
+def _body(p: QPainter, w: float, state: dict) -> None:
+    """Valve body (two triangles meeting at the centre) between the ports, coloured by position."""
+    p.setPen(QPen(LINE, 1.6))
+    p.drawLine(QPointF(-w / 2, 0), QPointF(-w / 2 + 4, 0))
+    p.drawLine(QPointF(w / 2 - 4, 0), QPointF(w / 2, 0))
+    _bowtie(p, w, 30, valve_colour(state.get("position")))
+    p.setPen(QPen(LINE, 1.6))
+
+
+def _arrow_head(p: QPainter, tip: QPointF, direction: QPointF, size: float = 5.0) -> None:
+    dx, dy = direction.x(), direction.y()
+    n = (dx * dx + dy * dy) ** 0.5 or 1.0
+    dx, dy = dx / n, dy / n
+    base = QPointF(tip.x() - dx * size, tip.y() - dy * size)
+    side = QPointF(-dy * size * 0.5, dx * size * 0.5)
+    p.save()
+    p.setBrush(QBrush(p.pen().color()))
+    p.drawPolygon(QPolygonF([tip, base + side, base - side]))
+    p.restore()
+
+
+def _pneumatic_badge(p: QPainter, centre: QPointF) -> None:
+    """Amber disc lettered A beside the actuator: a pneumatically operated valve."""
+    p.save()
+    p.setPen(QPen(T.qc(T.DARK_AMBER), 0.8))
+    p.setBrush(QBrush(T.qc(T.AMBER)))
+    r = QRectF(centre.x() - 4.5, centre.y() - 4.5, 9, 9)
+    p.drawEllipse(r)
+    p.setPen(QPen(T.qc(T.GRAY_950)))
+    p.setFont(T.ui_font(4.5, bold=True))
+    p.drawText(r, Qt.AlignCenter, "A")
+    p.restore()
+
+
+
 def _bowtie(p: QPainter, w: float, h: float, fill: QColor) -> None:
     hw, hh = w / 2 - 4, h / 2 - 6
     poly = QPolygonF([QPointF(-hw, -hh), QPointF(0, 0), QPointF(-hw, hh)])
@@ -96,11 +136,15 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.drawRoundedRect(r, 20, 20)
         _fill_level(p, r, fill_frac if fill_frac is not None else 0.8, liquid)
     elif type_name == "boundary":
+        # vent: a box with a peak, an arrow out of the top; fed from the port on the left
         p.setBrush(Qt.NoBrush)
-        p.drawLine(QPointF(-w / 2, 0), QPointF(w / 2 - 12, 0))
-        for i in range(3):
-            x = w / 2 - 12 + i * 5
-            p.drawLine(QPointF(x, -h / 2 + 6 + i * 4), QPointF(x, h / 2 - 6 - i * 4))
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-10, 0))
+        box = QRectF(-10, -2, 20, 12)
+        p.setBrush(QBrush(METAL))
+        p.drawRect(box)
+        p.drawPolyline(QPolygonF([box.bottomLeft(), QPointF(0, box.top()), box.bottomRight()]))
+        p.drawLine(QPointF(0, box.top()), QPointF(0, -h / 2 + 2))
+        _arrow_head(p, QPointF(0, -h / 2 + 1), QPointF(0, -1))
     elif type_name == "volume":
         p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
     elif type_name == "pipe":
@@ -118,44 +162,77 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.drawPath(path)
         p.drawLine(QPointF(-w / 2, 0), QPointF(w / 2, 0))
     elif type_name == "orifice":
-        p.drawLine(QPointF(-w / 2, 0), QPointF(-3, 0))
-        p.drawLine(QPointF(3, 0), QPointF(w / 2, 0))
-        p.setPen(QPen(LINE, 3))
-        p.drawLine(QPointF(0, -h / 2 + 2), QPointF(0, -4))
-        p.drawLine(QPointF(0, 4), QPointF(0, h / 2 - 2))
-    elif type_name in ("valve", "throttle_valve"):
-        _bowtie(p, w, h if type_name == "valve" else h - 8, valve_colour(state.get("position")))
-        p.setPen(QPen(LINE, 1.6))
-        top = -h / 2 + (2 if type_name == "valve" else 0)
-        p.drawLine(QPointF(0, 0), QPointF(0, top + 4))
-        p.setBrush(QBrush(METAL))
-        p.drawRect(QRectF(-8, top, 16, 6))
-        if type_name == "throttle_valve":
-            p.drawLine(QPointF(-14, 12), QPointF(14, -10))
-    elif type_name == "check_valve":
-        hw, hh = w / 2 - 6, h / 2 - 4
-        p.setBrush(QBrush(valve_colour(state.get("position"))))
-        p.drawPolygon(QPolygonF([QPointF(-hw, -hh), QPointF(hw - 6, 0), QPointF(-hw, hh)]))
-        p.setPen(QPen(LINE, 3))
-        p.drawLine(QPointF(hw, -hh), QPointF(hw, hh))
-    elif type_name == "relief_valve":
-        _bowtie(p, w, h - 14, valve_colour(state.get("position")))
-        p.setPen(QPen(LINE, 1.4))
+        # restriction: two arcs bowing towards the flow path
         p.setBrush(Qt.NoBrush)
-        path = QPainterPath(QPointF(0, 0))
-        for i in range(5):
-            path.lineTo(QPointF(-6 if i % 2 == 0 else 6, -6 - i * 3.5))
-        p.drawPath(path)
-    elif type_name == "air_pump":
-        # compressor: a circle with a wedge pointing at its outlet, green while it runs
-        p.setBrush(QBrush(valve_colour(state.get("position"))))
-        p.drawEllipse(QRectF(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4))
-        p.drawPolyline(QPolygonF([QPointF(-w / 2 + 6, -h / 2 + 10), QPointF(w / 2 - 2, 0),
-                                  QPointF(-w / 2 + 6, h / 2 - 10)]))
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-12, 0))
+        p.drawLine(QPointF(12, 0), QPointF(w / 2, 0))
+        top, bot = QPainterPath(QPointF(-12, -h / 2 + 4)), QPainterPath(QPointF(-12, h / 2 - 4))
+        top.quadTo(QPointF(0, -2), QPointF(12, -h / 2 + 4))
+        bot.quadTo(QPointF(0, 2), QPointF(12, h / 2 - 4))
+        p.drawPath(top)
+        p.drawPath(bot)
+    elif type_name == "valve":
+        # actuated on/off valve: body with a square actuator on the stem
+        _body(p, w, state)
+        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 12))
+        p.setBrush(QBrush(METAL))
+        p.drawRect(QRectF(-6, -h / 2, 12, 12))
+        _pneumatic_badge(p, QPointF(10, -h / 2 - 1))
+    elif type_name == "throttle_valve":
+        # throttle / needle valve: body with an S across it
+        _body(p, w, state)
+        p.setBrush(Qt.NoBrush)
+        s_path = QPainterPath(QPointF(6, -8))
+        s_path.cubicTo(QPointF(-10, -10), QPointF(-8, 0), QPointF(0, 0))
+        s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
+        p.drawPath(s_path)
+    elif type_name == "check_valve":
+        # check valve: offset stubs joined by a diagonal, flow arrow above
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-8, 0))
+        p.drawLine(QPointF(8, 0), QPointF(w / 2, 0))
+        p.drawLine(QPointF(-8, 0), QPointF(-8, 10))
+        p.drawLine(QPointF(8, 0), QPointF(8, -10))
+        p.setPen(QPen(_state_colour(state, LINE), 2.2))
+        p.drawLine(QPointF(-8, 10), QPointF(8, -10))
+        p.setPen(QPen(LINE, 1.2))
+        p.drawLine(QPointF(-4, -h / 2 + 2), QPointF(6, -h / 2 + 2))
+        _arrow_head(p, QPointF(8, -h / 2 + 2), QPointF(1, 0), 4)
+    elif type_name == "relief_valve":
+        # spring-loaded relief valve: body with a coil spring on the stem
+        _body(p, w, state)
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 18))
+        coil = QPainterPath(QPointF(0, -h / 2 + 18))
+        for i in range(4):
+            y = -h / 2 + 18 - i * 4
+            coil.cubicTo(QPointF(7, y), QPointF(7, y - 4), QPointF(0, y - 4))
+        p.drawPath(coil)
     elif type_name == "regulator":
-        p.drawRect(QRectF(-w / 2 + 6, -6, w - 12, h / 2 + 2))
-        p.setBrush(QBrush(valve_colour(state.get("position"))))
-        p.drawEllipse(QRectF(-12, -h / 2, 24, 16))
+        # self-contained regulator: body, dome on the stem, sensing line to the outlet
+        _body(p, w, state)
+        p.setBrush(QBrush(LINE))
+        p.drawEllipse(QRectF(-3, -3, 6, 6))
+        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 8))
+        p.setBrush(QBrush(METAL))
+        p.drawEllipse(QRectF(-4, -h / 2 + 1, 8, 8))
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(4, -h / 2 + 5), QPointF(w / 2 - 2, -h / 2 + 5))
+        p.drawLine(QPointF(w / 2 - 2, -h / 2 + 5), QPointF(w / 2 - 2, 0))
+    elif type_name == "air_pump":
+        # pump / compressor: casing on a base, inlet arrow to the centre, rotation arrow on top
+        r = min(w, h) / 2 - 5
+        p.setBrush(QBrush(METAL))
+        p.drawPolygon(QPolygonF([QPointF(-r + 3, r - 2), QPointF(r - 3, r - 2), QPointF(r + 2, r + 4),
+                                 QPointF(-r - 2, r + 4)]))
+        p.drawEllipse(QRectF(-r, -r - 1, 2 * r, 2 * r))
+        p.setPen(QPen(_state_colour(state, LINE), 1.6))
+        p.drawLine(QPointF(-w / 2, -1), QPointF(-2, -1))
+        _arrow_head(p, QPointF(0, -1), QPointF(1, 0), 5)
+        p.drawLine(QPointF(0, -r - 1), QPointF(r + 2, -r - 1))
+        _arrow_head(p, QPointF(r + 4, -r - 1), QPointF(1, 0), 5)
+        p.setPen(QPen(LINE, 1.6))
+        p.drawLine(QPointF(r, 0), QPointF(w / 2, 0))
     else:
         p.drawRoundedRect(QRectF(-w / 2, -h / 2, w, h), 6, 6)
 
