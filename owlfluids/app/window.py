@@ -393,7 +393,13 @@ class MainWindow(QMainWindow):
         throttles = {v: get_type(sim.system.component(v).type).type_name == "throttle_valve" for v in sim.valves()}
         self.valves.set_valves(sim.valves(), throttles)
         self.plots.configure(sim.system, sim.valves())
+        names = sim.net.fluids.names
+        self._node_fluids = [names[k] if k >= 0 else None for k in sim.net.NI[:, L.N_FLUID]]
+        self._fluid_colours = {}
         self.scene.set_running(True)
+        self._colour_wires(sim)
+        self._flow_wires = self._wire_links(sim)
+        self._last_tick = time.perf_counter()
         self.properties.show_component(None, self.scene.system)
         self._set_running_ui(True)
         self.side_tabs.setCurrentWidget(self.valves)
@@ -425,6 +431,7 @@ class MainWindow(QMainWindow):
             self.runner = None
         self.a_pause.setText("⏸ Pause")
         self.scene.set_running(False)
+        self._colour_wires(None)
         self.valves.set_valves([], {})
         self._set_running_ui(False)
         self._set_badge("stopped")
@@ -513,6 +520,11 @@ class MainWindow(QMainWindow):
         f = r.frame
         self.valves.show_frame(f)
         self.scene.show_values(self._component_values(r.sim, f))
+        now = time.perf_counter()
+        dt, self._last_tick = (0.0 if r.paused else now - self._last_tick), now
+        mdot = f.link_mdot
+        self.scene.show_flows({k: (1 if sign * mdot[li] > 0 else -1) for k, li, sign in self._flow_wires
+                               if abs(mdot[li]) >= FLOW_ZERO}, dt)
         if self.plot_dock.isVisible():
             self.plots.update_from(r.history)
         st = f.stats
@@ -528,6 +540,73 @@ class MainWindow(QMainWindow):
             f"slips {r.slips}   forced steps {st.get('forced_steps', 0)}"
             + (f"   Synnax ↑{self.driver.writes} ↓{self.driver.commands}" if self.driver else "")
             + ("   ● REC" if self.log else ""))
+
+    def _fluid_colour(self, node: int, gas: bool):
+        """Material colour of a node's fluid; cached, since it is asked for every component every tick."""
+        key = (node, gas)
+        c = self._fluid_colours.get(key)
+        if c is None:
+            c = self._fluid_colours[key] = symbols.fluid_colour(self._node_fluids[node], gas)
+        return c
+
+    def _colour_wires(self, sim: Simulation | None) -> None:
+        """While running, each wire takes the colour of the fluid in the line it joins."""
+        for w in self.scene.wires:
+            colour = None
+            if sim is not None:
+                i = sim.net.port_nodes.get(w.a, sim.net.port_nodes.get(w.b))
+                if i is not None:
+                    colour = symbols.fluid_colour(self._node_fluids[i])
+            w.set_colour(colour)
+
+    def _wire_links(self, sim: Simulation) -> list[tuple[int, int, float]]:
+        """For each wire that carries flow: (wire index, link, sign); flow a->b is sign * mdot[link].
+
+        A wire joins two ports that share a node. Its flow is the flow of the nearest
+        flow element (valve, orifice, regulator...): at one of its ends, or reached
+        through pipes, which are nodes with no flow element of their own.
+        """
+        net = sim.net
+        by_port: dict[str, list[tuple[int, str]]] = {}
+        for k, w in enumerate(self.scene.wires):
+            by_port.setdefault(w.a, []).append((k, w.b))
+            by_port.setdefault(w.b, []).append((k, w.a))
+
+        def link_at(port: str):
+            """The link of the component that owns ``port`` with an end on that port's node, and that end."""
+            comp, node = port.split(".")[0], net.port_nodes.get(port)
+            for k in net.comp_links.get(comp, []):
+                if net.LI[k, L.L_A] == node:
+                    return k, -1.0  # positive flow leaves this node through the component
+                if net.LI[k, L.L_B] == node:
+                    return k, 1.0  # positive flow arrives here out of the component
+            return None
+
+        def trace(port: str, seen: set) -> tuple[int, float] | None:
+            """Flow out of ``port``'s component into its wire, as (link, sign)."""
+            found = link_at(port)
+            if found is not None:
+                return found
+            comp = port.split(".")[0]
+            ports = [q for q in net.port_nodes if q.split(".")[0] == comp and q != port]
+            if comp in seen or len(ports) != 1 or get_type(sim.system.component(comp).type).type_name != "pipe":
+                return None
+            seen.add(comp)
+            for _k, other in by_port.get(ports[0], []):
+                r = trace(other, seen)  # flow into the pipe at its other end = out of it at this one
+                if r is not None:
+                    return r
+            return None
+
+        out = []
+        for k, w in enumerate(self.scene.wires):
+            r = trace(w.a, set())  # flow out of a's component = a -> b
+            if r is None:
+                r = trace(w.b, set())
+                r = None if r is None else (r[0], -r[1])
+            if r is not None:
+                out.append((k, r[0], r[1]))
+        return out
 
     def _component_values(self, sim: Simulation, f) -> dict:
         net = sim.net
@@ -552,8 +631,7 @@ class MainWindow(QMainWindow):
                 i = net.port_nodes.get(f"{c.id}.in")
                 if i is not None:
                     text = f"{units.to_psi(f.node_p[i]):.0f} psi"
-                    if f.node_x[i] <= 0.5:
-                        state["pipe_colour"] = symbols.CRYO if f.node_t[i] < 150 else symbols.LIQUID
+                    state["pipe_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])
@@ -562,10 +640,14 @@ class MainWindow(QMainWindow):
                     liq = nodes[1]
                     vol = net.NF[nodes[0], L.NF_VOL]
                     state["fill"] = min(max(f.node_m[liq] / max(f.node_rho[liq], 1e-9) / vol, 0.0), 1.0)
-                    state["liquid_colour"] = symbols.CRYO if f.node_t[liq] < 150 else symbols.LIQUID
+                    state["liquid_colour"] = self._fluid_colour(liq, False)
+                    state["gas_colour"] = self._fluid_colour(i, True)
                     text = f"{p:.0f} psi  {f.node_t[liq]:.0f} K liq"
-                elif ct.type_name == "tank" and 0.0 <= f.node_x[i] <= 1.0:
-                    state["fill"] = 1.0 - f.node_x[i]
+                elif ct.type_name == "tank":
+                    state["liquid_colour"] = self._fluid_colour(i, False)
+                    state["gas_colour"] = self._fluid_colour(i, True)
+                    if 0.0 <= f.node_x[i] <= 1.0:
+                        state["fill"] = 1.0 - f.node_x[i]
             out[c.id] = (text, state)
         return out
 

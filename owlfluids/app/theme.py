@@ -59,6 +59,21 @@ VALVE_OPEN = DARK_GREEN
 VALVE_CLOSED = GRAY_500
 VALVE_MOVING = DARK_CYAN
 
+# fluid material colours: desaturated so they sit below the UI colours. Liquid is
+# drawn solid; gas is the same hue, see-through (GAS_ALPHA) over the dark background.
+FLUID_COLOURS = {
+    "oxygen": "#7FB0D6",  # light blue
+    "methane": "#C98A4E",  # orange
+    "helium": "#C7B65E",  # yellow
+    "nitrogen": "#6FA27A",  # green
+    "air": "#A2A7AC",  # gray
+    "nitrous": "#4D6C9E",  # dark blue
+    "ethanol": "#B4625F",  # red
+    "water": "#5E9C9A",  # teal
+}
+FLUID_UNKNOWN = GRAY_400
+GAS_ALPHA = 0.45
+
 # plot traces, in order; no red, amber or olive, which carry alarm meanings
 TRACES = [CYAN, GREEN, BLUE, MAGENTA, GRAY_050, DARK_CYAN, DARK_GREEN, DARK_BLUE, DARK_MAGENTA, GRAY_300]
 

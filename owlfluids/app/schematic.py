@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..components import get_type
+from ..fluids.registry import canonical
 from ..io.system import Component, System
 from . import symbols
 from . import theme as T
@@ -29,6 +30,17 @@ WIRE = T.qc(T.GRAY_300)
 WIRE_SELECTED = T.qc(T.ACCENT)
 PORT = T.qc(T.GRAY_900)
 PORT_HOVER = T.qc(T.ACCENT)
+FLOW_MARK = T.qc(T.WHITE)
+FLOW_SIZE = 2.5  # px, the side of each square
+FLOW_DASHES = [1.0, 5.0]  # square, gap; in multiples of FLOW_SIZE
+FLOW_SPEED = 2.0  # dash units per second the squares travel (2 x 2.5 = 5 px/s per unit)
+
+
+def _fluid(name) -> str | None:
+    try:
+        return canonical(name) if name else None
+    except (KeyError, ValueError):
+        return None
 
 
 def snap(p: QPointF) -> QPointF:
@@ -79,11 +91,19 @@ class ComponentItem(QGraphicsObject):
         return QRectF(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12)
 
     def paint(self, p: QPainter, option, widget=None) -> None:
-        symbols.paint(p, self.ctype.type_name, self.size, self.state)
+        symbols.paint(p, self.ctype.type_name, self.size, self.state or self._static_state())
         if self.isSelected():
             p.setPen(QPen(WIRE_SELECTED, 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
             p.drawRect(self.boundingRect().adjusted(2, 2, -2, -2))
+
+    def _static_state(self) -> dict:
+        """While editing, tanks show the colours of the fluids they are set to hold."""
+        prm = self.comp.params
+        if self.ctype.type_name == "pressurized_tank":
+            return {"liquid_colour": symbols.fluid_colour(_fluid(prm.get("liquid"))),
+                    "gas_colour": symbols.fluid_colour(_fluid(prm.get("pressurant")), gas=True)}
+        return {}
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange:
@@ -107,9 +127,16 @@ class WireItem(QGraphicsPathItem):
     def __init__(self, a: str, b: str):
         super().__init__()
         self.a, self.b = a, b
+        self.colour = WIRE
+        self.flow = 0  # +1 fluid moving from a to b, -1 from b to a, 0 still
         self.setPen(QPen(WIRE, 2))
         self.setFlags(QGraphicsItem.ItemIsSelectable)
         self.setZValue(0)
+
+    def set_colour(self, colour) -> None:
+        """The line's fluid colour while running; None for the plain editing colour."""
+        self.colour = colour or WIRE
+        self.update()
 
     def route(self, pa: QPointF, pb: QPointF) -> None:
         path = QPainterPath(pa)
@@ -123,8 +150,15 @@ class WireItem(QGraphicsPathItem):
         self.setPath(path)
 
     def paint(self, p, option, widget=None):
-        self.setPen(QPen(WIRE_SELECTED if self.isSelected() else WIRE, 3 if self.isSelected() else 2))
+        self.setPen(QPen(WIRE_SELECTED if self.isSelected() else self.colour, 3 if self.isSelected() else 2))
         super().paint(p, option, widget)
+        if self.flow:  # white squares marching along the line in the direction of flow
+            pen = QPen(FLOW_MARK, FLOW_SIZE, Qt.CustomDashLine, Qt.FlatCap)
+            pen.setDashPattern(FLOW_DASHES)
+            sc = self.scene()
+            pen.setDashOffset(-self.flow * (sc.flow_phase if sc is not None else 0.0))
+            p.setPen(pen)
+            p.drawPath(self.path())
 
 
 class Scene(QGraphicsScene):
@@ -141,6 +175,7 @@ class Scene(QGraphicsScene):
         self.wires: list[WireItem] = []
         self.labels: dict[str, tuple] = {}
         self.running = False
+        self.flow_phase = 0.0
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsLineItem | None = None
         self.setSceneRect(QRectF(-2000, -2000, 6000, 4000))
@@ -349,6 +384,16 @@ class Scene(QGraphicsScene):
         if not running:
             for _name, value in self.labels.values():
                 value.setText("")
+            self.show_flows({})
+
+    def show_flows(self, flows: dict[int, int], dt: float = 0.0) -> None:
+        """``flows[wire index]`` = +1/-1/0; advances the moving squares by ``dt`` seconds."""
+        self.flow_phase = (self.flow_phase + dt * FLOW_SPEED * 6.0) % 6.0  # one dash period = 6 units
+        for k, w in enumerate(self.wires):
+            d = flows.get(k, 0)
+            if d or w.flow:
+                w.flow = d
+                w.update()
 
     def show_values(self, values: dict[str, tuple[str, dict]]) -> None:
         """``values[comp_id] = (text, state)``: label under the symbol and drawing state."""

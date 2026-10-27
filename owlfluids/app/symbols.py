@@ -16,6 +16,16 @@ CLOSED = T.qc(T.VALVE_CLOSED)
 PARTIAL = T.qc(T.VALVE_MOVING)
 METAL = T.qc(T.GRAY_700)
 
+
+
+def fluid_colour(fluid: str | None, gas: bool = False) -> QColor:
+    """A fluid's material colour; gas is the same hue, partly transparent."""
+    c = T.qc(T.FLUID_COLOURS.get(fluid or "", T.FLUID_UNKNOWN))
+    if gas:
+        c.setAlphaF(T.GAS_ALPHA)
+    return c
+
+
 # (width, height) and port positions relative to the centre, before rotation
 SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = {
     "tank": ((60, 110), {"top": (0, -55), "bottom": (0, 55), "port": (30, 0)}),
@@ -73,11 +83,16 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
     if type_name == "tank":
         r = QRectF(-w / 2, -h / 2, w, h)
         p.drawRoundedRect(r, 18, 18)
+        if "gas_colour" in state:
+            p.setBrush(QBrush(state["gas_colour"]))
+            p.drawRoundedRect(r, 18, 18)
         if fill_frac:
             _fill_level(p, r, fill_frac, liquid)
     elif type_name == "pressurized_tank":
         r = QRectF(-w / 2, -h / 2, w, h)
-        p.setBrush(QBrush(GAS))
+        p.setBrush(QBrush(METAL))
+        p.drawRoundedRect(r, 20, 20)
+        p.setBrush(QBrush(state.get("gas_colour", GAS)))
         p.drawRoundedRect(r, 20, 20)
         _fill_level(p, r, fill_frac if fill_frac is not None else 0.8, liquid)
     elif type_name == "boundary":
@@ -89,8 +104,10 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
     elif type_name == "volume":
         p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
     elif type_name == "pipe":
-        p.setBrush(QBrush(state.get("pipe_colour", METAL)))
         p.drawRect(QRectF(-w / 2, -h / 2, w, h))
+        if "pipe_colour" in state:
+            p.setBrush(QBrush(state["pipe_colour"]))
+            p.drawRect(QRectF(-w / 2, -h / 2, w, h))
     elif type_name == "tee":
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-5, -5, 10, 10))
