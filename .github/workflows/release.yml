@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       synnax_version:
-        description: "Synnax client to bundle, e.g. 0.61.* (leave empty for packaging/constraints.txt)"
+        description: "Synnax client to bundle, e.g. 0.59.* (leave empty for the newest)"
         required: false
         default: ""
 
@@ -43,8 +43,7 @@ jobs:
         if: inputs.synnax_version != ''
         shell: pwsh
         run: |
-          (Get-Content packaging\constraints.txt) -replace '^synnax==.*', "synnax==${{ inputs.synnax_version }}" |
-            Set-Content packaging\constraints.txt
+          "synnax==${{ inputs.synnax_version }}" >> packaging\constraints.txt
           $tag = "synnax" + ("${{ inputs.synnax_version }}" -replace '[^0-9.]', '').TrimEnd('.')
           "OWLFLUIDS_VERSION_SUFFIX=$tag" >> $env:GITHUB_ENV
       - name: Inno Setup

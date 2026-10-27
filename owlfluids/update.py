@@ -1,9 +1,9 @@
 """Updates for the Windows install: find a newer GitHub release and run its installer.
 
 Releases are published by ``.github/workflows/release.yml`` with an
-``OwlFluids-Setup-<version>.exe`` asset. The repository is private, so reading
-releases needs a GitHub token with read access to its contents (a fine-grained
-token limited to this repository is enough). The token comes from the
+``OwlFluids-Setup-<version>.exe`` asset. The repository is public, so no sign-in is
+needed. A GitHub token is optional: it lifts GitHub's limit on anonymous requests
+and is needed only if the repository goes private. It comes from the
 ``OWLFLUIDS_GITHUB_TOKEN`` environment variable or from ``~/.owlfluids/update.json``,
 which the app's Help > Update settings writes.
 
@@ -103,9 +103,10 @@ def latest_release(tok: str | None = None, repo: str = REPO) -> Release | None:
         if e.code == 404 and tok and _can_read(repo, tok):
             return None  # GitHub also answers 404 to a token that can't see the repository
         if e.code in (401, 403, 404):
-            raise UpdateError("GitHub refused the update check. The OwlFluids repository is private, so set a "
-                              "GitHub token with read access to it (Help > Update settings, or the "
-                              "OWLFLUIDS_GITHUB_TOKEN environment variable).") from None
+            raise UpdateError(f"GitHub refused the update check ({e.code} {e.reason}). If the repository is "
+                              "private or GitHub is limiting anonymous requests, set a GitHub token with read "
+                              "access to it (Help > Update settings, or the OWLFLUIDS_GITHUB_TOKEN environment "
+                              "variable).") from None
         raise UpdateError(f"update check failed: GitHub answered {e.code} {e.reason}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise UpdateError(f"update check failed: cannot reach GitHub ({getattr(e, 'reason', e)})") from None

@@ -25,14 +25,14 @@ class UpdateSettings(QDialog):
         self.setWindowTitle("Update settings")
         cfg = update.load_config()
         form = QFormLayout(self)
-        note = QLabel("OwlFluids checks its GitHub releases for new versions. The repository is private, so "
-                      "this needs a GitHub token with read access to it: a fine-grained token limited to "
-                      f"{update.REPO} with <i>Contents: read-only</i> is enough.")
+        note = QLabel("OwlFluids checks its GitHub releases for new versions. A GitHub token is optional: it "
+                      "lifts GitHub's limit on anonymous requests, and is needed only if the repository is "
+                      f"private (a fine-grained token limited to {update.REPO} with <i>Contents: read-only</i>).")
         note.setWordWrap(True)
         form.addRow(note)
         self.token = QLineEdit(str(cfg.get("token") or ""))
         self.token.setEchoMode(QLineEdit.Password)
-        self.token.setPlaceholderText("github_pat_…")
+        self.token.setPlaceholderText("optional: github_pat_…")
         form.addRow("GitHub token", self.token)
         self.on_start = QCheckBox("check when OwlFluids starts")
         self.on_start.setChecked(bool(cfg.get("check_on_start", True)))
@@ -73,7 +73,7 @@ class Updater(QObject):
 
     def check_on_start(self) -> None:
         cfg = update.load_config()
-        if update.frozen() and cfg.get("check_on_start", True) and update.token():
+        if update.frozen() and cfg.get("check_on_start", True):
             self.check(quiet=True)
 
     def check(self, quiet: bool = False) -> None:

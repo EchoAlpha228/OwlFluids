@@ -42,17 +42,17 @@ warn about an unknown publisher because the installer isn't code-signed: choose
 
 **Updates.** The app checks for a newer release when it starts and offers to
 install it (**Help > Check for updates**; `owlfluids update` from a terminal).
-The repository is private, so this needs a GitHub token once: create a
-fine-grained token limited to this repository with *Contents: read-only*, and
-paste it into **Help > Update settings** (or `owlfluids update --token <token>`,
-or set `OWLFLUIDS_GITHUB_TOKEN`).
+No sign-in is needed while the repository is public. A GitHub token is optional
+(it lifts GitHub's limit on anonymous requests, and is required if the repository
+goes private): paste one into **Help > Update settings**, or use
+`owlfluids update --token <token>` or `OWLFLUIDS_GITHUB_TOKEN`.
 
-**Synnax.** The installer bundles the Synnax client pinned in
-`packaging/constraints.txt`; it is private to OwlFluids and doesn't touch any
+**Synnax.** Each installer bundles the newest Synnax client at the time it was
+built; it is private to OwlFluids and doesn't touch any
 other Python install. The client's major.minor version must match your Synnax
 Core, and the driver refuses to connect if it doesn't (`check_version: false`
-under `synnax:` overrides). For another Core version, run **Actions > Release >
-Run workflow** with that `synnax_version` and install the build it attaches.
+under `synnax:` overrides). For an older Core, run **Actions > Release > Run
+workflow** with its `synnax_version` and install the build it attaches.
 
 The installed program runs sequence scripts (`owlfluids run --script`) with its
 bundled packages only. To `import owlfluids` from your own Python, use the
