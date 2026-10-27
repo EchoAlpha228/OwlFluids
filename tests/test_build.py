@@ -54,13 +54,15 @@ def test_old_pipe_segments_and_settings_fold_with_notes():
         ],
         "connections": [["K.port", "V.in"], ["V.out", "L-F.in"], ["L-F.out", "A.port"]],
         "sensors": [{"id": "TC", "type": "temperature", "at": "L-F.s2"},
-                    {"id": "PT", "type": "pressure", "at": "L-X.in"}],
+                    {"id": "PT", "type": "pressure", "at": "L-X.in"},
+                    {"id": "FM", "type": "mass_flow", "at": "L-F"}],
     })
     assert s.sensors[0].at == "V.out"
     assert s.sensors[1].at == "L-X.in"  # joins nothing: left for the user to move
     notes = " ".join(s.notes)
     assert "TC was on line L-F" in notes and "PT is on line L-X, which joins nothing" in notes
     assert "settings of L-F " in notes
+    assert s.sensors[2].at == "L-F" and "FM reads mass_flow on line L-F" in notes
 
 
 def test_pipe_in_code_is_an_error():

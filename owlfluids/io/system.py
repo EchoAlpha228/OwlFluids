@@ -195,7 +195,10 @@ class System:
             line = comp_of(s.at)
             if line in pipes:
                 refs = points.get(find(line))
-                if refs:
+                if s.type in ("mass_flow", "valve_position"):
+                    self.notes.append(f"sensor {s.id} reads {s.type} on line {line}, which has no flow element; "
+                                      "move it to a valve, orifice or fitting")
+                elif refs:
                     s.at = refs[0]
                     self.notes.append(f"sensor {s.id} was on line {line}; it now reads {s.at}")
                 else:
