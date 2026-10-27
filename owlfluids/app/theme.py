@@ -57,7 +57,6 @@ SELECTION = DARK_BLUE
 
 VALVE_OPEN = DARK_GREEN
 VALVE_CLOSED = GRAY_500
-VALVE_MOVING = DARK_CYAN
 
 # fluid material colours: desaturated so they sit below the UI colours. Liquid is
 # drawn solid; gas is the same hue, see-through (GAS_ALPHA) over the dark background.
