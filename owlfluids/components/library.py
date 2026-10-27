@@ -399,7 +399,8 @@ class Valve(ComponentType):
         if p_full <= p_start:
             raise ValueError("full_stroke_pressure must be above stroke_pressure")
         b.add_actuator(comp, b.comp_nodes[supply][0], cls.require(comp, "actuator_volume"), p_start, p_full,
-                       float(cls.param(comp, "pilot_cv")) * CV_TO_CDA, normally_open)
+                       float(cls.param(comp, "pilot_cv")) * CV_TO_CDA, normally_open,
+                       assumed="actuator" not in comp.params)
 
 
 class ThrottleValve(Valve):

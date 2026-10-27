@@ -132,6 +132,13 @@ def test_solenoid_type_and_actuator_setting_draw_nothing():
     assert sim.net.actuators == {}
 
 
+def test_valves_assumed_pneumatic_are_named():
+    sim = Simulation(_stand())
+    assert any(w.startswith("A runs NC, NO as pneumatic valves") for w in sim.net.warnings)
+    sim = Simulation(_stand(actuator="pneumatic"))
+    assert not any("pneumatic valves" in w for w in sim.net.warnings)
+
+
 def test_choosing_a_supply():
     s = _stand()
     s.add("B", "pneumatic_supply", volume="1 L", fluid="nitrogen", pressure="80 psig")

@@ -141,6 +141,7 @@ class NetworkBuilder:
         self.pumps: dict[str, int] = {}
         self.actuators: dict[str, int] = {}
         self.exhausts: dict[int, int] = {}  # air supply node -> where its actuators' air goes
+        self.assumed_pneumatic: dict[str, list[str]] = defaultdict(list)  # supply -> valves not set either way
         self.warnings: list[str] = list(system.notes)
         self.p_init = units.parse(system.setting("initial_pressure"), "pressure")
         self.t_init = units.parse(system.setting("initial_temperature"), "temperature")
@@ -293,7 +294,7 @@ class NetworkBuilder:
         self.comp_links[comp.id].append(idx)
         self.pumps[comp.id] = idx
 
-    def add_actuator(self, comp, supply: int, volume, p_start, p_full, cda, normally_open) -> None:
+    def add_actuator(self, comp, supply: int, volume, p_start, p_full, cda, normally_open, assumed=False) -> None:
         """A spring-return pneumatic actuator on valve ``comp``, filled from node ``supply``.
 
         Air it draws leaves the network through an exhaust boundary of the supply's fluid
@@ -310,6 +311,8 @@ class NetworkBuilder:
         idx = len(self.links) - 1
         self.comp_links[comp.id].append(idx)
         self.actuators[comp.id] = idx
+        if assumed:
+            self.assumed_pneumatic[self.nodes[supply].owner].append(comp.id)
 
     # ---- build
     def build(self) -> Network:
@@ -329,6 +332,9 @@ class NetworkBuilder:
                 raise
             except (ValueError, KeyError, TypeError) as e:
                 raise BuildError(f"{c.id}: {e}") from None
+        for supply, valves in self.assumed_pneumatic.items():
+            self.warnings.append(f"{supply} runs {', '.join(valves)} as pneumatic valves; set actuator: solenoid "
+                                 "on any that are direct-acting")
         # every net that is used by a link but owns no volume is a junction
         for net, node in self.net_node.items():
             n = self.nodes[node]

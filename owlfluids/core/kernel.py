@@ -1231,7 +1231,16 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
     """
     nl = LI.shape[0]
     hrow = 0
+    held = False  # a step held its state: the scratch W is the rejected iterate's
+    has_air = False
+    for k in range(nl):
+        if LI[k, L_CTRL] == CTRL_AIR:
+            has_air = True
     for s in range(n_steps):
+        if held and has_air:
+            # the scratch holds the rejected iterate: actuators read their supply from the kept state
+            _node_props(x, NI, NF, fl, W)
+            held = False
         for k in range(nl):
             if LI[k, L_CTRL] == CTRL_AIR:
                 _actuate(k, dt, NI, LI, LF, LV, W, fl)
@@ -1295,6 +1304,8 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                     for i in range(x.shape[0]):
                         x[i] = xnew[i]
                     _keep_split(NI, W)
+                else:
+                    held = True
                 break
             if not _physical(xnew, NI):  # converged onto a non-physical state: retry smaller
                 stats[3] += 1.0
@@ -1304,6 +1315,7 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                         ctl[4] = 1.0
                     continue
                 stats[4] += 1.0
+                held = True
                 break
             for i in range(x.shape[0]):
                 x[i] = xnew[i]
