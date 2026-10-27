@@ -1,0 +1,5 @@
+# Versions pinned in the installer build (pip install -c packaging/constraints.txt).
+# The Synnax client's major.minor must match the Synnax Core the stand runs; the
+# driver refuses a mismatched Core on connect. To build for another Core, change
+# this line, or run the Release workflow by hand with a synnax_version.
+synnax==0.60.*

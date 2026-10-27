@@ -30,6 +30,41 @@ or Synnax) open and close valves.
 
 ## Install (Windows)
 
+### Installer
+
+Download `OwlFluids-Setup-<version>.exe` from the repository's
+[Releases](https://github.com/EchoAlpha228/OwlFluids/releases) and run it. It
+installs for your user only (no admin prompt) into `%LOCALAPPDATA%\Programs\OwlFluids`
+with its own Python, the Synnax client and prebuilt property tables, adds Start
+menu entries, and puts `owlfluids` on your PATH for new terminals. Windows may
+warn about an unknown publisher because the installer isn't code-signed: choose
+**More info > Run anyway**.
+
+**Updates.** The app checks for a newer release when it starts and offers to
+install it (**Help > Check for updates**; `owlfluids update` from a terminal).
+The repository is private, so this needs a GitHub token once: create a
+fine-grained token limited to this repository with *Contents: read-only*, and
+paste it into **Help > Update settings** (or `owlfluids update --token <token>`,
+or set `OWLFLUIDS_GITHUB_TOKEN`).
+
+**Synnax.** The installer bundles the Synnax client pinned in
+`packaging/constraints.txt`; it is private to OwlFluids and doesn't touch any
+other Python install. The client's major.minor version must match your Synnax
+Core, and the driver refuses to connect if it doesn't (`check_version: false`
+under `synnax:` overrides). For another Core version, run **Actions > Release >
+Run workflow** with that `synnax_version` and install the build it attaches.
+
+The installed program runs sequence scripts (`owlfluids run --script`) with its
+bundled packages only. To `import owlfluids` from your own Python, use the
+development install below; both can be installed side by side.
+
+**Publishing a release:** bump `__version__` in `owlfluids/__init__.py`, merge,
+then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The
+Release workflow builds the installer on Windows and publishes it.
+`packaging\build.ps1` builds the same installer locally (needs Inno Setup 6).
+
+### From source
+
 Python 3.12 is recommended (the Synnax client needs 3.12+).
 
 ```powershell
@@ -62,6 +97,7 @@ under `settings:` in the system file).
 | `owlfluids check file.yaml` | Build the network and print a summary (catches wiring mistakes) |
 | `owlfluids bench` | Time the 81-component example stand |
 | `owlfluids example NAME -o file.yaml` | Write one of the examples |
+| `owlfluids update` | Install a newer release (Windows installer; `--check` only reports) |
 
 In the app: drag parts from **Parts**, drag from one port (small circle) to another
 to connect, **R** rotates, **Delete** removes. Select a part to edit its

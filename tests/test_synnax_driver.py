@@ -220,3 +220,15 @@ def test_driver_syncs_valves_at_connect_and_stops_cleanly():
     assert runner.sim.valve_command("V-P") == vp  # no stored value: left alone
     drv.stop()  # must not raise
     assert isinstance(drv.error, RuntimeError)
+
+
+def test_version_mismatch():
+    from owlfluids.drivers.synnax import version_mismatch
+
+    assert version_mismatch("0.60.0", "0.60.3") is None
+    assert version_mismatch("0.60.0", "v0.60.1") is None
+    assert "Upgrade the Core" in version_mismatch("0.60.0", "0.59.2")
+    assert "Upgrade the OwlFluids build" in version_mismatch("0.59.0", "0.60.0")
+    assert "did not report" in version_mismatch("0.60.0", "")
+    assert version_mismatch("", "0.60.0") is None  # client version unknown: nothing to compare
+    assert SynnaxConfig.from_dict({"check_version": False}).check_version is False

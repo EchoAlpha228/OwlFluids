@@ -42,6 +42,7 @@ Config (a ``synnax:`` section in the system file, or its own YAML file)::
       rate: 100                   # Hz written to Synnax
       index: owl_time             # index channel for channels the driver creates
       create_channels: true       # create any missing channel
+      check_version: true         # refuse a Synnax Core whose major.minor differs from the client's
       sensors:                    # sim sensor -> channel (default: lower-case id)
         PT-OX: pt_ox
       valves:                     # sim valve -> channels, see SynnaxConfig.resolve
@@ -65,6 +66,29 @@ VALVE_STATES = ("command", "position")
 LIMIT_OPEN, LIMIT_CLOSED = 0.99, 0.01  # faked limit switches (valve_state: position)
 
 
+def version_mismatch(client: str, core: str) -> str | None:
+    """Why this client can't be trusted with this Synnax Core, or None if their major.minor versions match."""
+    def mm(v: str):
+        parts = str(v or "").lstrip("v").split(".")
+        try:
+            return int(parts[0]), int(parts[1])
+        except (IndexError, ValueError):
+            return None
+
+    c, n = mm(client), mm(core)
+    if c is None:
+        return None
+    if n is None:
+        return (f"the Synnax Core did not report its version (it is probably older than client {client}); "
+                "set check_version: false under synnax: to connect anyway")
+    if c == n:
+        return None
+    side = "Core" if c > n else "OwlFluids build"
+    return (f"Synnax Core {core} does not match the Synnax client {client} in this OwlFluids build "
+            f"(major.minor must match). Upgrade the {side}, or set check_version: false under synnax: "
+            "to connect anyway")
+
+
 def _channel_name(name: str) -> str:
     return name.lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
@@ -84,6 +108,7 @@ class SynnaxConfig:
     sensors: dict[str, str] = field(default_factory=dict)
     valves: dict[str, dict[str, str]] = field(default_factory=dict)
     valve_threshold: float = 0.5  # a read value above this opens an on/off valve
+    check_version: bool = True  # client and Core must share major.minor, as Synnax itself requires
 
     def __post_init__(self):
         self.mode = str(self.mode).strip().lower()
@@ -149,6 +174,12 @@ class SynnaxLink:
         self.sy = sy
         self.client = sy.Synnax(host=cfg.host, port=cfg.port, username=cfg.username, password=cfg.password,
                                 secure=cfg.secure)
+        if cfg.check_version:
+            state = self.client.connectivity.check()
+            problem = version_mismatch(state.client_version, state.node_version)
+            if problem:
+                self.client.close()
+                raise RuntimeError(problem)
         self.writer = None
         self.streamer = None
         self._t0 = 0

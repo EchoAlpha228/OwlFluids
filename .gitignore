@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# OwlFluids packaging
+!packaging/*.spec
+owlfluids/fluids/bundled/
+.build-venv/
