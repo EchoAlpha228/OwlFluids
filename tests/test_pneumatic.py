@@ -164,3 +164,37 @@ def test_measured_position_keeps_its_actuator():
     sim.set_position("NC", 0.0)
     sim.run(0.5)
     assert sim.valve_position("NC") == 0.0
+
+
+@pytest.mark.parametrize("n, supply, dt, pilot_cv", [(16, "2 L", "5 ms", 0.5), (30, "0.5 L", "10 ms", 0.1)])
+def test_many_actuators_on_a_small_supply_settle(n, supply, dt, pilot_cv):
+    """Actuators together hold as much air as the supply: filling them must not ring."""
+    s = System("bank")
+    s.settings["dt"] = dt
+    s.add("A", "pneumatic_supply", volume=supply, fluid="air", pressure="100 psig", temperature="293 K")
+    s.add("N2", "boundary", fluid="nitrogen", pressure="50 psig")
+    s.add("ATM", "boundary", fluid="nitrogen")
+    for i in range(n):
+        s.add(f"V{i}", "valve", cv=0.05, pilot_cv=pilot_cv)
+        s.connect("N2.port", f"V{i}.in")
+        s.connect(f"V{i}.out", "ATM.port")
+    sim = Simulation(s)
+    sim.open(*[f"V{i}" for i in range(n)])
+    sim.run(3.0)
+    p = []
+    for _ in range(40):
+        sim.run(sim.dt)
+        p.append(sim.nout[sim.node("A"), 0])
+    assert max(p) - min(p) < 100.0  # Pa
+    assert all(abs(sim.actuator_pressure(f"V{i}") - p[-1]) < 100.0 for i in range(n))
+    # the supply ends up shared with the actuators, too low to stroke them fully: all alike, and steady
+    x = sim.valve_position("V0")
+    assert x < 1.0
+    assert all(sim.valve_position(f"V{i}") == x for i in range(n))
+
+
+def test_an_uncharged_supply_is_flagged():
+    sim = Simulation(_stand("1 atm"))
+    assert any(w.startswith("A starts at 0 psig, below the 30 psig its valves need") for w in sim.net.warnings)
+    sim = Simulation(_stand())
+    assert not any("its valves need" in w for w in sim.net.warnings)

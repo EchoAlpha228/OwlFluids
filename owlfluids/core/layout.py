@@ -42,12 +42,14 @@ LF_CDA, LF_P1, LF_P2 = range(3)
 N_LF = 3
 
 # ---- valve actuator columns (runtime)
-V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE, V_AIR, V_TGT, V_VALVE, V_PACT, V_VOL, V_NO, V_Q = range(11)
-N_V = 11
+V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE, V_AIR, V_TGT, V_VALVE, V_PACT, V_VOL, V_NO, V_Q, V_EXCH = range(12)
+N_V = 12
 # V_AIR: a pneumatic valve's actuator link (-1 for none); V_TGT: the position its actuator
 # pressure drives it to. On an actuator link (CTRL_AIR): V_VALVE its valve link, V_PACT the
 # actuator pressure (absolute), V_VOL its volume, V_NO 1 when air strokes the valve closed
-# (normally open), V_Q its draw on the supply over the current step.
+# (normally open), V_Q its draw on the supply over the current step, V_EXCH its volume when
+# it exchanges air with the supply this step (else 0).
+# V_AIR and V_VALVE hold link indices as integer-valued floats.
 
 # ---- link outputs
 LO_MDOT, LO_OPEN = range(2)

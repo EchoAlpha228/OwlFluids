@@ -142,6 +142,7 @@ class NetworkBuilder:
         self.actuators: dict[str, int] = {}
         self.exhausts: dict[int, int] = {}  # air supply node -> where its actuators' air goes
         self.assumed_pneumatic: dict[str, list[str]] = defaultdict(list)  # supply -> valves not set either way
+        self.air_stroke: dict[int, float] = {}  # supply node -> lowest gauge pressure that moves one of its valves
         self.warnings: list[str] = list(system.notes)
         self.p_init = units.parse(system.setting("initial_pressure"), "pressure")
         self.t_init = units.parse(system.setting("initial_temperature"), "temperature")
@@ -311,6 +312,7 @@ class NetworkBuilder:
         idx = len(self.links) - 1
         self.comp_links[comp.id].append(idx)
         self.actuators[comp.id] = idx
+        self.air_stroke[supply] = min(self.air_stroke.get(supply, math.inf), p_start)
         if assumed:
             self.assumed_pneumatic[self.nodes[supply].owner].append(comp.id)
 
@@ -345,6 +347,17 @@ class NetworkBuilder:
         self._resolve_tank_liquids(fs)
         if self.system.setting("prime_lines"):
             self._prime_lines()
+        for i, p_start in self.air_stroke.items():
+            n = self.nodes[i]
+            if n.kind == L.NODE_BOUNDARY:
+                p0 = n.bp
+            else:
+                p0 = n.init[1] if n.init and n.init[0] == "pt" and n.init[1] is not None else self.p_init
+            if p0 - units.ATM < p_start:
+                self.warnings.append(
+                    f"{n.owner} starts at {units.to_psi(p0 - units.ATM):.0f} psig, below the "
+                    f"{units.to_psi(p_start):.0f} psig its valves need to move: none of them will stroke until "
+                    "it is charged (give it a pressure, or feed it from a compressor or regulator)")
         return self._compile(fs)
 
     def _fluid_set(self) -> FluidSet:

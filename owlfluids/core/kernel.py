@@ -102,6 +102,7 @@ from .layout import (
     O_X,
     V_AIR,
     V_CMD,
+    V_EXCH,
     V_NO,
     V_PACT,
     V_POS,
@@ -1172,7 +1173,14 @@ def _keep_split(NI, W):
 
 
 @inl
-def _actuate(k, dt, NI, LI, LF, LV, W, fl):
+def _pilot_on(k, LV):
+    """Whether actuator link k's pilot is filling it: its valve is held away from its normal state."""
+    cmd = LV[int(LV[k, V_VALVE]), V_CMD]
+    return cmd < 0.5 if LV[k, V_NO] > 0.5 else cmd > 0.5
+
+
+@inl
+def _actuate(k, dt, NI, NF, LI, LF, LV, W, fl):
     """One step of the spring-return pneumatic actuator on link k, explicitly.
 
     Its pilot solenoid fills the actuator from the supply while the valve is commanded
@@ -1181,12 +1189,13 @@ def _actuate(k, dt, NI, LI, LF, LV, W, fl):
     air back. The actuator's gauge pressure, between the pressure where the spring starts
     to give and full stroke, sets where its valve is driven to. Sets the draw on the
     supply for the step, which the link then carries as a fixed flow.
+
+    All actuators exchanging air with one supply in a step move it together, so each
+    takes at most its share of what leaves the supply and them level (the header
+    expanding adiabatically): more would overshoot, and the overshoot rings.
     """
     a = LI[k, L_A]
-    m = int(LV[k, V_VALVE])
-    no = LV[k, V_NO] > 0.5
-    cmd = LV[m, V_CMD]
-    on = cmd < 0.5 if no else cmd > 0.5
+    on = _pilot_on(k, LV)
     p_s = W[a, W_P]
     p = LV[k, V_PACT]
     vol = LV[k, V_VOL]
@@ -1198,16 +1207,28 @@ def _actuate(k, dt, NI, LI, LF, LV, W, fl):
     if on:
         if abs(p - p_s) < DP_AIR:
             pass  # charged: nothing flows, and the link is skipped
-        elif p < p_s:
-            q = min(_orifice_flow(cda, p_s, p, side[0], gam, False, 0.0), (p_s - p) * vol / (zrt * dt))
-        elif p > p_s:
-            q = -min(_orifice_flow(cda, p, p_s, p / zrt, gam, False, 0.0), (p - p_s) * vol / (zrt * dt))
+        else:
+            share = vol
+            if NI[a, N_KIND] != NODE_BOUNDARY:
+                # every actuator on this supply exchanging air this step
+                v_all = 0.0
+                for j in range(LI.shape[0]):
+                    if LI[j, L_CTRL] == CTRL_AIR and LI[j, L_A] == a:
+                        v_all += LV[j, V_EXCH]
+                v_s = NF[a, NF_VOL]
+                share = vol * v_s / (v_s + gam * v_all)
+            if p < p_s:
+                q = min(_orifice_flow(cda, p_s, p, side[0], gam, False, 0.0), (p_s - p) * share / (zrt * dt))
+            else:
+                q = -min(_orifice_flow(cda, p, p_s, p / zrt, gam, False, 0.0), (p - p_s) * share / (zrt * dt))
         p += q * dt * zrt / vol
     elif p > ATM:
         q_out = _orifice_flow(cda, p, ATM, p / zrt, gam, False, 0.0)
         p = max(p - q_out * dt * zrt / vol, ATM)
     LV[k, V_PACT] = p
     LV[k, V_Q] = q
+    no = LV[k, V_NO] > 0.5
+    m = int(LV[k, V_VALVE])
     f = min(max((p - ATM - LF[k, LF_P1]) / (LF[k, LF_P2] - LF[k, LF_P1]), 0.0), 1.0)
     LV[m, V_TGT] = 1.0 - f if no else f
 
@@ -1241,9 +1262,14 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
             # the scratch holds the rejected iterate: actuators read their supply from the kept state
             _node_props(x, NI, NF, fl, W)
             held = False
-        for k in range(nl):
-            if LI[k, L_CTRL] == CTRL_AIR:
-                _actuate(k, dt, NI, LI, LF, LV, W, fl)
+        if has_air:
+            for k in range(nl):
+                if LI[k, L_CTRL] == CTRL_AIR:
+                    on = _pilot_on(k, LV) and abs(LV[k, V_PACT] - W[LI[k, L_A], W_P]) >= DP_AIR
+                    LV[k, V_EXCH] = LV[k, V_VOL] if on else 0.0
+            for k in range(nl):
+                if LI[k, L_CTRL] == CTRL_AIR:
+                    _actuate(k, dt, NI, NF, LI, LF, LV, W, fl)
         for k in range(nl):
             c = LI[k, L_CTRL]
             if c == CTRL_PUMP:
