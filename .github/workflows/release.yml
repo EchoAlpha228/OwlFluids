@@ -1,14 +1,14 @@
 name: Release
 
-# Push a version tag to publish an installer:
-#   (bump __version__ in owlfluids/__init__.py, merge, then)
-#   git tag v0.2.0 && git push origin v0.2.0
+# To publish an installer, bump __version__ in owlfluids/__init__.py, merge, then either
+#   - Actions > Release > Run workflow with "publish" ticked (tags main as v<__version__>), or
+#   - git tag v0.2.0 && git push origin v0.2.0, or
+#   - draft a GitHub release with a new tag v0.2.0 (the installer is added to it).
 # The installed app finds the new GitHub release and offers to update.
 #
-# Run it by hand (Actions > Release > Run workflow) to build an installer without
-# publishing it, for example for a Synnax Core other than the pinned one. That
-# installer is attached to the run as an artifact, not released, so installed
-# copies won't update to it.
+# Run it by hand without "publish" to build an installer without releasing it, for
+# example for an older Synnax Core. That installer is attached to the run as an
+# artifact, so installed copies won't update to it.
 
 on:
   push:
@@ -21,6 +21,10 @@ on:
         description: "Synnax client to bundle, e.g. 0.59.* (leave empty for the newest)"
         required: false
         default: ""
+      publish:
+        description: "Publish the build as release v<__version__> (tags this commit)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,17 +32,20 @@ permissions:
 jobs:
   installer:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Tag matches the package version
-        if: github.ref_type == 'tag'
+      - name: Package version
+        id: version
         shell: pwsh
         run: |
           $v = python -c "import ast,pathlib; t=pathlib.Path('owlfluids/__init__.py').read_text(); print([n.value.value for n in ast.parse(t).body if isinstance(n, ast.Assign) and n.targets[0].id == '__version__'][0])"
-          if ("v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} does not match __version__ $v" }
+          if ("${{ github.ref_type }}" -eq "tag" -and "v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} does not match __version__ $v" }
+          "version=$v" >> $env:GITHUB_OUTPUT
       - name: Synnax client override
         if: inputs.synnax_version != ''
         shell: pwsh
@@ -73,8 +80,9 @@ jobs:
           path: dist/OwlFluids-Setup-*.exe
 
   publish:
-    # the only job that can write to the repository, and it runs only for tags
-    if: github.ref_type == 'tag'
+    # the only job that can write to the repository: tags, or a manual run with "publish"
+    # (a release built against a pinned Synnax client is never published, so updates stay on the newest)
+    if: github.ref_type == 'tag' || (inputs.publish && inputs.synnax_version == '')
     needs: installer
     runs-on: ubuntu-latest
     permissions:
@@ -87,5 +95,14 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/OwlFluids-Setup-*.exe --repo "$GITHUB_REPOSITORY" --title "OwlFluids $TAG" --generate-notes
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', needs.installer.outputs.version) }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # a release drafted on GitHub for this tag: add the installer to it
+            gh release upload "$TAG" dist/OwlFluids-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber
+          elif [ "$GITHUB_REF_TYPE" != tag ] && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then
+            echo "::error::tag $TAG already exists; bump __version__ before publishing" && exit 1
+          else
+            gh release create "$TAG" dist/OwlFluids-Setup-*.exe --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "OwlFluids $TAG" --generate-notes
+          fi
