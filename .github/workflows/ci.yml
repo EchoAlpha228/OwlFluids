@@ -41,9 +41,9 @@ jobs:
           lscpu | grep -E "Model name|Flags" | cut -c1-400
           ldd --version | head -1
           python -m numba -s | grep -iE "CPU Name|CPU Features|LLVM|SVML|Threading" | head
-          python tests/_diag_counts.py
-          NUMBA_CPU_NAME=generic NUMBA_CACHE_DIR=/tmp/nc-generic python tests/_diag_counts.py
-          NUMBA_CPU_NAME=generic NUMBA_DISABLE_INTEL_SVML=1 NUMBA_CACHE_DIR=/tmp/nc-nosvml python tests/_diag_counts.py
+          python .github/diag_counts.py
+          NUMBA_CPU_NAME=generic NUMBA_CACHE_DIR=/tmp/nc-generic python .github/diag_counts.py
+          NUMBA_CPU_NAME=generic NUMBA_DISABLE_INTEL_SVML=1 NUMBA_CACHE_DIR=/tmp/nc-nosvml python .github/diag_counts.py
       - name: Tests
         run: python -m pytest -q
       - name: Benchmark (81 components)
