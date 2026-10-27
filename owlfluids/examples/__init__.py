@@ -178,6 +178,27 @@ def n2o_blowdown() -> System:
     return s
 
 
+def pneumatic_valves() -> System:
+    """A compressor-fed air supply running a normally closed fill valve and a normally open vent."""
+    s = System("Pneumatic valves")
+    s.add("C", "air_pump", flow="2 g/s", start_pressure="90 psig", stop_pressure="110 psig", at=[0, -150])
+    s.add("A", "pneumatic_supply", volume="2 L", fluid="air", pressure="105 psig", temperature="20 C",
+          at=[150, -150])
+    s.add("K", "tank", fluid="nitrogen", volume="49 L", pressure="2000 psi", temperature="20 C", at=[0, 0])
+    s.add("V-FILL", "valve", cv=0.3, at=[150, 0])
+    s.add("TK", "volume", volume="20 L", fluid="nitrogen", pressure="1 atm", temperature="20 C", at=[300, 0])
+    s.add("V-VENT", "valve", cv=0.3, normally="open", at=[450, 0])
+    s.add("ATM", "boundary", fluid="nitrogen", at=[600, 0])
+    for a, b in [("C.out", "A.a"), ("K.port", "V-FILL.in"), ("V-FILL.out", "TK.a"), ("TK.b", "V-VENT.in"),
+                 ("V-VENT.out", "ATM.port")]:
+        s.connect(a, b)
+    s.sense("PT-A", "pressure", "A.a", units="psig")
+    s.sense("PT-TK", "pressure", "TK.a", units="psi")
+    s.sense("ZS-FILL", "valve_position", "V-FILL")
+    s.sense("ZS-VENT", "valve_position", "V-VENT")
+    return s
+
+
 EXAMPLES = {
     "gn2-blowdown": gn2_blowdown,
     "lox-feed": lox_feed,
@@ -185,5 +206,6 @@ EXAMPLES = {
     "ln2-wet-dress": ln2_wet_dress,
     "n2o-blowdown": n2o_blowdown,
     "nitrous-fill": nitrous_fill,
+    "pneumatic-valves": pneumatic_valves,
     "test-stand": engine_test_stand,
 }

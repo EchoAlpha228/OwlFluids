@@ -5,13 +5,14 @@ from __future__ import annotations
 from ..io.system import System
 
 
-def engine_test_stand(n_purge: int = 4) -> System:
+def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     """A pressure-fed LOX/ethanol test stand with GN2 pressurization and purges.
 
     Roughly 60 components: supply bottles, regulators, pressurant lines with check
     valves, two pressurized propellant tanks with vents and reliefs, main valves,
     feed lines with fittings, injector orifices into a chamber, and GN2 purges of the
-    feed lines and injector manifolds.
+    feed lines and injector manifolds. With ``pneumatic`` its on/off valves run on a
+    GN2 pneumatic supply regulated down from the high-pressure manifold.
     """
     s = System("LOX/ethanol test stand")
     s.settings["dt"] = "1 ms"
@@ -93,6 +94,11 @@ def engine_test_stand(n_purge: int = 4) -> System:
         con(f"K-{tag}.port", f"V-{tag}.in"), con(f"V-{tag}.out", f"CK-{tag}.in")
         con(f"CK-{tag}.out", targets[i % len(targets)])
 
+    if pneumatic:
+        add("REG-PN", "regulator", cv=0.1, setpoint="100 psig", droop="10 psi")
+        add("PN", "pneumatic_supply", volume="2 L", pressure="100 psig")
+        con("MAN-HP.d", "REG-PN.in"), con("REG-PN.out", "PN.a")
+
     _place(s, n_purge)
 
     s.sense("PT-HP", "pressure", "MAN-HP.a", units="psi")
@@ -111,6 +117,7 @@ def _place(s: System, n_purge: int, dx: float = 150.0, dy: float = 110.0) -> Non
     grid = {
         "GN2-K1": (0, 0), "V-K1": (2, 0), "GN2-K2": (0, 1.4), "V-K2": (2, 1.4),
         "MAN-HP": (3, 0.7), "PT-HP-RV": (3, -0.6), "ATM-HP": (4, -0.6), "TEE-HP": (5, 0.7),
+        "REG-PN": (3, 2.0), "PN": (4, 2.0),
     }
     for tag, y in (("OX", -1.5), ("FU", 3.5)):
         # a gap where each line runs

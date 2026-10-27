@@ -233,7 +233,7 @@ def cmd_bench(args) -> int:
     from .sim.simulation import Simulation
 
     t0 = time.perf_counter()
-    sim = Simulation(engine_test_stand())
+    sim = Simulation(engine_test_stand(pneumatic=args.pneumatic))
     print(f"build + compile: {time.perf_counter() - t0:.1f} s; {len(sim.system.components)} components, "
           f"{sim.net.n_states} states; step budget {sim.step_budget:.0f} evaluations "
           f"({sim.rhs_seconds * 1e6:.1f} us each)")
@@ -358,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser("bench", help="time the 60-component test stand")
+    p.add_argument("--pneumatic", action="store_true", help="run its valves on a pneumatic supply")
     p.set_defaults(fn=cmd_bench)
 
     p = sub.add_parser("example", help="list examples or write one to a file")

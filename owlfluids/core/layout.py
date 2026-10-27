@@ -34,14 +34,20 @@ CTRL_CHECK = 2  # opens on forward pressure difference
 CTRL_RELIEF = 3  # opens when upstream exceeds downstream by the set pressure
 CTRL_REGULATOR = 4  # throttles to hold the downstream pressure at the setpoint
 CTRL_PUMP = 5  # fixed mass flow from its inlet while running; on below LF_P1, off above LF_P2 (LF_CDA: kg/s)
+CTRL_AIR = 6  # a pneumatic actuator's draw on its air supply (a); LF_CDA: pilot Cd*A, LF_P1/LF_P2: gauge
+# pressures where the valve starts to stroke and is fully stroked
 
 # ---- link float columns
 LF_CDA, LF_P1, LF_P2 = range(3)
 N_LF = 3
 
 # ---- valve actuator columns (runtime)
-V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE = range(4)
-N_V = 4
+V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE, V_AIR, V_TGT, V_VALVE, V_PACT, V_VOL, V_NO, V_Q = range(11)
+N_V = 11
+# V_AIR: a pneumatic valve's actuator link (-1 for none); V_TGT: the position its actuator
+# pressure drives it to. On an actuator link (CTRL_AIR): V_VALVE its valve link, V_PACT the
+# actuator pressure (absolute), V_VOL its volume, V_NO 1 when air strokes the valve closed
+# (normally open), V_Q its draw on the supply over the current step.
 
 # ---- link outputs
 LO_MDOT, LO_OPEN = range(2)

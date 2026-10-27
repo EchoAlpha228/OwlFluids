@@ -20,6 +20,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "pressurized_tank": ((70, 120), {"gas": (0, -60), "liquid": (0, 60)}),
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
+    "pneumatic_supply": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),
     "fitting": ((40, 30), {"in": (-20, 0), "out": (20, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
@@ -83,8 +84,10 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         for i in range(3):
             x = w / 2 - 12 + i * 5
             p.drawLine(QPointF(x, -h / 2 + 6 + i * 4), QPointF(x, h / 2 - 6 - i * 4))
-    elif type_name == "volume":
+    elif type_name in ("volume", "pneumatic_supply"):
         p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
+        if type_name == "pneumatic_supply":
+            p.drawText(QRectF(-w / 2, -h / 2, w, h), Qt.AlignCenter, "A")
     elif type_name == "tee":
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-5, -5, 10, 10))

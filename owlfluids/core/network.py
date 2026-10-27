@@ -77,6 +77,7 @@ class _Link:
     draw_a: int = L.DRAW_MIX
     draw_b: int = L.DRAW_MIX
     valve: tuple | None = None
+    air: tuple | None = None  # pneumatic actuator: (its valve link, volume, normally open)
 
 
 @dataclass
@@ -114,6 +115,7 @@ class Network:
     warnings: list[str] = field(default_factory=list)
     mix_init: np.ndarray = field(repr=False, default=None)
     pumps: dict[str, int] = field(default_factory=dict)  # component id -> its link
+    actuators: dict[str, int] = field(default_factory=dict)  # pneumatic valve id -> its actuator link
 
     @property
     def n_states(self) -> int:
@@ -137,6 +139,8 @@ class NetworkBuilder:
         self.comp_links: dict[str, list[int]] = defaultdict(list)
         self.valves: dict[str, int] = {}
         self.pumps: dict[str, int] = {}
+        self.actuators: dict[str, int] = {}
+        self.exhausts: dict[int, int] = {}  # air supply node -> where its actuators' air goes
         self.warnings: list[str] = list(system.notes)
         self.p_init = units.parse(system.setting("initial_pressure"), "pressure")
         self.t_init = units.parse(system.setting("initial_temperature"), "temperature")
@@ -289,6 +293,24 @@ class NetworkBuilder:
         self.comp_links[comp.id].append(idx)
         self.pumps[comp.id] = idx
 
+    def add_actuator(self, comp, supply: int, volume, p_start, p_full, cda, normally_open) -> None:
+        """A spring-return pneumatic actuator on valve ``comp``, filled from node ``supply``.
+
+        Air it draws leaves the network through an exhaust boundary of the supply's fluid
+        (the actuator itself is not a node: the kernel steps its pressure explicitly).
+        """
+        if supply not in self.exhausts:
+            sn = self.nodes[supply]
+            self.nodes.append(_Node(f"{sn.owner}.exhaust", L.NODE_BOUNDARY, None, 0.0, None, sn.owner,
+                                    bp=101325.0, bt=293.15))
+            self.exhausts[supply] = len(self.nodes) - 1
+        lk = _Link(f"{comp.id}.actuator", supply, self.exhausts[supply], comp.id, cda=cda, ctrl=L.CTRL_AIR,
+                   p1=p_start, p2=p_full, air=(self.valves[comp.id], float(volume), bool(normally_open)))
+        self.links.append(lk)
+        idx = len(self.links) - 1
+        self.comp_links[comp.id].append(idx)
+        self.actuators[comp.id] = idx
+
     # ---- build
     def build(self) -> Network:
         sysm = self.system
@@ -389,7 +411,7 @@ class NetworkBuilder:
         one_way = set()
         for k, lk in enumerate(self.links):
             fwd[lk.a].append(lk.b)
-            if lk.ctrl in (L.CTRL_CHECK, L.CTRL_RELIEF, L.CTRL_REGULATOR, L.CTRL_PUMP):
+            if lk.ctrl in (L.CTRL_CHECK, L.CTRL_RELIEF, L.CTRL_REGULATOR, L.CTRL_PUMP, L.CTRL_AIR):
                 one_way.add(k)
             else:
                 fwd[lk.b].append(lk.a)
@@ -613,11 +635,18 @@ class NetworkBuilder:
         for k, lk in enumerate(self.links):
             LI[k] = (lk.a, lk.b, lk.draw_a, lk.draw_b, lk.ctrl)
             LF[k] = (lk.cda, lk.p1, lk.p2)
+            LV[k, L.V_AIR] = -1.0
             if lk.valve:
                 start, r_open, r_close = lk.valve
-                LV[k] = (start, start, r_open, r_close)
+                LV[k, :4] = (start, start, r_open, r_close)
+                LV[k, L.V_TGT] = start
             else:
-                LV[k] = (1.0, 1.0, 0.0, 0.0)
+                LV[k, :4] = (1.0, 1.0, 0.0, 0.0)
+        for k, lk in enumerate(self.links):
+            if lk.air:
+                m, vol, no = lk.air
+                LV[k, L.V_VALVE], LV[k, L.V_PACT], LV[k, L.V_VOL], LV[k, L.V_NO] = m, 101325.0, vol, float(no)
+                LV[m, L.V_AIR] = k
 
         port_nodes = {f"{cid}.{p}": self.net_node[net] for (cid, p), net in self.net_of.items()
                       if net in self.net_node}
@@ -626,7 +655,8 @@ class NetworkBuilder:
                       [n.name for n in self.nodes], [lk.name for lk in self.links],
                       [n.owner for n in self.nodes], [lk.owner for lk in self.links],
                       port_nodes, dict(self.comp_nodes), dict(self.comp_links), dict(self.valves),
-                      warnings=self.warnings, mix_init=mix_init, pumps=dict(self.pumps))
+                      warnings=self.warnings, mix_init=mix_init, pumps=dict(self.pumps),
+                      actuators=dict(self.actuators))
         _structure(net)
         return net
 

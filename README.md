@@ -129,7 +129,21 @@ Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally 
 (also takes `wall_mass`, for example to chill down a cryogenic line), `tee`, `fitting`,
 `orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`,
 `air_pump` (a compressor with a pressure switch: `flow`, `start_pressure`,
-`stop_pressure`; a `valve_position` sensor on it reads 1 while it runs).
+`stop_pressure`; a `valve_position` sensor on it reads 1 while it runs),
+`pneumatic_supply` (the "A" air or GN2 header pneumatic valves run on; feed it from an
+`air_pump` or a bottle through a regulator).
+
+On/off valves have `actuator: pneumatic` (the default) or `solenoid` (also the default
+for type `solenoid`). A pneumatic valve is spring return: it draws air from its supply
+(`air_supply`, by default the only `pneumatic_supply` in the system) while it is held
+away from its normal state, so a normally closed valve draws to open and a normally
+open one draws to close, and it vents to the atmosphere on the way back. The actuator
+fills through its pilot (`pilot_cv`) to `actuator_volume`, starts to move at
+`stroke_pressure` and is fully stroked at `full_stroke_pressure`, so a weak supply
+strokes it slowly, partway or not at all, and losing the supply springs it back.
+Without a `pneumatic_supply` in the system valves move on command alone.
+`examples/pneumatic-valves.yaml` shows a compressor running a fill and a vent valve;
+`owlfluids bench --pneumatic` times the test stand with its valves on a GN2 supply.
 `owlfluids app` shows every parameter with its default and meaning.
 
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
