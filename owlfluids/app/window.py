@@ -521,12 +521,6 @@ class MainWindow(QMainWindow):
                     text = _flow_text(f.link_mdot[links[0]])
             elif ct.type_name == "boundary":
                 text = ""
-            elif ct.type_name == "pipe":
-                i = net.port_nodes.get(f"{c.id}.in")
-                if i is not None:
-                    text = f"{units.to_psi(f.node_p[i]):.0f} psi"
-                    if f.node_x[i] <= 0.5:
-                        state["pipe_colour"] = symbols.CRYO if f.node_t[i] < 150 else symbols.LIQUID
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])

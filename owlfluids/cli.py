@@ -357,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("system", help=SYSTEM_HELP)
     p.set_defaults(fn=cmd_check)
 
-    p = sub.add_parser("bench", help="time the 81-component test stand")
+    p = sub.add_parser("bench", help="time the 60-component test stand")
     p.set_defaults(fn=cmd_bench)
 
     p = sub.add_parser("example", help="list examples or write one to a file")

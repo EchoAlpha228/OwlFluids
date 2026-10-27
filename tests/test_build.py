@@ -16,6 +16,38 @@ def test_yaml_round_trip(tmp_path, gas_blowdown):
     assert sim.read("PT-1") == pytest.approx(200e5, rel=1e-2)  # table interpolation
 
 
+def test_old_pipes_fold_into_direct_connections():
+    # files from before lines were removed: a pipe's ends become one point, chains and tees included
+    s = System.from_dict({
+        "components": [
+            {"id": "K", "type": "tank", "fluid": "nitrogen", "volume": "1 L", "pressure": "10 bar",
+             "temperature": "300 K"},
+            {"id": "L1", "type": "pipe"}, {"id": "L2", "type": "line"},
+            {"id": "V", "type": "valve", "cv": 0.1}, {"id": "R", "type": "relief_valve", "cv": 0.1,
+                                                     "set_pressure": "20 bar"},
+            {"id": "A", "type": "boundary", "fluid": "nitrogen"},
+            {"id": "A2", "type": "boundary", "fluid": "nitrogen"},
+        ],
+        "connections": [["K.port", "L1.in"], ["L1.out", "L2.in"], ["L2.out", "V.in"], ["L2.out", "R.in"],
+                        ["V.out", "A.port"], ["R.out", "A2.port"]],
+        "sensors": [{"id": "PT", "type": "pressure", "at": "L2.out"}, {"id": "PT2", "type": "pressure", "at": "L1"}],
+    })
+    assert {c.id for c in s.components} == {"K", "V", "R", "A", "A2"}
+    assert sorted(s.connections) == sorted([("K.port", "V.in"), ("K.port", "R.in"), ("V.out", "A.port"),
+                                            ("R.out", "A2.port")])
+    assert s.sensors[0].at == s.sensors[1].at == "K.port"
+    sim = Simulation(s)
+    assert any("L1, L2" in w for w in sim.net.warnings)
+    assert sim.read("PT") == pytest.approx(10e5, rel=1e-2)
+
+
+def test_pipe_in_code_is_an_error():
+    s = System("bad")
+    s.add("L1", "pipe")
+    with pytest.raises(ValueError, match="connect the ports directly"):
+        build_network(s)
+
+
 def test_two_fluids_on_one_line_is_an_error():
     # two propellants may not meet; a purge gas may (see test_purge.py)
     s = System("bad")

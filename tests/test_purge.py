@@ -19,21 +19,20 @@ def _rig(liquid="water", gas="nitrogen", vent=True):
     s.add("TK", "pressurized_tank", liquid=liquid, pressurant="nitrogen", volume="20 L", fill=0.8,
           pressure="200 psi", **kw)
     s.add("MV", "valve", cv=1.0, open_time="100 ms")
-    s.add("L1", "pipe")
     s.add("B", "tank", fluid=gas, volume="10 L", pressure="2000 psi", temperature="293 K")
     s.add("REG", "regulator", setpoint="300 psi", cv=0.5)
     s.add("PV", "valve", cv=0.3, open_time="50 ms")
     s.add("CK", "check_valve", cv=0.3)
-    for a, b in [("TK.liquid", "MV.in"), ("MV.out", "L1.in"), ("B.port", "REG.in"), ("REG.out", "PV.in"),
-                 ("PV.out", "CK.in"), ("CK.out", "L1.in")]:
+    for a, b in [("TK.liquid", "MV.in"), ("B.port", "REG.in"), ("REG.out", "PV.in"), ("PV.out", "CK.in"),
+                 ("CK.out", "MV.out")]:
         s.connect(a, b)
     if vent:
         s.add("INJ", "orifice", diameter="4 mm", cd=0.7)
         s.add("AMB", "boundary", fluid=liquid)
-        s.connect("L1.out", "INJ.in")
+        s.connect("MV.out", "INJ.in")
         s.connect("INJ.out", "AMB.port")
-    s.sense("PF", "purge_fraction", "L1.out", units="")
-    s.sense("TC", "temperature", "L1.out", units="K")
+    s.sense("PF", "purge_fraction", "MV.out", units="")
+    s.sense("TC", "temperature", "MV.out", units="K")
     return s
 
 
@@ -59,7 +58,7 @@ def test_purge_pushes_propellant_out(liquid, gas):
     sim = Simulation(_rig(liquid, gas))
     _flow_then_purge(sim, purge=3.0)
     assert sim.read("PF") > 0.95
-    assert sim.nout[sim.node("L1.out"), L.O_RHO] < 50  # gas only: no liquid left
+    assert sim.nout[sim.node("MV.out"), L.O_RHO] < 50  # gas only: no liquid left
     if liquid == "oxygen":
         assert sim.read("TC") > 200  # the line warms once the LOX is gone
     assert sim.solver_stats()["forced_steps"] < 100
@@ -79,7 +78,7 @@ def test_only_lines_both_fluids_can_flow_into_carry_both():
     net = sim.net
     i = sim.node("PV.out")  # behind the purge check valve: oxygen cannot get there
     assert net.fluids.names[net.NI[i, L.N_FLUID]] == "nitrogen" and net.NI[i, L.N_GX] < 0
-    j = sim.node("L1.out")
+    j = sim.node("MV.out")
     assert net.NI[j, L.N_GX] >= 0 and sim.nout[j, L.O_GAS] < 0.01  # starts full of LOX
 
 

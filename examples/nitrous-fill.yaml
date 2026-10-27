@@ -4,7 +4,6 @@ components:
 - {id: NOS, type: tank, fluid: nitrous, volume: 30 L, fill: 0.8, temperature: 20 C, wall_mass: 15 kg, wall_material: aluminum, at: [0, 260]}
 - {id: OFTV, type: valve, cv: 1.5, open_time: 1 s, at: [0, 150]}
 - {id: 'OFF', type: orifice, cv: 2.0, at: [60, 0]}
-- {id: L-OF1, type: pipe, at: [200, 0]}
 - {id: OFRV-1, type: relief_valve, cv: 0.3, set_pressure: 1000 psi, at: [370, -80]}
 - {id: ATM-1, type: boundary, fluid: nitrous, at: [370, -160]}
 - {id: OFV, type: valve, cv: 1.2, open_time: 300 ms, at: [420, 0]}
@@ -14,7 +13,6 @@ components:
 - {id: OFRV-2, type: relief_valve, cv: 0.3, set_pressure: 1000 psi, at: [650, -80]}
 - {id: ATM-3, type: boundary, fluid: nitrous, at: [650, -160]}
 - {id: OFIF, type: orifice, cv: 2.0, at: [660, 0]}
-- {id: L-OF2, type: pipe, at: [780, 0]}
 - {id: OQD, type: fitting, kind: quick_disconnect, diameter: 0.43 in, at: [880, 0]}
 - {id: RFCV, type: check_valve, cv: 1.2, at: [960, 0]}
 - {id: RT, type: tank, fluid: nitrous, volume: 15 L, pressure: 1 atm, temperature: 20 C, wall_mass: 6 kg, wall_material: aluminum, at: [1040, 100]}
@@ -27,15 +25,13 @@ components:
 - {id: APR, type: regulator, cv: 0.3, setpoint: 90 psig, droop: 10 psi, at: [350, 340]}
 - {id: AIV, type: valve, cv: 0.5, normally: open, at: [400, 340]}
 - {id: ACF, type: orifice, cv: 0.8, at: [450, 340]}
-- {id: L-A, type: pipe, at: [470, 260]}
 - {id: OPGS, type: valve, cv: 0.3, open_time: 50 ms, at: [470, 180]}
 - {id: OPGCV, type: check_valve, cv: 0.3, at: [470, 90]}
 connections:
 - [NOS.bottom, OFTV.in]
 - [OFTV.out, OFF.in]
-- [OFF.out, L-OF1.in]
-- [L-OF1.out, OFV.in]
-- [L-OF1.out, OFRV-1.in]
+- [OFF.out, OFV.in]
+- [OFF.out, OFRV-1.in]
 - [OFRV-1.out, ATM-1.port]
 - [OFV.out, OFCV.in]
 - [OFCV.out, OFIF.in]
@@ -43,8 +39,7 @@ connections:
 - [ODV.out, ATM-2.port]
 - [OFCV.out, OFRV-2.in]
 - [OFRV-2.out, ATM-3.port]
-- [OFIF.out, L-OF2.in]
-- [L-OF2.out, OQD.in]
+- [OFIF.out, OQD.in]
 - [OQD.out, RFCV.in]
 - [RFCV.out, RT.bottom]
 - [RT.top, RTV.in]
@@ -55,13 +50,12 @@ connections:
 - [AR.port, APR.in]
 - [APR.out, AIV.in]
 - [AIV.out, ACF.in]
-- [ACF.out, L-A.in]
-- [L-A.out, OPGS.in]
+- [ACF.out, OPGS.in]
 - [OPGS.out, OPGCV.in]
 - [OPGCV.out, OFV.out]
 sensors:
-- {id: OFPT, type: pressure, at: L-OF1.out, units: psig}
-- {id: OFT, type: temperature, at: L-OF1.out, units: F}
+- {id: OFPT, type: pressure, at: OFV.in, units: psig}
+- {id: OFT, type: temperature, at: OFV.in, units: F}
 - {id: OIPT, type: pressure, at: OFIF.out, units: psig}
 - {id: APT, type: pressure, at: ACF.out, units: psig}
 - {id: ART, type: pressure, at: AR.port, units: psig}

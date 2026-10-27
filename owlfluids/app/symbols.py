@@ -20,7 +20,6 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "pressurized_tank": ((70, 120), {"gas": (0, -60), "liquid": (0, 60)}),
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
-    "pipe": ((100, 16), {"in": (-50, 0), "out": (50, 0)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),
     "fitting": ((40, 30), {"in": (-20, 0), "out": (20, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
@@ -86,9 +85,6 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
             p.drawLine(QPointF(x, -h / 2 + 6 + i * 4), QPointF(x, h / 2 - 6 - i * 4))
     elif type_name == "volume":
         p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
-    elif type_name == "pipe":
-        p.setBrush(QBrush(state.get("pipe_colour", METAL)))
-        p.drawRect(QRectF(-w / 2, -h / 2, w, h))
     elif type_name == "tee":
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-5, -5, 10, 10))

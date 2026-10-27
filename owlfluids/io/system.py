@@ -34,6 +34,10 @@ DEFAULT_SETTINGS = {
     "noise_seed": 0,  # the same seed gives the same noise run to run
 }
 
+# Drawing-only line types from before lines were removed. A file that still has them
+# loads with each one folded into a direct connection between the ports it joined.
+PIPE_TYPES = ("pipe", "tubing", "line")
+
 
 @dataclass
 class Component:
@@ -90,6 +94,7 @@ class System:
     connections: list[tuple[str, str]] = field(default_factory=list)
     sensors: list[Sensor] = field(default_factory=list)
     settings: dict = field(default_factory=lambda: dict(DEFAULT_SETTINGS))
+    notes: list[str] = field(default_factory=list)  # changes made on load, shown as build warnings
 
     # ---- editing helpers
     def component(self, cid: str) -> Component:
@@ -143,7 +148,55 @@ class System:
             sensors.append(Sensor(str(s.pop("id")), s.pop("type"), str(s.pop("at")),
                                   _optional_float(s.pop("lag", None)), _optional_float(s.pop("noise", None)),
                                   float(s.pop("rate", 0) or 0), str(s.pop("units", "") or "")))
-        return cls(str(d.get("name", "untitled")), comps, conns, sensors, settings)
+        system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings)
+        system._fold_pipes()
+        return system
+
+    def _fold_pipes(self) -> None:
+        """Replace each old drawing-only pipe with direct connections between the ports it joined."""
+        pipes = {c.id for c in self.components if c.type in PIPE_TYPES}
+        if not pipes:
+            return
+        parent: dict[str, str] = {}
+
+        def find(r: str) -> str:
+            parent.setdefault(r, r)
+            while parent[r] != r:
+                parent[r] = parent[parent[r]]
+                r = parent[r]
+            return r
+
+        def comp_of(ref: str) -> str:
+            return ref.rsplit(".", 1)[0] if "." in ref else ref
+
+        for pid in pipes:  # a pipe's two ends are one point
+            parent[find(f"{pid}.in")] = find(f"{pid}.out")
+            parent[find(pid)] = find(f"{pid}.out")
+        kept = []
+        for a, b in self.connections:
+            if comp_of(a) in pipes or comp_of(b) in pipes:
+                parent[find(a)] = find(b)
+            else:
+                kept.append((a, b))
+        # every point a pipe touched: the component ports there, first one seen first
+        points: dict[str, list[str]] = {find(pid): [] for pid in pipes}
+        for a, b in self.connections:
+            for ref in (a, b):
+                refs = points.get(find(ref))
+                if refs is not None and comp_of(ref) not in pipes and ref not in refs:
+                    refs.append(ref)
+        for refs in points.values():
+            kept.extend((refs[0], r) for r in refs[1:] if (refs[0], r) not in kept and (r, refs[0]) not in kept)
+        self.connections = kept
+        for s in self.sensors:
+            if comp_of(s.at) in pipes:
+                refs = points.get(find(s.at)) if s.at in parent else None
+                if not refs:
+                    raise ValueError(f"sensor {s.id} is on line {comp_of(s.at)}, which joins nothing")
+                s.at = refs[0]
+        self.components = [c for c in self.components if c.id not in pipes]
+        self.notes.append(f"lines are no longer components: {', '.join(sorted(pipes))} became direct connections "
+                          "(save the file to keep it that way)")
 
     def to_dict(self) -> dict:
         settings = {k: v for k, v in self.settings.items() if DEFAULT_SETTINGS.get(k) != v}
