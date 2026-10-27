@@ -42,6 +42,7 @@ Config (a ``synnax:`` section in the system file, or its own YAML file)::
       rate: 100                   # Hz written to Synnax
       index: owl_time             # index channel for channels the driver creates
       create_channels: true       # create any missing channel
+      check_version: warn         # Core and client major.minor differ: warn, strict (refuse) or off
       sensors:                    # sim sensor -> channel (default: lower-case id)
         PT-OX: pt_ox
       valves:                     # sim valve -> channels, see SynnaxConfig.resolve
@@ -62,7 +63,51 @@ from .. import units
 
 MODES = ("hootl", "hitl")
 VALVE_STATES = ("command", "position")
+VERSION_CHECKS = ("warn", "strict", "off")
 LIMIT_OPEN, LIMIT_CLOSED = 0.99, 0.01  # faked limit switches (valve_state: position)
+
+
+def version_mismatch(client: str, core: str) -> str | None:
+    """How this client and Synnax Core differ, or None if their major.minor versions match (or are unknown)."""
+    def mm(v: str):
+        parts = str(v or "").lstrip("v").split(".")
+        try:
+            return int(parts[0]), int(parts[1])
+        except (IndexError, ValueError):
+            return None
+
+    c, n = mm(client), mm(core)
+    if c is None:
+        return None
+    if n is None:
+        return f"the Synnax Core did not report its version (it is probably older than client {client})"
+    if c == n or (0, 0) in (c, n):  # 0.0 marks a development build, which Synnax pairs with anything
+        return None
+    side = "Core" if c > n else "OwlFluids build"
+    return (f"Synnax Core {core} and the Synnax client {client} in this OwlFluids build differ in major.minor, "
+            f"which Synnax does not promise to support; upgrade the {side} if channels or writes misbehave")
+
+
+def check_versions(client, mode: str) -> str | None:
+    """Compare a connected client with its Core. Returns a warning, raises for ``strict``, or None.
+
+    Clients older than about 0.50 can't report versions; that counts as unknown, never as a mismatch.
+    A check that could not reach the Core raises a connection error, not a version complaint.
+    """
+    if mode == "off":
+        return None
+    try:
+        state = client.connectivity.check()
+    except Exception:  # noqa: BLE001 - no connectivity checker (old client): version unknown
+        return None
+    if getattr(state, "status", "connected") != "connected":
+        raise RuntimeError(f"cannot reach the Synnax Core: {getattr(state, 'message', '') or state.status}")
+    if getattr(state, "client_server_compatible", False):  # Synnax's own rule says they pair
+        return None
+    problem = version_mismatch(getattr(state, "client_version", ""), getattr(state, "node_version", ""))
+    if problem and mode == "strict":
+        raise RuntimeError(f"{problem} (refused because check_version is strict)")
+    return problem
 
 
 def _channel_name(name: str) -> str:
@@ -84,12 +129,19 @@ class SynnaxConfig:
     sensors: dict[str, str] = field(default_factory=dict)
     valves: dict[str, dict[str, str]] = field(default_factory=dict)
     valve_threshold: float = 0.5  # a read value above this opens an on/off valve
+    check_version: str = "warn"  # Core and client major.minor differ: warn, strict (refuse) or off
 
     def __post_init__(self):
         self.mode = str(self.mode).strip().lower()
         if self.mode not in MODES:
             raise ValueError(f"synnax mode must be one of {', '.join(MODES)}, not {self.mode!r}")
         self.valve_state = str(self.valve_state).strip().lower()
+        if isinstance(self.check_version, bool):
+            self.check_version = "warn" if self.check_version else "off"
+        self.check_version = str(self.check_version).strip().lower()
+        if self.check_version not in VERSION_CHECKS:
+            raise ValueError(f"synnax check_version must be one of {', '.join(VERSION_CHECKS)}, "
+                             f"not {self.check_version!r}")
         if self.valve_state not in VALVE_STATES:
             raise ValueError(f"synnax valve_state must be one of {', '.join(VALVE_STATES)}, "
                              f"not {self.valve_state!r}")
@@ -149,6 +201,14 @@ class SynnaxLink:
         self.sy = sy
         self.client = sy.Synnax(host=cfg.host, port=cfg.port, username=cfg.username, password=cfg.password,
                                 secure=cfg.secure)
+        self.warnings: list[str] = []
+        try:
+            problem = check_versions(self.client, cfg.check_version)
+        except RuntimeError:
+            self.client.close()
+            raise
+        if problem:
+            self.warnings.append(f"Synnax: {problem}")
         self.writer = None
         self.streamer = None
         self._t0 = 0
@@ -290,6 +350,8 @@ class SynnaxDriver:
         if clash:
             raise ValueError(f"Synnax channels used twice: {', '.join(clash)}")
         self.link = link_factory(cfg)
+        for w in getattr(self.link, "warnings", ()):
+            runner._warn(w)
         self.indexes = self.link.ensure_channels(cfg.index, data, list(self.read_to_valve), cfg.create_channels)
         if self.indexes is None:  # a link that doesn't report indexes writes everything on cfg.index
             self.indexes = [cfg.index]

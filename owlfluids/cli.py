@@ -1,4 +1,4 @@
-"""Command line: ``owlfluids app|run|console|check|bench|example|tables``."""
+"""Command line: ``owlfluids app|run|console|check|bench|example|update|tables``."""
 
 from __future__ import annotations
 
@@ -280,6 +280,40 @@ def cmd_app(args) -> int:
     return app_main(args.system)
 
 
+def cmd_update(args) -> int:
+    from . import __version__, update
+
+    if args.token is not None:
+        cfg = update.load_config()
+        cfg["token"] = args.token.strip()
+        update.save_config(cfg)
+        print(f"token saved to {update.CONFIG}")
+    try:
+        rel = update.latest_release()
+    except update.UpdateError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if not rel or not rel.newer:
+        print(f"OwlFluids {__version__} is up to date")
+        return 0
+    print(f"OwlFluids {rel.version} is available (you have {__version__}): {rel.url}")
+    if args.check:
+        return 0
+    if not update.frozen():
+        print("this is a Python install: update it with git pull and pip install -e ., or use the installer")
+        return 0
+    try:
+        path = update.download(rel, progress=lambda done, total: print(
+            f"\rdownloading {done / 1e6:.0f} of {total / 1e6:.0f} MB", end="", flush=True))
+        print()
+        update.run_installer(path)
+    except update.UpdateError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print("installer started; it will finish in the background")
+    return 0
+
+
 SYSTEM_HELP = "system .yaml file or example name (see `owlfluids example`)"
 
 
@@ -289,7 +323,10 @@ def main(argv: list[str] | None = None) -> int:
         from .fluids.tables import main as tables_main
 
         return tables_main(argv[1:]) or 0
+    from . import __version__
+
     ap = argparse.ArgumentParser(prog="owlfluids", description="Real-time 1-D fluid network simulator")
+    ap.add_argument("--version", action="version", version=f"OwlFluids {__version__}")
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("app", help="open the desktop app")
@@ -327,6 +364,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("name", nargs="?", help="example to write (leave out to list them)")
     p.add_argument("-o", "--output", help="file to write (default <name>.yaml)")
     p.set_defaults(fn=cmd_example)
+
+    p = sub.add_parser("update", help="check for a newer release and install it (Windows installer)")
+    p.add_argument("--check", action="store_true", help="only say whether there is a newer release")
+    p.add_argument("--token", help="save a GitHub token with read access to the repository, then check")
+    p.set_defaults(fn=cmd_update)
 
     sub.add_parser("tables", help="prebuild property tables (see `owlfluids tables --help`)")
 

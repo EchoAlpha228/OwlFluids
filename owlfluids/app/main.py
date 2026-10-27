@@ -24,6 +24,7 @@ def main(path: str | None = None) -> int:
         else:
             w.open_file(path)
     w.show()
+    w.updater.check_on_start()
     return app.exec()
 
 

@@ -220,3 +220,56 @@ def test_driver_syncs_valves_at_connect_and_stops_cleanly():
     assert runner.sim.valve_command("V-P") == vp  # no stored value: left alone
     drv.stop()  # must not raise
     assert isinstance(drv.error, RuntimeError)
+
+
+def test_version_mismatch():
+    from owlfluids.drivers.synnax import version_mismatch
+
+    assert version_mismatch("0.60.0", "0.60.3") is None
+    assert version_mismatch("0.60.0", "v0.60.1") is None
+    assert "upgrade the Core" in version_mismatch("0.60.0", "0.59.2")
+    assert "upgrade the OwlFluids build" in version_mismatch("0.59.0", "0.60.0")
+    assert "did not report" in version_mismatch("0.60.0", "")
+    assert version_mismatch("", "0.60.0") is None  # client version unknown: nothing to compare
+    assert version_mismatch("0.60.0", "0.0.0") is None  # development Core
+
+
+def test_check_versions_modes():
+    from owlfluids.drivers.synnax import check_versions
+
+    def client(core):
+        state = SimpleNamespace(client_version="0.60.0", node_version=core)
+        return SimpleNamespace(connectivity=SimpleNamespace(check=lambda: state))
+
+    assert check_versions(client("0.60.2"), "warn") is None
+    assert "0.58.2" in check_versions(client("0.58.2"), "warn")  # warns, still connects
+    with pytest.raises(RuntimeError, match="strict"):
+        check_versions(client("0.58.2"), "strict")
+    assert check_versions(client("0.58.2"), "off") is None
+    assert check_versions(SimpleNamespace(), "strict") is None  # an old client can't report versions
+
+    def broken():
+        raise AttributeError("no checker in this client")
+
+    assert check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=broken)), "strict") is None
+    failed = SimpleNamespace(status="failed", message="connection refused", node_version="")
+    with pytest.raises(RuntimeError, match="cannot reach the Synnax Core: connection refused"):
+        check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=lambda: failed)), "warn")
+    ok = SimpleNamespace(status="connected", client_server_compatible=True, client_version="0.60.0",
+                         node_version="0.0.0")
+    assert check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=lambda: ok)), "strict") is None
+    assert SynnaxConfig.from_dict({"check_version": False}).check_version == "off"
+    assert SynnaxConfig.from_dict({"check_version": True}).check_version == "warn"
+    with pytest.raises(ValueError, match="check_version"):
+        SynnaxConfig.from_dict({"check_version": "maybe"})
+
+
+def test_link_warnings_reach_the_runner():
+    class WarningLink(FakeLink):
+        def __init__(self, cfg):
+            super().__init__(cfg)
+            self.warnings = ["Synnax: versions differ"]
+
+    runner = Runner(Simulation(lox_feed()))
+    SynnaxDriver(runner, SynnaxConfig(), link_factory=WarningLink)
+    assert "Synnax: versions differ" in runner.warnings

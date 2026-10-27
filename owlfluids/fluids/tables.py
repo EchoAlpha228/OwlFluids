@@ -62,6 +62,19 @@ def table_path(coolprop_name: str, backend: str) -> Path:
     return table_dir() / f"{coolprop_name}_{backend}_v{TABLE_VERSION}.npz"
 
 
+def bundled_table_dir() -> Path:
+    """Tables shipped with the Windows installer (CoolProp HEOS only), read when the user has none."""
+    return Path(__file__).resolve().parent / "bundled"
+
+
+def find_table(coolprop_name: str, backend: str) -> Path | None:
+    """The user's own table if there is one, otherwise a bundled one."""
+    for path in (table_path(coolprop_name, backend), bundled_table_dir() / table_path(coolprop_name, backend).name):
+        if path.exists():
+            return path
+    return None
+
+
 def _state(coolprop_name: str, backend: str):
     from CoolProp import AbstractState
 
@@ -344,10 +357,11 @@ def _interp_extrap(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
 
 
 def load_or_build(coolprop_name: str, backend: str = "HEOS", verbose: bool = False) -> dict:
-    path = table_path(coolprop_name, backend)
-    if path.exists():
-        with np.load(path) as data:
+    found = find_table(coolprop_name, backend)
+    if found:
+        with np.load(found) as data:
             return {k: data[k] for k in data.files}
+    path = table_path(coolprop_name, backend)
     if verbose:
         print(f"building {coolprop_name} property table with {backend} (one time, cached in {path.parent})")
     data = build_table(coolprop_name, backend)
@@ -363,15 +377,22 @@ def main(argv: list[str] | None = None) -> None:
 
     ap = argparse.ArgumentParser(prog="owlfluids tables", description="Build OwlFluids property tables")
     ap.add_argument("--backend", default="HEOS", help="HEOS (CoolProp) or REFPROP")
-    ap.add_argument("--force", action="store_true", help="rebuild even if cached")
+    ap.add_argument("--force", action="store_true", help="rebuild even if cached or bundled")
+    ap.add_argument("--out", help="folder to write the tables to (default: OWLFLUIDS_TABLE_DIR or ~/.owlfluids/tables)")
     ap.add_argument("fluids", nargs="*", help="CoolProp fluid names (default: all)")
     args = ap.parse_args(argv)
+    if args.out:
+        os.environ["OWLFLUIDS_TABLE_DIR"] = args.out
     for name in args.fluids or TABLE_FLUIDS:
         path = table_path(name, args.backend)
-        if args.force and path.exists():
-            path.unlink()
-        load_or_build(name, args.backend, verbose=True)
-        print(f"{name}: {path}")
+        if args.force:
+            path.unlink(missing_ok=True)
+            data = build_table(name, args.backend)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(path, **data)
+        else:
+            load_or_build(name, args.backend, verbose=True)
+        print(f"{name}: {find_table(name, args.backend)}")
 
 
 if __name__ == "__main__":

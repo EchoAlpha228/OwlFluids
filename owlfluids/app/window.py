@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         m_edit = self.menuBar().addMenu("&Edit")
         m_run = self.menuBar().addMenu("&Run")
         m_view = self.menuBar().addMenu("&View")
+        m_help = self.menuBar().addMenu("&Help")
 
         def act(text, slot, shortcut=None, menu=None, toolbar=False, tip=""):
             a = QAction(text, self)
@@ -163,7 +164,20 @@ class MainWindow(QMainWindow):
         self.a_synnax.setCheckable(True)
         act("Fit schematic", self.view.fit, "F", m_view, True)
         m_view.addAction(self.plot_dock.toggleViewAction())
+        from .updates import Updater
+
+        self.updater = Updater(self)
+        act("Check for updates…", lambda: self.updater.check(), menu=m_help)
+        act("Update settings…", self.updater.settings, menu=m_help)
+        m_help.addSeparator()
+        act("About OwlFluids", self.about, menu=m_help)
         self._set_running_ui(False)
+
+    def about(self) -> None:
+        from .. import __version__
+
+        QMessageBox.about(self, "About OwlFluids", f"OwlFluids {__version__}\n\n"
+                          "Real-time 1-D fluid network simulator for test automation.")
 
     def _make_status(self) -> None:
         self.status_time = QLabel("stopped")

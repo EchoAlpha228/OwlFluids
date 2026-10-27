@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "owlfluids"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Real-time 1-D fluid network simulator for test automation"
 readme = "README.md"
 license = { text = "MIT" }
@@ -30,6 +30,9 @@ owlfluids-tables = "owlfluids.fluids.tables:main"
 
 [project.gui-scripts]
 owlfluids-app = "owlfluids.app.main:gui_main"
+
+[tool.setuptools.dynamic]
+version = { attr = "owlfluids.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["owlfluids*"]

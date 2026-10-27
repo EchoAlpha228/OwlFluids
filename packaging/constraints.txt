@@ -1,0 +1,5 @@
+# Version pins for the installer build (pip install -c packaging/constraints.txt).
+# Empty by default: each build bundles the newest Synnax client. The client's
+# major.minor should match the Synnax Core the stand runs; the driver warns about a
+# mismatched Core on connect. To build for an older Core, run the Release workflow
+# by hand with its synnax_version, which adds a pin here for that build.
