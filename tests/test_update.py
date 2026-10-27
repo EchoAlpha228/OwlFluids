@@ -81,3 +81,13 @@ def test_bundled_tables_are_a_fallback(tmp_path, monkeypatch):
     assert tables.find_table("Nitrogen", "HEOS") == bundled / name
     (user / name).write_bytes(b"")
     assert tables.find_table("Nitrogen", "HEOS") == user / name
+
+
+def test_no_release_yet(monkeypatch):
+    def fake_urlopen(req, timeout):
+        if req.full_url.endswith("/releases/latest"):
+            raise update.urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        return io.BytesIO(b"{}")  # the repository itself is readable
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", fake_urlopen)
+    assert update.latest_release("") is None

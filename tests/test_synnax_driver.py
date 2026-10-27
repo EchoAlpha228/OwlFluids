@@ -227,8 +227,42 @@ def test_version_mismatch():
 
     assert version_mismatch("0.60.0", "0.60.3") is None
     assert version_mismatch("0.60.0", "v0.60.1") is None
-    assert "Upgrade the Core" in version_mismatch("0.60.0", "0.59.2")
-    assert "Upgrade the OwlFluids build" in version_mismatch("0.59.0", "0.60.0")
+    assert "upgrade the Core" in version_mismatch("0.60.0", "0.59.2")
+    assert "upgrade the OwlFluids build" in version_mismatch("0.59.0", "0.60.0")
     assert "did not report" in version_mismatch("0.60.0", "")
     assert version_mismatch("", "0.60.0") is None  # client version unknown: nothing to compare
-    assert SynnaxConfig.from_dict({"check_version": False}).check_version is False
+
+
+def test_check_versions_modes():
+    from owlfluids.drivers.synnax import check_versions
+
+    def client(core):
+        state = SimpleNamespace(client_version="0.60.0", node_version=core)
+        return SimpleNamespace(connectivity=SimpleNamespace(check=lambda: state))
+
+    assert check_versions(client("0.60.2"), "warn") is None
+    assert "0.58.2" in check_versions(client("0.58.2"), "warn")  # warns, still connects
+    with pytest.raises(RuntimeError, match="strict"):
+        check_versions(client("0.58.2"), "strict")
+    assert check_versions(client("0.58.2"), "off") is None
+    assert check_versions(SimpleNamespace(), "strict") is None  # an old client can't report versions
+
+    def broken():
+        raise ConnectionError("down")
+
+    assert check_versions(SimpleNamespace(connectivity=SimpleNamespace(check=broken)), "strict") is None
+    assert SynnaxConfig.from_dict({"check_version": False}).check_version == "off"
+    assert SynnaxConfig.from_dict({"check_version": True}).check_version == "warn"
+    with pytest.raises(ValueError, match="check_version"):
+        SynnaxConfig.from_dict({"check_version": "maybe"})
+
+
+def test_link_warnings_reach_the_runner():
+    class WarningLink(FakeLink):
+        def __init__(self, cfg):
+            super().__init__(cfg)
+            self.warnings = ["Synnax: versions differ"]
+
+    runner = Runner(Simulation(lox_feed()))
+    SynnaxDriver(runner, SynnaxConfig(), link_factory=WarningLink)
+    assert "Synnax: versions differ" in runner.warnings

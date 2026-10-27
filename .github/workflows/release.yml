@@ -23,7 +23,7 @@ on:
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   installer:
@@ -42,9 +42,12 @@ jobs:
       - name: Synnax client override
         if: inputs.synnax_version != ''
         shell: pwsh
+        env:
+          SYNNAX_VERSION: ${{ inputs.synnax_version }}
         run: |
-          "synnax==${{ inputs.synnax_version }}" >> packaging\constraints.txt
-          $tag = "synnax" + ("${{ inputs.synnax_version }}" -replace '[^0-9.]', '').TrimEnd('.')
+          if ($env:SYNNAX_VERSION -notmatch '^[0-9][0-9.*]*$') { throw "synnax_version must look like 0.59.* or 0.59.2" }
+          "synnax==$env:SYNNAX_VERSION" >> packaging\constraints.txt
+          $tag = "synnax" + ($env:SYNNAX_VERSION -replace '[^0-9.]', '').TrimEnd('.')
           "OWLFLUIDS_VERSION_SUFFIX=$tag" >> $env:GITHUB_ENV
       - name: Inno Setup
         shell: pwsh
@@ -68,9 +71,21 @@ jobs:
         with:
           name: OwlFluids-installer
           path: dist/OwlFluids-Setup-*.exe
+
+  publish:
+    # the only job that can write to the repository, and it runs only for tags
+    if: github.ref_type == 'tag'
+    needs: installer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OwlFluids-installer
+          path: dist
       - name: Publish release
-        if: github.ref_type == 'tag'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" (Get-Item dist\OwlFluids-Setup-*.exe).FullName --title "OwlFluids ${{ github.ref_name }}" --generate-notes
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/OwlFluids-Setup-*.exe --repo "$GITHUB_REPOSITORY" --title "OwlFluids $TAG" --generate-notes

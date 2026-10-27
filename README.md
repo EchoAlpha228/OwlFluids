@@ -49,9 +49,9 @@ goes private): paste one into **Help > Update settings**, or use
 
 **Synnax.** Each installer bundles the newest Synnax client at the time it was
 built; it is private to OwlFluids and doesn't touch any
-other Python install. The client's major.minor version must match your Synnax
-Core, and the driver refuses to connect if it doesn't (`check_version: false`
-under `synnax:` overrides). For an older Core, run **Actions > Release > Run
+other Python install. The client's major.minor version should match your Synnax
+Core: the driver warns on connect if it doesn't (`check_version: strict` under
+`synnax:` refuses instead, `off` skips the check). For an older Core, run **Actions > Release > Run
 workflow** with its `synnax_version` and install the build it attaches.
 
 The installed program runs sequence scripts (`owlfluids run --script`) with its

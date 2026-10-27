@@ -100,8 +100,8 @@ def latest_release(tok: str | None = None, repo: str = REPO) -> Release | None:
         with urllib.request.urlopen(_request(f"{API}/repos/{repo}/releases/latest", tok), timeout=TIMEOUT) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
-        if e.code == 404 and tok and _can_read(repo, tok):
-            return None  # GitHub also answers 404 to a token that can't see the repository
+        if e.code == 404 and _can_read(repo, tok):
+            return None  # no release yet (GitHub also answers 404 when the repository can't be seen)
         if e.code in (401, 403, 404):
             raise UpdateError(f"GitHub refused the update check ({e.code} {e.reason}). If the repository is "
                               "private or GitHub is limiting anonymous requests, set a GitHub token with read "
