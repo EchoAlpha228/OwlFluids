@@ -58,9 +58,11 @@ The installed program runs sequence scripts (`owlfluids run --script`) with its
 bundled packages only. To `import owlfluids` from your own Python, use the
 development install below; both can be installed side by side.
 
-**Publishing a release:** bump `__version__` in `owlfluids/__init__.py`, merge,
-then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The
-Release workflow builds the installer on Windows and publishes it.
+**Publishing a release:** bump `__version__` in `owlfluids/__init__.py` and merge.
+Then run Actions > Release > Run workflow with *publish* ticked, which tags main
+as `v<__version__>`; pushing a matching tag (`git tag v0.2.0 && git push origin
+v0.2.0`) or publishing a GitHub release with a new tag works too. The Release
+workflow builds the installer on Windows and publishes it.
 `packaging\build.ps1` builds the same installer locally (needs Inno Setup 6).
 
 ### From source
