@@ -41,6 +41,28 @@ def test_old_pipes_fold_into_direct_connections():
     assert sim.read("PT") == pytest.approx(10e5, rel=1e-2)
 
 
+def test_old_pipe_segments_and_settings_fold_with_notes():
+    # before #6 a line had segments (L.s2) and its own length, diameter and wall
+    s = System.from_dict({
+        "components": [
+            {"id": "K", "type": "tank", "fluid": "nitrogen", "volume": "1 L", "pressure": "10 bar",
+             "temperature": "300 K"},
+            {"id": "V", "type": "valve", "cv": 0.1},
+            {"id": "L-F", "type": "pipe", "length": "4 m", "diameter": "10 mm", "wall_thickness": "1 mm"},
+            {"id": "L-X", "type": "pipe"},
+            {"id": "A", "type": "boundary", "fluid": "nitrogen"},
+        ],
+        "connections": [["K.port", "V.in"], ["V.out", "L-F.in"], ["L-F.out", "A.port"]],
+        "sensors": [{"id": "TC", "type": "temperature", "at": "L-F.s2"},
+                    {"id": "PT", "type": "pressure", "at": "L-X.in"}],
+    })
+    assert s.sensors[0].at == "V.out"
+    assert s.sensors[1].at == "L-X.in"  # joins nothing: left for the user to move
+    notes = " ".join(s.notes)
+    assert "TC was on line L-F" in notes and "PT is on line L-X, which joins nothing" in notes
+    assert "settings of L-F " in notes
+
+
 def test_pipe_in_code_is_an_error():
     s = System("bad")
     s.add("L1", "pipe")

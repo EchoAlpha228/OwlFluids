@@ -188,15 +188,23 @@ class System:
         for refs in points.values():
             kept.extend((refs[0], r) for r in refs[1:] if (refs[0], r) not in kept and (r, refs[0]) not in kept)
         self.connections = kept
-        for s in self.sensors:
-            if comp_of(s.at) in pipes:
-                refs = points.get(find(s.at)) if s.at in parent else None
-                if not refs:
-                    raise ValueError(f"sensor {s.id} is on line {comp_of(s.at)}, which joins nothing")
-                s.at = refs[0]
-        self.components = [c for c in self.components if c.id not in pipes]
         self.notes.append(f"lines are no longer components: {', '.join(sorted(pipes))} became direct connections "
                           "(save the file to keep it that way)")
+        # a line's id stands for all its points (in, out, and the segments of older files)
+        for s in self.sensors:
+            line = comp_of(s.at)
+            if line in pipes:
+                refs = points.get(find(line))
+                if refs:
+                    s.at = refs[0]
+                    self.notes.append(f"sensor {s.id} was on line {line}; it now reads {s.at}")
+                else:
+                    self.notes.append(f"sensor {s.id} is on line {line}, which joins nothing; move it to a port")
+        dropped = sorted(c.id for c in self.components if c.id in pipes and c.params)
+        if dropped:
+            self.notes.append(f"the settings of {', '.join(dropped)} (length, diameter, wall) are dropped: lines are "
+                              "not modelled, so draw a line as a volume to keep its volume or wall")
+        self.components = [c for c in self.components if c.id not in pipes]
 
     def to_dict(self) -> dict:
         settings = {k: v for k, v in self.settings.items() if DEFAULT_SETTINGS.get(k) != v}

@@ -454,6 +454,7 @@ ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "inj
            "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
            "pump": "air_pump"}
 
+
 def get_type(name: str) -> type[ComponentType]:
     key = ALIASES.get(name, name)
     if key in PIPE_TYPES:
