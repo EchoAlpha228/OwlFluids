@@ -56,7 +56,7 @@ ACCENT = CYAN
 SELECTION = DARK_BLUE
 
 VALVE_OPEN = DARK_GREEN
-VALVE_CLOSED = GRAY_500
+VALVE_CLOSED = DARK_RED  # bright Red stays for emergencies
 
 # fluid material colours: desaturated so they sit below the UI colours. Liquid is
 # drawn solid; gas is the same hue, see-through (GAS_ALPHA) over the dark background.
@@ -73,7 +73,7 @@ FLUID_COLOURS = {
 FLUID_UNKNOWN = GRAY_400
 GAS_ALPHA = 0.6
 
-# plot traces, in order; no red, amber or olive, which carry alarm meanings
+# plot traces, in order; no red, amber or olive, which carry state and alarm meanings
 TRACES = [CYAN, GREEN, BLUE, MAGENTA, GRAY_050, DARK_CYAN, DARK_GREEN, DARK_BLUE, DARK_MAGENTA, GRAY_300]
 
 UI_FONT = "Lato"
