@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
@@ -47,9 +49,20 @@ class PlotPanel(QWidget):
         sv.setContentsMargins(0, 0, 0, 0)
         self.series_list = QListWidget()
         self.series_list.itemChanged.connect(lambda _: self._rebuild_visibility())
+        head = QHBoxLayout()
         show = QLabel("SIGNALS")
         show.setObjectName("heading")
-        sv.addWidget(show)
+        head.addWidget(show)
+        head.addStretch(1)
+        # LIVE follows the run; off, the view holds still for panning and zooming while the run goes on
+        self.live_btn = QPushButton("LIVE")
+        self.live_btn.setObjectName("live")
+        self.live_btn.setCheckable(True)
+        self.live_btn.setChecked(True)
+        self.live_btn.setToolTip("Follow the run. Turn off to hold the view still and pan or zoom; the run carries on.")
+        self.live_btn.toggled.connect(self._set_live)
+        head.addWidget(self.live_btn)
+        sv.addLayout(head)
         sv.addWidget(self.series_list)
         row = QHBoxLayout()
         row.addWidget(QLabel("Window"))
@@ -67,13 +80,15 @@ class PlotPanel(QWidget):
 
         self.graphics = pg.GraphicsLayoutWidget()
         split.addWidget(self.graphics)
-        split.setSizes([160, 900])
+        split.setSizes([220, 900])
         self.plots: dict[str, pg.PlotItem] = {}
         self.curves: dict[str, pg.PlotDataItem] = {}
         self.overlay: dict[str, pg.PlotDataItem] = {}
         self.names: list[str] = []
         self.groups: dict[str, str] = {}
         self.unit_of: dict[str, str] = {}
+        self.items: dict[str, QListWidgetItem] = {}
+        self._values_at = 0.0  # when the list's live values were last written
 
     def configure(self, system, valves: list[str]) -> None:
         """Set up one curve per sensor (in its display units) and per valve."""
@@ -83,6 +98,7 @@ class PlotPanel(QWidget):
         self.overlay.clear()
         self.series_list.blockSignals(True)
         self.series_list.clear()
+        self.items.clear()
         self.names = [s.id for s in system.sensors] + [f"valve:{v}" for v in valves]
         for s in system.sensors:
             self.groups[s.id] = s.type if s.type in ("pressure", "temperature", "mass_flow") else "other"
@@ -123,12 +139,13 @@ class PlotPanel(QWidget):
             colour = COLOURS[i % len(COLOURS)]
             pen = pg.mkPen(colour, width=1.5)
             self.curves[n] = self.plots[g].plot([], [], pen=pen, name=n.replace("valve:", ""))
-            it = QListWidgetItem(_swatch(colour), n.replace("valve:", "valve "))
+            it = QListWidgetItem(_swatch(colour), self._label(n))
             it.setFont(T.mono_font())
             it.setData(Qt.UserRole, n)
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Unchecked if g == "valve" and len(valves) > 6 else Qt.Checked)
             self.series_list.addItem(it)
+            self.items[n] = it
         self.series_list.blockSignals(False)
         self._rebuild_visibility()
 
@@ -142,10 +159,41 @@ class PlotPanel(QWidget):
             if n in self.overlay:
                 self.overlay[n].setVisible(vis)
 
+    def _label(self, n: str, value: float | None = None) -> str:
+        name = n.replace("valve:", "")
+        if value is None:
+            return name
+        unit = "%" if self.groups.get(n) == "valve" else self.unit_of.get(n, "")
+        return f"{name:<9} {value:>9.4g} {unit}"
+
+    def _set_live(self, live: bool) -> None:
+        self.live_btn.setText("LIVE" if live else "PAUSED")
+        if live:  # back to following the run
+            for g, p in self.plots.items():
+                p.enableAutoRange(axis="x")
+                if g != "valve":
+                    p.enableAutoRange(axis="y")
+
     def update_from(self, history) -> None:
         t, v = history.arrays()
         if len(t) == 0:
             return
+        now = time.perf_counter()
+        if now - self._values_at > 0.2:  # live values in the list at 5 Hz: readable, and cheap
+            self._values_at = now
+            for j, n in enumerate(history.names):
+                it = self.items.get(n)
+                if it is None:
+                    continue
+                y = float(v[-1, j])
+                if self.groups.get(n) == "mass_flow" and abs(y) < FLOW_ZERO:
+                    y = 0.0
+                y = y * 100.0 if self.groups.get(n) == "valve" else units.convert(y, self.unit_of.get(n, ""))
+                text = self._label(n, y)
+                if it.text() != text:
+                    it.setText(text)
+        if not self.live_btn.isChecked():
+            return  # the view holds still; the history keeps recording
         win = self.window_box.currentData()
         if win:
             keep = t >= t[-1] - win

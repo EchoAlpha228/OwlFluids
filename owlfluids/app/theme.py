@@ -170,6 +170,9 @@ QSplitter::handle, QMainWindow::separator {{ background: {BORDER}; width: 1px; h
 QToolTip {{ background: {GRAY_700}; color: {TEXT}; border: 1px solid {BORDER}; padding: 4px; }}
 QLabel#hint {{ color: {TEXT_DIM}; }}
 QLabel#heading {{ color: {TEXT_DIM}; font-weight: bold; letter-spacing: 1px; }}
+QPushButton#live {{ font-family: "{LABEL_FONT}"; letter-spacing: 1px; padding: 2px 10px;
+                   background: {DARK_OLIVE}; border-color: {DARK_OLIVE}; color: {WHITE}; }}
+QPushButton#live:checked {{ background: {DARK_GREEN}; border-color: {DARK_GREEN}; }}
 *[mono="true"] {{ font-family: "{MONO_FONT}"; }}
 QMenuBar, QToolButton, QDockWidget, QTabBar::tab, QLabel#heading {{ font-family: "{LABEL_FONT}"; font-size: 10pt; }}
 """
