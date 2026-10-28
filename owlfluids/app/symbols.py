@@ -32,13 +32,13 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),
-    "fitting": ((40, 30), {"in": (-20, 0), "out": (20, 0)}),
+    "fitting": ((40, 10), {"in": (-20, 0), "out": (20, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
     "valve": ((56, 40), {"in": (-28, 0), "out": (28, 0)}),
     "throttle_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
     "check_valve": ((50, 34), {"in": (-25, 0), "out": (25, 0)}),
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
-    "regulator": ((56, 50), {"in": (-28, 0), "out": (28, 0)}),
+    "regulator": ((40, 50), {"in": (-20, 19), "out": (20, 19)}),  # ends of the line it stands on
     "air_pump": ((44, 44), {"out": (22, -18)}),  # the tip of the discharge arrow
     "pneumatic_supply": ((30, 30), {"a": (-15, 0), "b": (15, 0), "c": (0, -15), "d": (0, 15)}),
 }
@@ -171,14 +171,15 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.setPen(QPen(LINE, 1.6))
     elif type_name == "volume":
         p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
+        if "fill_colour" in state:  # the medium inside
+            p.setBrush(QBrush(state["fill_colour"]))
+            p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
     elif type_name == "tee":
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-5, -5, 10, 10))
     elif type_name == "fitting":
-        p.setBrush(Qt.NoBrush)
-        path = QPainterPath(QPointF(-w / 2, 0))
-        path.quadTo(QPointF(0, -h / 2), QPointF(w / 2, 0))
-        p.drawPath(path)
+        # a fitting (elbow, union...) is only a loss on the line: drawn as the line itself
+        p.setPen(QPen(state.get("line_colour", T.qc(T.GRAY_300)), 2))
         p.drawLine(QPointF(-w / 2, 0), QPointF(w / 2, 0))
     elif type_name == "orifice":
         # restriction: two arcs bowing towards the flow path
@@ -219,18 +220,23 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
         p.drawPath(s_path)
     elif type_name == "regulator":
-        # pressure regulator, in line: adjusting knob on the stem, sensing line from the body
-        # around to the outlet
-        _body(p, w, state)
-        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 4))
-        p.drawLine(QPointF(-8, -h / 2 + 4), QPointF(8, -h / 2 + 4))
+        # pressure regulator as on the reference P&ID: the line runs along the bottom, the body
+        # stands on it with its adjusting handle on top, and a sensing line drops from the body
+        # to the line downstream
+        hw, top, bot, base = 8.0, -15.0, 15.0, 19.0
+        p.drawLine(QPointF(-w / 2, base), QPointF(w / 2, base))
+        p.drawLine(QPointF(0, bot), QPointF(0, base))
+        p.drawLine(QPointF(0, top), QPointF(0, -h / 2 + 3))
+        p.drawLine(QPointF(-7, -h / 2 + 3), QPointF(7, -h / 2 + 3))
+        p.setBrush(QBrush(valve_colour(state.get("position"))))
+        p.drawPolygon(QPolygonF([QPointF(-hw, top), QPointF(hw, top), QPointF(0, 0)]))
+        p.drawPolygon(QPolygonF([QPointF(-hw, bot), QPointF(hw, bot), QPointF(0, 0)]))
         p.setBrush(QBrush(LINE))
-        p.drawEllipse(QRectF(-3, -3, 6, 6))
-        p.drawLine(QPointF(0, 0), QPointF(0, 16))
-        p.setBrush(QBrush(METAL))
-        p.drawEllipse(QRectF(-3, 16, 6, 6))
-        p.drawLine(QPointF(3, 19), QPointF(w / 2 - 2, 19))
-        p.drawLine(QPointF(w / 2 - 2, 19), QPointF(w / 2 - 2, 0))
+        p.drawEllipse(QRectF(-2.5, -2.5, 5, 5))
+        p.drawLine(QPointF(2.5, 0), QPointF(10, 0))
+        p.setBrush(QBrush(T.qc(T.GRAY_900)))
+        p.drawEllipse(QRectF(10, -3, 6, 6))
+        p.drawLine(QPointF(13, 3), QPointF(13, base))
     elif type_name == "air_pump":
         # pump / compressor: casing on a base, intake arrow to the centre; the discharge arrow
         # along the top ends at the outlet port

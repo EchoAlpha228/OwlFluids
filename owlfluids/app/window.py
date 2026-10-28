@@ -346,6 +346,7 @@ class MainWindow(QMainWindow):
         item = self.scene.items_by_id.get(self.properties.comp.id) if self.properties.comp else None
         if item is not None:
             item.update()
+        self.scene.refresh_media()
         self._mark_dirty()
 
     def _rename(self, old: str, new: str) -> None:
@@ -525,6 +526,7 @@ class MainWindow(QMainWindow):
         f = r.frame
         self.valves.show_frame(f)
         self.scene.show_values(self._component_values(r.sim, f))
+        self._show_wire_colours(f)
         now = time.perf_counter()
         dt, self._last_tick = (0.0 if r.paused else now - self._last_tick), now
         mdot = f.link_mdot
@@ -559,14 +561,18 @@ class MainWindow(QMainWindow):
         return c
 
     def _colour_wires(self, sim: Simulation | None) -> None:
-        """While running, each wire takes the colour of the fluid in the line it joins."""
-        for w in self.scene.wires:
-            colour = None
-            if sim is not None:
-                i = sim.net.port_nodes.get(w.a, sim.net.port_nodes.get(w.b))
-                if i is not None:
-                    colour = symbols.fluid_colour(self._node_fluids[i])
-            w.set_colour(colour)
+        """While running, each wire takes the colour of what is in it; gas is see-through."""
+        if sim is None:
+            self._wire_nodes = []
+            self.scene.refresh_media()
+            return
+        net = sim.net
+        self._wire_nodes = [(w, net.port_nodes.get(w.a, net.port_nodes.get(w.b))) for w in self.scene.wires]
+        self._wire_nodes = [(w, i) for w, i in self._wire_nodes if i is not None]
+
+    def _show_wire_colours(self, f) -> None:
+        for w, i in self._wire_nodes:
+            w.set_colour(self._fluid_colour(i, f.node_x[i] > 0.5))
 
     def _wire_links(self, sim: Simulation) -> list[tuple[int, list[tuple[int, float]]]]:
         """For each wire that carries flow: (wire index, [(link, sign), ...]); flow a->b is the sum of sign * mdot.
@@ -624,12 +630,17 @@ class MainWindow(QMainWindow):
             elif ct.type_name in ("orifice", "fitting"):
                 if links:
                     text = _flow_text(f.link_mdot[links[0]])
+                i = net.port_nodes.get(f"{c.id}.in")
+                if ct.type_name == "fitting" and i is not None:
+                    state["line_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
             elif ct.type_name == "boundary":
                 text = ""
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])
                 text = f"{p:.0f} psi  {f.node_t[i]:.0f} K"
+                if ct.type_name == "volume":
+                    state["fill_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
                 if ct.type_name == "pressurized_tank" and len(nodes) > 1:
                     liq = nodes[1]
                     vol = net.NF[nodes[0], L.NF_VOL]

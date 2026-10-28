@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from ..components import get_type
 from ..fluids.registry import canonical
 from ..io.system import Component, System
+from . import media as M
 from . import routing, symbols
 from . import theme as T
 
@@ -31,6 +32,7 @@ WIRE = T.qc(T.GRAY_300)
 WIRE_SELECTED = T.qc(T.ACCENT)
 PORT = T.qc(T.GRAY_900)
 PORT_HOVER = T.qc(T.ACCENT)
+LABEL_DEPTH = 22.0  # id and value labels hang this far below a symbol
 FLOW_MARK = T.qc(T.WHITE)
 FLOW_SIZE = 2.5  # px, the side of each square
 FLOW_DASHES = [1.0, 5.0]  # square, gap; in multiples of FLOW_SIZE
@@ -100,10 +102,10 @@ class ComponentItem(QGraphicsObject):
             sc.refresh_ports(self, hovered=False)
 
     def obstacle(self) -> routing.Rect:
-        """The symbol's footprint in the scene, which wires route around."""
+        """The symbol's footprint in the scene and its labels below it, which wires route around."""
         w, h = self.size
         r = self.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
-        return (r.left(), r.top(), r.right(), r.bottom())
+        return (r.left(), r.top(), r.right(), r.bottom() + LABEL_DEPTH)
 
     def boundingRect(self) -> QRectF:
         w, h = self.size
@@ -118,8 +120,23 @@ class ComponentItem(QGraphicsObject):
             p.drawRect(self.boundingRect().adjusted(2, 2, -2, -2))
 
     def _static_state(self) -> dict:
-        """What the drawing needs from the parameters: valve actuators, and tank fluids while editing."""
+        """What the drawing needs from the parameters: valve actuators, and media while editing."""
         prm = self.comp.params
+        t = self.ctype.type_name
+        sc = self.scene()
+        media = sc.media if sc is not None else {}
+        if t == "fitting":
+            m = media.get(f"{self.comp.id}.in")
+            return {"line_colour": symbols.fluid_colour(*m)} if m else {}
+        if t == "volume":
+            m = next((media[f"{self.comp.id}.{q}"] for q in self.ctype.ports if f"{self.comp.id}.{q}" in media), None)
+            return {"fill_colour": symbols.fluid_colour(*m)} if m else {}
+        if t == "tank":
+            m = media.get(f"{self.comp.id}.port")
+            if not m:
+                return {}
+            return ({"gas_colour": symbols.fluid_colour(*m)} if m[1] else
+                    {"fill": float(prm.get("fill") or 1.0), "liquid_colour": symbols.fluid_colour(m[0])})
         if self.ctype.type_name == "valve":  # the "solenoid" type name is a valve drawn as one
             default = "solenoid" if self.comp.type == "solenoid" else "pneumatic"
             return {"actuator": prm.get("actuator", default)}
@@ -164,9 +181,11 @@ class WireItem(QGraphicsPathItem):
         self.setZValue(0)
 
     def set_colour(self, colour) -> None:
-        """The line's fluid colour while running; None for the plain editing colour."""
-        self.colour = colour or WIRE
-        self.update()
+        """The colour of the medium in the line; None for a line nothing fills yet."""
+        colour = colour or WIRE
+        if colour != self.colour:
+            self.colour = colour
+            self.update()
 
     def set_points(self, points: list[routing.Point]) -> None:
         self.points = points
@@ -243,6 +262,7 @@ class Scene(QGraphicsScene):
         self.wires: list[WireItem] = []
         self.labels: dict[str, tuple] = {}
         self.running = False
+        self.media: dict = {}  # port -> (fluid, is_gas), guessed while editing
         self.flow_phase = 0.0
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsLineItem | None = None
@@ -263,6 +283,18 @@ class Scene(QGraphicsScene):
         for a, b in system.connections:
             self._add_wire(a, b)
         self.update_wires()
+        self.refresh_media()
+
+    def refresh_media(self) -> None:
+        """Colour wires and tanks by the media the parts set (editing only; a run colours from the solver)."""
+        if self.running:
+            return
+        self.media = M.edit_media(self.system)
+        for w in self.wires:
+            m = self.media.get(w.a) or self.media.get(w.b)
+            w.set_colour(symbols.fluid_colour(*m) if m else None)
+        for it in self.items_by_id.values():
+            it.update()
 
     def _add_item(self, comp: Component) -> ComponentItem:
         item = ComponentItem(comp)
@@ -366,6 +398,7 @@ class Scene(QGraphicsScene):
         item = self._add_item(comp)
         self.clearSelection()
         item.setSelected(True)
+        self.refresh_media()
         self.changed_system.emit()
         return comp
 
@@ -386,6 +419,7 @@ class Scene(QGraphicsScene):
                     self.removeItem(lab)
                 self.removeItem(it)
                 del self.items_by_id[cid]
+        self.refresh_media()
         self.changed_system.emit()
 
     def _remove_wire(self, w: WireItem) -> None:
@@ -490,12 +524,14 @@ class Scene(QGraphicsScene):
         self.system.connect(a, b)
         w = self._add_wire(a, b)
         self.route_wire(w)
+        self.refresh_media()
         self.changed_system.emit()
 
     # ------------------------------------------------------------------ run mode
     def set_running(self, running: bool) -> None:
         self.running = running
         self.refresh_ports()
+        self.refresh_media()
         for it in self.items_by_id.values():
             it.setFlag(QGraphicsItem.ItemIsMovable, not running)
             if not running:

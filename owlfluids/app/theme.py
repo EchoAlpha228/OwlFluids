@@ -71,7 +71,7 @@ FLUID_COLOURS = {
     "water": "#5E9C9A",  # teal
 }
 FLUID_UNKNOWN = GRAY_400
-GAS_ALPHA = 0.45
+GAS_ALPHA = 0.6
 
 # plot traces, in order; no red, amber or olive, which carry alarm meanings
 TRACES = [CYAN, GREEN, BLUE, MAGENTA, GRAY_050, DARK_CYAN, DARK_GREEN, DARK_BLUE, DARK_MAGENTA, GRAY_300]

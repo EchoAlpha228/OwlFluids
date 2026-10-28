@@ -12,6 +12,7 @@ from __future__ import annotations
 STUB = 15.0  # how far a wire runs straight out of a port before it may turn
 BEND_COST = 25.0
 HIT_COST = 2000.0
+REVERSAL_COST = 200.0  # doubling straight back on itself
 
 Point = tuple[float, float]
 Rect = tuple[float, float, float, float]  # left, top, right, bottom
@@ -39,17 +40,22 @@ def simplify(points: list[Point]) -> list[Point]:
             continue
         if len(out) >= 2:
             a, b = out[-2], out[-1]
-            if (abs(a[0] - b[0]) < 1e-6 and abs(b[0] - p[0]) < 1e-6) or (
-                    abs(a[1] - b[1]) < 1e-6 and abs(b[1] - p[1]) < 1e-6):
+            same_x = abs(a[0] - b[0]) < 1e-6 and abs(b[0] - p[0]) < 1e-6
+            same_y = abs(a[1] - b[1]) < 1e-6 and abs(b[1] - p[1]) < 1e-6
+            # merge a straight run, but keep a doubling back so it is seen (and costed) as one
+            if (same_x and (b[1] - a[1]) * (p[1] - b[1]) >= 0) or (same_y and (b[0] - a[0]) * (p[0] - b[0]) >= 0):
                 out[-1] = p
                 continue
         out.append(p)
     return out
 
 
+CLEARANCE = 6.0  # wires keep this far from parts they pass
+
+
 def _hits(a: Point, b: Point, r: Rect) -> bool:
-    """Does the axis-aligned segment a-b pass through the inside of r?"""
-    left, top, right, bottom = r
+    """Does the axis-aligned segment a-b pass through r, or closer to it than CLEARANCE?"""
+    left, top, right, bottom = r[0] - CLEARANCE, r[1] - CLEARANCE, r[2] + CLEARANCE, r[3] + CLEARANCE
     if abs(a[1] - b[1]) < 1e-6:  # horizontal
         y = a[1]
         x0, x1 = sorted((a[0], b[0]))
@@ -59,11 +65,24 @@ def _hits(a: Point, b: Point, r: Rect) -> bool:
     return left < x < right and y0 < bottom and y1 > top
 
 
+def _inside(p: Point, r: Rect) -> bool:
+    return r[0] - CLEARANCE <= p[0] <= r[2] + CLEARANCE and r[1] - CLEARANCE <= p[1] <= r[3] + CLEARANCE
+
+
 def cost(points: list[Point], obstacles: list[Rect]) -> float:
     length = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in _segments(points))
     bends = max(len(points) - 2, 0)
-    hits = sum(1 for a, b in _segments(points) for r in obstacles if _hits(a, b, r))
-    return length + BEND_COST * bends + HIT_COST * hits
+    reversals = sum(1 for (a, b), (_, c) in zip(_segments(points), list(_segments(points))[1:], strict=False)
+                    if (b[0] - a[0]) * (c[0] - b[0]) < 0 or (b[1] - a[1]) * (c[1] - b[1]) < 0)
+    last = len(points) - 2
+    hits = 0
+    for i, (a, b) in enumerate(_segments(points)):
+        for r in obstacles:
+            # a wire's first and last runs leave the part they connect to; that part doesn't count
+            if (i == 0 and _inside(points[0], r)) or (i == last and _inside(points[-1], r)):
+                continue
+            hits += _hits(a, b, r)
+    return length + BEND_COST * bends + REVERSAL_COST * reversals + HIT_COST * hits
 
 
 def auto_route(pa: Point, da: Point, pb: Point, db: Point, obstacles: list[Rect]) -> list[Point]:
