@@ -1,0 +1,20 @@
+name: Pneumatic valves
+components:
+- {id: C, type: air_pump, flow: 2 g/s, start_pressure: 90 psig, stop_pressure: 110 psig, at: [0, -150]}
+- {id: A, type: pneumatic_supply, volume: 2 L, fluid: air, pressure: 105 psig, temperature: 20 C, at: [150, -150]}
+- {id: K, type: tank, fluid: nitrogen, volume: 49 L, pressure: 2000 psi, temperature: 20 C, at: [0, 0]}
+- {id: V-FILL, type: valve, cv: 0.3, at: [150, 0]}
+- {id: TK, type: volume, volume: 20 L, fluid: nitrogen, pressure: 1 atm, temperature: 20 C, at: [300, 0]}
+- {id: V-VENT, type: valve, cv: 0.3, normally: open, at: [450, 0]}
+- {id: ATM, type: boundary, fluid: nitrogen, at: [600, 0]}
+connections:
+- [C.out, A.a]
+- [K.port, V-FILL.in]
+- [V-FILL.out, TK.a]
+- [TK.b, V-VENT.in]
+- [V-VENT.out, ATM.port]
+sensors:
+- {id: PT-A, type: pressure, at: A.a, units: psig}
+- {id: PT-TK, type: pressure, at: TK.a, units: psi}
+- {id: ZS-FILL, type: valve_position, at: V-FILL}
+- {id: ZS-VENT, type: valve_position, at: V-VENT}

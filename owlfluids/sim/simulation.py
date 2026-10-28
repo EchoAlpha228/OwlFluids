@@ -226,6 +226,15 @@ class Simulation:
         p = min(max(float(position), 0.0), 1.0)
         self.LV[k, L.V_CMD] = p
         self.LV[k, L.V_POS] = p
+        a = int(self.LV[k, L.V_AIR])
+        if a >= 0:
+            # the measured valve has its actuator charged or vented to match, so it stays there
+            no = self.LV[a, L.V_NO] > 0.5
+            f = 1.0 - p if no else p
+            p_lo = units.ATM + self.net.LF[a, L.LF_P1]
+            p_hi = units.ATM + self.net.LF[a, L.LF_P2]
+            self.LV[a, L.V_PACT] = units.ATM if f <= 0.0 else p_lo + f * (p_hi - p_lo)
+            self.LV[k, L.V_TGT] = p
 
     def open(self, *valves: str) -> None:
         for v in valves:
@@ -240,6 +249,19 @@ class Simulation:
 
     def valve_position(self, valve: str) -> float:
         return float(self.LV[self._valve(valve), L.V_POS])
+
+    def actuator_pressure(self, valve: str) -> float | None:
+        """Absolute pressure (Pa) in a pneumatic valve's actuator; None for a valve without an air supply."""
+        k = self.net.actuators.get(valve)
+        if k is None:
+            self._valve(valve)
+            return None
+        return float(self.LV[k, L.V_PACT])
+
+    def air_draw(self, valve: str) -> float:
+        """Mass flow (kg/s) a pneumatic valve's actuator is drawing from its supply now."""
+        k = self.net.actuators.get(valve)
+        return 0.0 if k is None else float(self.LV[k, L.V_Q])
 
     def pumps(self) -> list[str]:
         return list(self.net.pumps)

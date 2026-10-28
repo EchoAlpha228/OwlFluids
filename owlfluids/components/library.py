@@ -266,6 +266,28 @@ class Volume(ComponentType):
             b.bind_port(comp, port, n, DRAW_MIX)
 
 
+class PneumaticSupply(Volume):
+    type_name = "pneumatic_supply"
+    label = "Pneumatic supply"
+    params = (
+        Param("volume", "volume", "2 L", "internal volume of the header, lines and any receiver"),
+        Param("fluid", "text", None, "gas (default: taken from what feeds it, such as a compressor or bottle)"),
+        Param("pressure", "pressure", None, "initial pressure (default: system initial pressure)"),
+        Param("temperature", "temperature", None, "initial temperature"),
+    ) + HEAT_PARAMS
+    help = ("The air (or nitrogen) header that pneumatic valves run on, the 'A' on a P&ID. Feed it from a "
+            "compressor, or a bottle through a regulator. Every pneumatic valve draws on it as its actuator "
+            "fills, so a weak supply strokes valves slowly or not at all.")
+
+    @classmethod
+    def build(cls, b, comp):
+        n = b.new_node(comp, "", fluid=cls.param(comp, "fluid"), volume=cls.require(comp, "volume"),
+                       init=("pt", cls.param(comp, "pressure"), cls.param(comp, "temperature")),
+                       heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+        for port in cls.ports:
+            b.bind_port(comp, port, n, DRAW_MIX)
+
+
 # ---------------------------------------------------------------- lines
 
 
@@ -334,16 +356,51 @@ class Valve(ComponentType):
         Param("open_time", "time", "50 ms", "time to travel fully open"),
         Param("close_time", "time", None, "time to travel fully closed (default: open_time)"),
         Param("normally", "choice", "closed", "state at the start of a run", ("closed", "open")),
+        Param("actuator", "choice", "pneumatic",
+              "pneumatic (spring return, draws on an air supply) or solenoid", ("pneumatic", "solenoid")),
+        Param("air_supply", "text", None, "pneumatic supply it runs on (default: the only one in the system)"),
+        Param("actuator_volume", "volume", "100 cc", "air the actuator takes per stroke, at its own pressure"),
+        Param("stroke_pressure", "pressure", "30 psig", "actuator pressure where the valve starts to move"),
+        Param("full_stroke_pressure", "pressure", "60 psig", "actuator pressure where it has fully stroked"),
+        Param("pilot_cv", None, 0.1, "Cv of the pilot solenoid that fills and vents the actuator"),
     )
-    help = "Solenoid or actuated ball valve. Its flow area ramps over the open and close times."
+    help = ("Pneumatic or solenoid on/off valve. Its flow area ramps over the open and close times. A pneumatic "
+            "valve draws on its air supply while held away from its normal state (a normally closed valve while "
+            "open, a normally open one while closed) and its spring returns it when the air is vented; with too "
+            "little supply pressure it strokes partway or not at all. Without a pneumatic supply in the system "
+            "it moves on command alone, like a solenoid valve.")
 
     @classmethod
     def build(cls, b, comp):
         t_open = max(cls.param(comp, "open_time"), 1e-6)
         t_close = max(cls.param(comp, "close_time") or t_open, 1e-6)
-        start = 1.0 if cls.param(comp, "normally") == "open" else 0.0
+        normally_open = cls.param(comp, "normally") == "open"
+        start = 1.0 if normally_open else 0.0
         b.add_orifice(comp, "", "in", "out", cda=_flow_area(cls, comp), ctrl=CTRL_VALVE,
                       valve=(start, 1.0 / t_open, 1.0 / t_close))
+        actuator = comp.params.get("actuator", "solenoid" if comp.type == "solenoid" else "pneumatic")
+        if actuator not in ("pneumatic", "solenoid"):
+            raise ValueError(f"{comp.id}.actuator must be pneumatic or solenoid")
+        if actuator == "solenoid":
+            return
+        supply = cls.param(comp, "air_supply")
+        supplies = [c.id for c in b.system.components if get_type(c.type) is PneumaticSupply]
+        if supply is None:
+            if not supplies:
+                return  # nothing to draw on: it moves on command alone
+            if len(supplies) > 1:
+                raise ValueError(f"set air_supply to one of {', '.join(supplies)}")
+            supply = supplies[0]
+        elif supply not in supplies:
+            raise ValueError(f"air_supply {supply!r} is not a pneumatic supply"
+                             + (f"; pneumatic supplies: {', '.join(supplies)}" if supplies else ""))
+        p_start = cls.param(comp, "stroke_pressure") - units.ATM
+        p_full = cls.param(comp, "full_stroke_pressure") - units.ATM
+        if p_full <= p_start:
+            raise ValueError("full_stroke_pressure must be above stroke_pressure")
+        b.add_actuator(comp, b.comp_nodes[supply][0], cls.require(comp, "actuator_volume"), p_start, p_full,
+                       float(cls.param(comp, "pilot_cv")) * CV_TO_CDA, normally_open,
+                       assumed="actuator" not in comp.params)
 
 
 class ThrottleValve(Valve):
@@ -446,13 +503,13 @@ class AirPump(ComponentType):
 
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
-    for c in (Tank, PressurizedTank, Boundary, Volume, Tee, Fitting, Orifice, Valve, ThrottleValve,
+    for c in (Tank, PressurizedTank, Boundary, Volume, PneumaticSupply, Tee, Fitting, Orifice, Valve, ThrottleValve,
               CheckValve, ReliefValve, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",
            "solenoid": "valve", "ball_valve": "valve", "needle_valve": "throttle_valve",
            "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
-           "pump": "air_pump"}
+           "pump": "air_pump", "pneumatic": "pneumatic_supply", "air_supply": "pneumatic_supply"}
 
 
 def get_type(name: str) -> type[ComponentType]:
