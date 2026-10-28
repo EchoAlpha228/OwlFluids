@@ -313,11 +313,11 @@ class ValveRow(QWidget):
         h.addWidget(self.bar)
 
     def set_values(self, cmd: float, pos: float) -> None:
-        self.button.blockSignals(True)
-        self.button.setChecked(cmd > 0.5)
-        self.button.blockSignals(False)
         # open or closed, nothing between: a hand valve cracked off its seat is open
         is_open = cmd > 0.001 if self.manual else cmd > 0.5
+        self.button.blockSignals(True)
+        self.button.setChecked(is_open)  # the button agrees with the colour
+        self.button.blockSignals(False)
         state = "open" if is_open else "closed"
         if state != self._state:  # restyling is costly; only when the command flips
             self._state = state
