@@ -105,7 +105,8 @@ In the app: drag parts from **Parts**, drag from one port (small circle) to anot
 to connect, **R** rotates, **Delete** removes. Select a part to edit its
 parameters; quantities take units (`3000 psi`, `-196 C`, `0.5 in`, `49 L`).
 Press **Run**; valves appear in the **Valves** tab and can also be clicked on the
-schematic. **Record** logs to CSV/HDF5, and **File > Overlay a recorded log** draws
+schematic. Manual valves there also have a slider to throttle them to any opening, and
+each regulator has a setpoint box (psig) to turn its knob mid-run. **Record** logs to CSV/HDF5, and **File > Overlay a recorded log** draws
 a log (for example real test data with matching column names) over the plots.
 
 ### System files
@@ -127,7 +128,9 @@ Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally 
 `wall_mass` shell that stores heat),
 `pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`
 (also takes `wall_mass`, for example to chill down a cryogenic line), `tee`, `fitting`,
-`orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`,
+`orifice`, `valve`, `manual_valve` (a hand valve the operator opens, closes or throttles from the
+valve panel; Synnax never commands it, and old `throttle_valve` parts load as one),
+`check_valve`, `relief_valve`, `regulator` (its setpoint can be turned from the valve panel during a run),
 `air_pump` (a compressor with a pressure switch: `flow`, `start_pressure`,
 `stop_pressure`; a `valve_position` sensor on it reads 1 while it runs),
 `pneumatic_supply` (the "A" air or GN2 header pneumatic valves run on; feed it from an
@@ -238,6 +241,10 @@ channel. Its `mode` picks the test:
 |---|---|---|
 | `hootl` (default) | the command channels your Arc sequences and operators write | faked by the sim |
 | `hitl` | the state channels the real hardware reports | left to the hardware |
+
+Manual valves and regulators get no channels in either mode: like hand valves and
+regulator knobs on the stand, only the operator works them, from the OwlFluids window.
+Listing a manual valve under `valves:` is an error.
 
 `valve_state` says what a state channel means. `command` (the default) is a Synnax
 digital output task's state, which echoes the command: HOOTL fakes it from the

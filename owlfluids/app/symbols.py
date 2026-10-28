@@ -25,7 +25,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "fitting": ((40, 30), {"in": (-20, 0), "out": (20, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
     "valve": ((56, 40), {"in": (-28, 0), "out": (28, 0)}),
-    "throttle_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
+    "manual_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
     "check_valve": ((50, 34), {"in": (-25, 0), "out": (25, 0)}),
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
     "regulator": ((56, 50), {"in": (-28, 0), "out": (28, 0)}),
@@ -103,15 +103,21 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.setPen(QPen(LINE, 3))
         p.drawLine(QPointF(0, -h / 2 + 2), QPointF(0, -4))
         p.drawLine(QPointF(0, 4), QPointF(0, h / 2 - 2))
-    elif type_name in ("valve", "throttle_valve"):
-        _bowtie(p, w, h if type_name == "valve" else h - 8, valve_colour(state.get("position")))
+    elif type_name == "valve":
+        _bowtie(p, w, h, valve_colour(state.get("position")))
         p.setPen(QPen(LINE, 1.6))
-        top = -h / 2 + (2 if type_name == "valve" else 0)
+        top = -h / 2 + 2
         p.drawLine(QPointF(0, 0), QPointF(0, top + 4))
         p.setBrush(QBrush(METAL))
         p.drawRect(QRectF(-8, top, 16, 6))
-        if type_name == "throttle_valve":
-            p.drawLine(QPointF(-14, 12), QPointF(14, -10))
+    elif type_name == "manual_valve":
+        # hand valve: a stem with a T handle, no actuator
+        _bowtie(p, w, h - 8, valve_colour(state.get("position")))
+        p.setPen(QPen(LINE, 1.6))
+        top = -h / 2 + 2
+        p.drawLine(QPointF(0, 0), QPointF(0, top))
+        p.setPen(QPen(LINE, 3))
+        p.drawLine(QPointF(-10, top), QPointF(10, top))
     elif type_name == "check_valve":
         hw, hh = w / 2 - 6, h / 2 - 4
         p.setBrush(QBrush(valve_colour(state.get("position"))))

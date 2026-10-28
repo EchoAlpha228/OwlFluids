@@ -56,6 +56,7 @@ class ComponentType:
     ports: tuple[str, ...] = ()
     params: tuple[Param, ...] = ()
     is_valve = False  # appears in the valve control panel
+    automated = True  # a valve that automation (Synnax) may command; manual valves are the window's alone
     merges_ports = False  # all ports are the same point (tees, crosses)
 
     @classmethod
@@ -403,15 +404,20 @@ class Valve(ComponentType):
                        assumed="actuator" not in comp.params)
 
 
-class ThrottleValve(Valve):
-    type_name = "throttle_valve"
-    label = "Throttle / needle valve"
+class ManualValve(ComponentType):
+    type_name = "manual_valve"
+    label = "Manual valve"
+    category = "Flow control"
+    ports = ("in", "out")
+    is_valve = True
+    automated = False
     params = AREA_PARAMS + (
-        Param("open_time", "time", "2 s", "time to stroke from closed to fully open"),
-        Param("close_time", "time", None, "time to stroke fully closed (default: open_time)"),
-        Param("position", None, 0.0, "initial position 0-1"),
+        Param("open_time", "time", "1 s", "time for the operator to turn it from closed to fully open"),
+        Param("close_time", "time", None, "time to turn it fully closed (default: open_time)"),
+        Param("position", None, 0.0, "initial position 0 (closed) to 1 (open)"),
     )
-    help = "Valve commanded to any position from 0 (closed) to 1 (open)."
+    help = ("Hand valve. Only the operator works it, from the valve panel: open, close or set any position "
+            "between. Synnax automation never sees or commands it.")
 
     @classmethod
     def build(cls, b, comp):
@@ -466,7 +472,8 @@ class Regulator(ComponentType):
         Param("setpoint", "pressure", None, "outlet pressure (absolute) where it closes"),
         Param("droop", "pressure", "20 psi", "outlet pressure drop below setpoint that opens it fully"),
     )
-    help = "Pressure-reducing regulator: throttles to hold its outlet near the setpoint."
+    help = ("Pressure-reducing regulator: throttles to hold its outlet near the setpoint. The operator can turn "
+            "the setpoint during a run from the valve panel; automation cannot.")
 
     @classmethod
     def build(cls, b, comp):
@@ -503,11 +510,12 @@ class AirPump(ComponentType):
 
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
-    for c in (Tank, PressurizedTank, Boundary, Volume, PneumaticSupply, Tee, Fitting, Orifice, Valve, ThrottleValve,
+    for c in (Tank, PressurizedTank, Boundary, Volume, PneumaticSupply, Tee, Fitting, Orifice, Valve, ManualValve,
               CheckValve, ReliefValve, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",
-           "solenoid": "valve", "ball_valve": "valve", "needle_valve": "throttle_valve",
+           "solenoid": "valve", "ball_valve": "valve", "needle_valve": "manual_valve",
+           "hand_valve": "manual_valve",
            "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
            "pump": "air_pump", "pneumatic": "pneumatic_supply", "air_supply": "pneumatic_supply"}
 

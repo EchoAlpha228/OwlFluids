@@ -37,6 +37,8 @@ DEFAULT_SETTINGS = {
 # Drawing-only line types from before lines were removed. A file that still has them
 # loads with each one folded into a direct connection between the ports it joined.
 PIPE_TYPES = ("pipe", "tubing", "line")
+# Throttle valves from before manual valves replaced them; they load as manual valves.
+THROTTLE_TYPES = ("throttle_valve", "needle_valve")
 
 
 @dataclass
@@ -150,7 +152,20 @@ class System:
                                   float(s.pop("rate", 0) or 0), str(s.pop("units", "") or "")))
         system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings)
         system._fold_pipes()
+        system._throttles_to_manual()
         return system
+
+    def _throttles_to_manual(self) -> None:
+        """Turn old throttle valves into manual valves, keeping their 2 s default stroke."""
+        moved = []
+        for c in self.components:
+            if c.type in THROTTLE_TYPES:
+                c.type = "manual_valve"
+                c.params.setdefault("open_time", "2 s")
+                moved.append(c.id)
+        if moved:
+            self.notes.append(f"throttle valves are now manual valves, worked from the valve panel and never by "
+                              f"Synnax: {', '.join(moved)} (save the file to keep it that way)")
 
     def _fold_pipes(self) -> None:
         """Replace each old drawing-only pipe with direct connections between the ports it joined."""
