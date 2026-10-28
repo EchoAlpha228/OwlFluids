@@ -30,7 +30,7 @@ from ..io.logger import open_logger, read_log
 from ..io.system import System
 from ..sim.realtime import Runner
 from ..sim.simulation import Simulation
-from . import symbols
+from . import prefs, symbols
 from . import theme as T
 from .panels import Palette, Properties, ValvePanel
 from .plots import FLOW_ZERO, PlotPanel
@@ -97,6 +97,11 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         g = screen.availableGeometry() if screen else None
         self.resize(min(1400, int(g.width() * 0.9)) if g else 1400, min(900, int(g.height() * 0.9)) if g else 900)
+        st = prefs.settings()  # the size and dock layout from last time, if any
+        if st.value("geometry") is not None:
+            self.restoreGeometry(st.value("geometry"))
+        if st.value("window_state") is not None:
+            self.restoreState(st.value("window_state"))
         self.new_system()
 
     def _dock(self, title, widget, area) -> QDockWidget:
@@ -136,6 +141,8 @@ class MainWindow(QMainWindow):
         act("Open…", self.open_dialog, QKeySequence.Open, m_file, True)
         act("Save", self.save, QKeySequence.Save, m_file, True)
         act("Save as…", self.save_as, QKeySequence.SaveAs, m_file)
+        self.m_recent = m_file.addMenu("Recent")
+        self.m_recent.aboutToShow.connect(self._fill_recent)
         m_ex = m_file.addMenu("Examples")
         for name in EXAMPLES:
             act(name, lambda _=False, n=name: self.load_example(n), menu=m_ex)
@@ -249,6 +256,17 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open", str(e))
             return
         self._set_system(sysm, Path(fn))
+        prefs.add_recent(fn)
+
+    def _fill_recent(self) -> None:
+        self.m_recent.clear()
+        files = prefs.recent()
+        for f in files:
+            a = self.m_recent.addAction(Path(f).name)
+            a.setToolTip(f)
+            a.triggered.connect(lambda _c=False, f=f: self._confirm_discard() and self.open_file(f))
+        if not files:
+            self.m_recent.addAction("No recent systems").setEnabled(False)
 
     def _set_system(self, sysm: System, path: Path | None) -> None:
         self.stop()
@@ -283,13 +301,14 @@ class MainWindow(QMainWindow):
         if self.scene.system.name == "untitled":
             self.scene.system.name = self.path.stem
         if self.save():
+            prefs.add_recent(self.path)
             return True
         self.path, self.scene.system.name = old_path, old_name  # Ctrl+S must not retry the bad path
         return False
 
     def _start_dir(self) -> str:
-        """Where file dialogs open: next to the current system file."""
-        return str(self.path.parent) if self.path else ""
+        """Where file dialogs open: next to the current system file, else the last folder used."""
+        return str(self.path.parent) if self.path else prefs.last_dir()
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:
@@ -303,6 +322,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         if self._confirm_discard():
             self.stop()
+            st = prefs.settings()
+            st.setValue("geometry", self.saveGeometry())
+            st.setValue("window_state", self.saveState())
             e.accept()
         else:
             e.ignore()

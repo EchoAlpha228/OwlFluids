@@ -114,3 +114,21 @@ def test_quiet_update_notice_does_not_interrupt_a_run(app, monkeypatch):
     w.runner = None
     w.dirty = False
     w.close()
+
+
+def test_recent_files_and_last_folder(tmp_path):
+    from owlfluids.app import prefs
+
+    files = []
+    for i in range(prefs.RECENT_MAX + 2):
+        f = tmp_path / f"s{i}.yaml"
+        f.write_text("name: s\n")
+        files.append(f)
+        prefs.add_recent(f)
+    prefs.add_recent(files[3])  # opening one again moves it to the top, once
+    recent = prefs.recent()
+    assert recent[0] == str(files[3].resolve())
+    assert len(recent) == prefs.RECENT_MAX and len(set(recent)) == len(recent)
+    files[3].unlink()  # a deleted file drops out of the list
+    assert str(files[3].resolve()) not in prefs.recent()
+    assert prefs.last_dir() == str(tmp_path.resolve())
