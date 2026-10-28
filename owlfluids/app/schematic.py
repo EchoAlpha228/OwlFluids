@@ -189,7 +189,7 @@ class WireItem(QGraphicsPathItem):
         self._shape = QPainterPath()
         self._drag = None
         self.flow = 0  # +1 fluid moving from a to b, -1 from b to a, 0 still
-        self.setPen(QPen(WIRE, 2))
+        self.setPen(QPen(WIRE, 3))  # only sizes the bounding rect (paint picks the real pen)
         self.setFlags(QGraphicsItem.ItemIsSelectable)
         self.setZValue(0)
 
@@ -250,8 +250,12 @@ class WireItem(QGraphicsPathItem):
             sc.set_route(self, None)
 
     def paint(self, p, option, widget=None):
-        self.setPen(QPen(WIRE_SELECTED if self.isSelected() else self.colour, 3 if self.isSelected() else 2))
-        super().paint(p, option, widget)
+        # drawn here rather than by QGraphicsPathItem: no dashed selection box (Cyan marks it), and
+        # no setPen, which would schedule another repaint every frame
+        selected = self.isSelected()
+        p.setPen(QPen(WIRE_SELECTED if selected else self.colour, 3 if selected else 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(self.path())
         if self.flow:  # white squares marching along the line in the direction of flow
             pen = QPen(FLOW_MARK, FLOW_SIZE, Qt.CustomDashLine, Qt.FlatCap)
             pen.setDashPattern(FLOW_DASHES)
