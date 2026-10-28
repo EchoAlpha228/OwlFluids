@@ -14,12 +14,15 @@ Synnax and applies them to the simulated valves. ``mode`` decides which:
 ``valve_state`` says what a state channel means on the stand:
 
 - ``command`` (default; a Synnax digital output task's state channel): it echoes
-  the command. HOOTL fakes it from the command (1/0, the command for throttles);
+  the command. HOOTL fakes it from the command (1/0);
   HITL commands the sim valve with it, and the sim models the stroke.
 - ``position``: it reports where the valve actually is (limit switches or position
   feedback). HOOTL fakes it like limit switches, 1 once fully open and 0 once
-  fully closed, holding its value mid-stroke (the position for throttles); HITL
+  fully closed, holding its value mid-stroke; HITL
   puts the sim valve at the reported position at once.
+
+Manual valves and regulators are the operator's: they are worked from the
+OwlFluids window only, so the driver never gives them channels.
 
 Sensor and state channels that already exist keep their own index channel (the
 driver stamps each index it writes), so the real stand's channels can be used.
@@ -176,9 +179,13 @@ class SynnaxConfig:
         for sid in sensors:
             sim.read(sid)  # unknown sensor -> KeyError now, not mid-run
         valves = {}
-        names = list(self.valves) or sim.valves()
+        names = list(self.valves) or sim.automated_valves()
+        manual = set(sim.manual_valves())
         for v in names:
             sim.valve_position(v)
+            if v in manual:
+                raise ValueError(f"{v} is a manual valve: only the operator works it, from the OwlFluids window, "
+                                 "so it can't have Synnax channels")
             spec = self.valves.get(v) or {}
             cmd = spec.get("cmd", f"{_channel_name(v)}_cmd")
             state = spec.get("state", f"{_channel_name(v)}_state")
@@ -338,10 +345,6 @@ class SynnaxDriver:
         self.units = {}
         for s in sim.system.sensors:
             self.units[s.id] = s.units or units.DEFAULT_UNITS.get(s.type, "")
-        from ..components import get_type
-
-        self.throttles = {v for v in self.valves
-                          if get_type(sim.system.component(v).type).type_name == "throttle_valve"}
         self.read_to_valve = {r: v for v, (r, _w) in self.valves.items()}
         self._held: dict[str, float] = {}  # faked limit-switch states
         self.state_out = {v: w for v, (_r, w) in self.valves.items() if w}
@@ -401,10 +404,8 @@ class SynnaxDriver:
     def _fake_state(self, valve: str, frame) -> float:
         if self.cfg.valve_state == "command":
             cmd = frame.commands[valve]
-            return cmd if valve in self.throttles else (1.0 if cmd >= 0.5 else 0.0)
+            return 1.0 if cmd >= 0.5 else 0.0
         pos = frame.valves[valve]
-        if valve in self.throttles:
-            return pos
         if pos >= LIMIT_OPEN:
             self._held[valve] = 1.0
         elif pos <= LIMIT_CLOSED:
@@ -437,13 +438,12 @@ class SynnaxDriver:
                 self.apply(v, value)
 
     def apply(self, valve: str, value: float) -> None:
-        """A valve channel changed: on/off valves open above the threshold, throttles follow the value.
+        """A valve channel changed: the valve opens above the threshold and closes below it.
 
         A HITL state channel that reports position moves the sim valve at once; anything
         else is a command, and the sim strokes the valve.
         """
-        throttle = valve in self.throttles
-        pos = min(max(value, 0.0), 1.0) if throttle else (1.0 if value > self.cfg.valve_threshold else 0.0)
+        pos = 1.0 if value > self.cfg.valve_threshold else 0.0
         if self.cfg.mode == "hitl" and self.cfg.valve_state == "position":
             self.runner.set_position(valve, pos)
         else:

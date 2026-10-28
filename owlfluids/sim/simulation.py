@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import units
+from ..components import get_type
 from ..core import kernel
 from ..core import layout as L
 from ..core.network import Network, build_network
@@ -127,6 +128,7 @@ class Simulation:
         self.x = net.x0.copy()
         self._init_scratch()
         self.LV = net.LV.copy()
+        self.LF = net.LF.copy()  # regulator setpoints change during a run
         self.NF = net.NF.copy()
         self.t = 0.0
         self.steps = 0
@@ -177,7 +179,7 @@ class Simulation:
 
     def _advance(self, n: int) -> None:
         net = self.net
-        kernel.advance(self.x, n, self.dt, net.NI, self.NF, net.LI, net.LF, self.LV, self.fl, self.W,
+        kernel.advance(self.x, n, self.dt, net.NI, self.NF, net.LI, self.LF, self.LV, self.fl, self.W,
                        self.nout, self.lout, self.FN, self.FV, self.NS, net.xscale, self.st, self.sc,
                        net.iperm, net.kl, net.ku, self.jvals, self.f0, self.ab, self.piv, self.bvec, self.xnew,
                        self.ctl, self.stats,
@@ -212,6 +214,32 @@ class Simulation:
     # ------------------------------------------------------------------ commands
     def valves(self) -> list[str]:
         return list(self.net.valves)
+
+    def automated_valves(self) -> list[str]:
+        """Valves automation may command (Synnax): every valve but the manual ones."""
+        return [v for v in self.net.valves if get_type(self.system.component(v).type).automated]
+
+    def manual_valves(self) -> list[str]:
+        """Hand valves, worked by the operator from the valve panel only."""
+        return [v for v in self.net.valves if not get_type(self.system.component(v).type).automated]
+
+    def regulators(self) -> list[str]:
+        return [c.id for c in self.system.components if get_type(c.type).type_name == "regulator"]
+
+    def setpoint(self, regulator: str) -> float:
+        """A regulator's outlet setpoint now, Pa absolute."""
+        return float(self.LF[self._regulator(regulator), L.LF_P1])
+
+    def set_setpoint(self, regulator: str, pressure) -> None:
+        """Turn a regulator's knob: its new outlet setpoint (absolute; text with units, or Pa)."""
+        k = self._regulator(regulator)
+        self.LF[k, L.LF_P1] = max(units.parse(pressure, "pressure"), 0.0)
+
+    def _regulator(self, regulator: str) -> int:
+        links = self.net.comp_links.get(regulator, [])
+        if not links or self.net.LI[links[0], L.L_CTRL] != L.CTRL_REGULATOR:
+            raise KeyError(f"no regulator {regulator!r}; regulators: {', '.join(self.regulators())}")
+        return links[0]
 
     def command(self, valve: str, position) -> None:
         """Command a valve: True/"open", False/"closed", or a position 0-1."""
