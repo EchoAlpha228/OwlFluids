@@ -312,11 +312,14 @@ class RegulatorRow(QWidget):
         self.box.setSuffix(" psig")
         self.box.setKeyboardTracking(False)  # one setpoint per edit, not one per keystroke
         self.box.valueChanged.connect(lambda v: panel.setpoint_changed.emit(name, units.parse(f"{v} psig")))
+        self._typing = False  # mid-edit: leave the box alone; once applied, show the sim's setpoint again
+        self.box.lineEdit().textEdited.connect(lambda _t: setattr(self, "_typing", True))
+        self.box.editingFinished.connect(lambda: setattr(self, "_typing", False))
         h.addWidget(self.box)
         h.addStretch(1)
 
     def set_value(self, setpoint: float) -> None:
-        if self.box.hasFocus():
+        if self._typing:
             return  # don't fight the operator's typing
         self.box.blockSignals(True)
         self.box.setValue(units.convert(setpoint, "psig"))

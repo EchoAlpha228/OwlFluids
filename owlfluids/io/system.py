@@ -38,7 +38,7 @@ DEFAULT_SETTINGS = {
 # loads with each one folded into a direct connection between the ports it joined.
 PIPE_TYPES = ("pipe", "tubing", "line")
 # Throttle valves from before manual valves replaced them; they load as manual valves.
-THROTTLE_TYPES = ("throttle_valve",)
+THROTTLE_TYPES = ("throttle_valve", "needle_valve")
 
 
 @dataclass

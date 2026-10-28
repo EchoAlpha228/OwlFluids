@@ -4,6 +4,7 @@ import os
 import pytest
 
 from owlfluids import units
+from owlfluids.components import get_type
 from owlfluids.drivers.synnax import SynnaxConfig
 from owlfluids.io.system import System
 from owlfluids.sim.realtime import Runner
@@ -66,8 +67,8 @@ def test_old_throttle_valves_load_as_manual_valves():
     assert tv.params["position"] == 0.3
     assert any("TV1" in n and "manual" in n for n in s.notes)
     assert s.to_dict()["components"][0]["type"] == "manual_valve"
-    from owlfluids.components import get_type
-    assert get_type("needle_valve").type_name == "manual_valve"
+    nv = s.component("NV1")
+    assert nv.type == "manual_valve" and nv.params["open_time"] == "2 s"  # an alias of throttle_valve before
     with pytest.raises(ValueError):
         get_type("throttle_valve")  # only files are migrated; the type itself is gone
 
@@ -128,4 +129,12 @@ def test_valve_panel_has_sliders_for_manual_valves_and_regulator_boxes():
     runner = Runner(sim, rate=0)
     panel.show_frame(runner.frame)
     assert panel.regulators["REG"].box.value() == pytest.approx(300.0)
+    box = panel.regulators["REG"]
+    box.box.lineEdit().textEdited.emit("31")  # typing: the frame doesn't overwrite it
+    runner.set_setpoint("REG", "100 psig")
+    panel.show_frame(runner.frame)
+    assert box.box.value() == pytest.approx(300.0)
+    box.box.editingFinished.emit()  # applied (still focused): the box follows the sim again, e.g. after a reset
+    panel.show_frame(runner.frame)
+    assert box.box.value() == pytest.approx(100.0)
     app.processEvents()
