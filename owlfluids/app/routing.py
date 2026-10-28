@@ -18,7 +18,7 @@ Point = tuple[float, float]
 Rect = tuple[float, float, float, float]  # left, top, right, bottom
 
 
-def _segments(points: list[Point]):
+def segments(points: list[Point]):
     return zip(points[:-1], points[1:], strict=True)
 
 
@@ -53,7 +53,7 @@ def simplify(points: list[Point]) -> list[Point]:
 CLEARANCE = 6.0  # wires keep this far from parts they pass
 
 
-def _hits(a: Point, b: Point, r: Rect) -> bool:
+def hits(a: Point, b: Point, r: Rect) -> bool:
     """Does the axis-aligned segment a-b pass through r, or closer to it than CLEARANCE?"""
     left, top, right, bottom = r[0] - CLEARANCE, r[1] - CLEARANCE, r[2] + CLEARANCE, r[3] + CLEARANCE
     if abs(a[1] - b[1]) < 1e-6:  # horizontal
@@ -70,19 +70,19 @@ def _inside(p: Point, r: Rect) -> bool:
 
 
 def cost(points: list[Point], obstacles: list[Rect]) -> float:
-    length = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in _segments(points))
+    length = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in segments(points))
     bends = max(len(points) - 2, 0)
-    reversals = sum(1 for (a, b), (_, c) in zip(_segments(points), list(_segments(points))[1:], strict=False)
+    reversals = sum(1 for (a, b), (_, c) in zip(segments(points), list(segments(points))[1:], strict=False)
                     if (b[0] - a[0]) * (c[0] - b[0]) < 0 or (b[1] - a[1]) * (c[1] - b[1]) < 0)
     last = len(points) - 2
-    hits = 0
-    for i, (a, b) in enumerate(_segments(points)):
+    n_hits = 0
+    for i, (a, b) in enumerate(segments(points)):
         for r in obstacles:
             # a wire's first and last runs leave the part they connect to; that part doesn't count
             if (i == 0 and _inside(points[0], r)) or (i == last and _inside(points[-1], r)):
                 continue
-            hits += _hits(a, b, r)
-    return length + BEND_COST * bends + REVERSAL_COST * reversals + HIT_COST * hits
+            n_hits += hits(a, b, r)
+    return length + BEND_COST * bends + REVERSAL_COST * reversals + HIT_COST * n_hits
 
 
 def auto_route(pa: Point, da: Point, pb: Point, db: Point, obstacles: list[Rect]) -> list[Point]:
@@ -105,7 +105,7 @@ def auto_route(pa: Point, da: Point, pb: Point, db: Point, obstacles: list[Rect]
     best, best_cost = None, float("inf")
     for mid in middles:
         pts = simplify([pa, sa, *mid, sb, pb])
-        if any(abs(a[0] - b[0]) > 1e-6 and abs(a[1] - b[1]) > 1e-6 for a, b in _segments(pts)):
+        if any(abs(a[0] - b[0]) > 1e-6 and abs(a[1] - b[1]) > 1e-6 for a, b in segments(pts)):
             continue  # not orthogonal
         c = cost(pts, obstacles)
         if c < best_cost:
@@ -153,7 +153,7 @@ def drag_segment(points: list[Point], index: int, to: Point) -> tuple[list[Point
 
 def segment_at(points: list[Point], at: Point, tolerance: float = 6.0) -> int | None:
     best, best_d = None, tolerance
-    for i, (a, b) in enumerate(_segments(points)):
+    for i, (a, b) in enumerate(segments(points)):
         x0, x1 = sorted((a[0], b[0]))
         y0, y1 = sorted((a[1], b[1]))
         dx = max(x0 - at[0], 0.0, at[0] - x1)

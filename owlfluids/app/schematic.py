@@ -32,7 +32,8 @@ WIRE = T.qc(T.GRAY_300)
 WIRE_SELECTED = T.qc(T.ACCENT)
 PORT = T.qc(T.GRAY_900)
 PORT_HOVER = T.qc(T.ACCENT)
-LABEL_DEPTH = 22.0  # id and value labels hang this far below a symbol
+LABEL_DEPTH = 28.0  # id and value labels take this much room above or below a symbol
+LABEL_WIDTH = 60.0  # ... or this much beside it
 FLOW_MARK = T.qc(T.WHITE)
 FLOW_SIZE = 2.5  # px, the side of each square
 FLOW_DASHES = [1.0, 5.0]  # square, gap; in multiples of FLOW_SIZE
@@ -75,6 +76,10 @@ class PortItem(QGraphicsEllipseItem):
         self.setBrush(QBrush(PORT))
 
 
+def _overlap(a: routing.Rect, b: routing.Rect) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
 class ComponentItem(QGraphicsObject):
     def __init__(self, comp: Component):
         super().__init__()
@@ -84,6 +89,7 @@ class ComponentItem(QGraphicsObject):
         self.ports = {name: PortItem(self, name, port_pos[name]) for name in self.ctype.ports if name in port_pos}
         self.state: dict = {}
         self.value_text = ""
+        self.label_side = "bottom"
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable
                       | QGraphicsItem.ItemSendsGeometryChanges)
         self.setRotation(comp.rotation)
@@ -105,7 +111,12 @@ class ComponentItem(QGraphicsObject):
         """The symbol's footprint in the scene and its labels below it, which wires route around."""
         w, h = self.size
         r = self.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
-        return (r.left(), r.top(), r.right(), r.bottom() + LABEL_DEPTH)
+        left, top, right, bottom = r.left(), r.top(), r.right(), r.bottom()
+        side = self.label_side
+        if side not in ("bottom", "right", "left", "top"):  # a corner label is out of the lines' way already
+            return (left, top, right, bottom)
+        return (left - (LABEL_WIDTH if side == "left" else 0), top - (LABEL_DEPTH if side == "top" else 0),
+                right + (LABEL_WIDTH if side == "right" else 0), bottom + (LABEL_DEPTH if side == "bottom" else 0))
 
     def boundingRect(self) -> QRectF:
         w, h = self.size
@@ -153,7 +164,7 @@ class ComponentItem(QGraphicsObject):
             sc = self.scene()
             if sc is not None:
                 sc.update_wires(self.comp.id)
-                sc.place_labels(self)
+                sc.settle_labels([self])
         if change == QGraphicsItem.ItemSelectedHasChanged:
             sc = self.scene()
             if sc is not None:
@@ -282,7 +293,9 @@ class Scene(QGraphicsScene):
             self._add_item(c)
         for a, b in system.connections:
             self._add_wire(a, b)
+        self.refresh_label_sides()
         self.update_wires()
+        self.settle_labels()
         self.refresh_media()
 
     def refresh_media(self) -> None:
@@ -313,13 +326,98 @@ class Scene(QGraphicsScene):
         self.place_labels(item)
         return item
 
+    SIDES = ("bottom", "right", "left", "top")
+    CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
+
+    def _label_spots(self, item: ComponentItem, side: str, nw: float, vw: float):
+        """Where the id and value labels go for ``side``: two top-left points."""
+        w, h = item.size
+        r = item.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
+        gap, line = 4.0, 12.0
+        cx, cy = r.center().x(), r.center().y()
+        if side == "bottom":
+            return (cx - nw / 2, r.bottom() + gap), (cx - vw / 2, r.bottom() + gap + line)
+        if side == "top":
+            return (cx - nw / 2, r.top() - gap - 2 * line), (cx - vw / 2, r.top() - gap - line)
+        if side == "right":
+            return (r.right() + gap + 2, cy - line), (r.right() + gap + 2, cy)
+        if side == "left":
+            return (r.left() - gap - 2 - nw, cy - line), (r.left() - gap - 2 - vw, cy)
+        # corners, for when lines leave every side: diagonally off the symbol, clear of them
+        y = r.bottom() + gap if side.startswith("bottom") else r.top() - gap - 2 * line
+        if side.endswith("right"):
+            return (r.right() + gap, y), (r.right() + gap, y + line)
+        return (r.left() - gap - nw, y), (r.left() - gap - vw, y + line)
+
     def place_labels(self, item: ComponentItem) -> None:
+        """Id and value labels on the part's label side (see refresh_label_sides)."""
         name, value = self.labels.get(item.comp.id, (None, None))
         if name is None:
             return
-        r = item.sceneBoundingRect()
-        name.setPos(r.center().x() - name.boundingRect().width() / 2, r.bottom() - 2)
-        value.setPos(r.center().x() - value.boundingRect().width() / 2, r.bottom() + 10)
+        npos, vpos = self._label_spots(item, item.label_side,
+                                       name.boundingRect().width(), value.boundingRect().width())
+        name.setPos(*npos)
+        value.setPos(*vpos)
+
+    def _port_sides(self, item: ComponentItem, connected: set) -> set:
+        """The sides of a part that lines come out of."""
+        c = item.scenePos()
+        used = set()
+        for pname, port in item.ports.items():
+            if f"{item.comp.id}.{pname}" in connected:
+                pt = port.scenePos()
+                dx, dy = routing.port_direction((c.x(), c.y()), (pt.x(), pt.y()))
+                used.add("right" if dx > 0 else "left" if dx < 0 else "bottom" if dy > 0 else "top")
+        return used
+
+    def refresh_label_sides(self, items=None) -> None:
+        """Put each part's labels on the first side (bottom, right, left, top) no line comes out of,
+        or off a corner when lines leave every side. Wires are routed around this side."""
+        connected = {ref for conn in self.system.connections for ref in conn}
+        for it in items if items is not None else self.items_by_id.values():
+            used = self._port_sides(it, connected)
+            it.label_side = next((sd for sd in self.SIDES if sd not in used), "bottom-right")
+            self.place_labels(it)
+
+    def settle_labels(self, items=None) -> None:
+        """After routing: move labels that a wire or another part runs through to the first clear spot,
+        trying the free sides, then the corners, then the sides lines come out of."""
+        connected = {ref for conn in self.system.connections for ref in conn}
+        segments = [seg for w in self.wires for seg in routing.segments(w.points)]
+        parts = {}
+        for cid, it in self.items_by_id.items():
+            w, h = it.size
+            r = it.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
+            parts[cid] = (r.left(), r.top(), r.right(), r.bottom())
+        taken = {cid: self._label_rect(it) for cid, it in self.items_by_id.items() if cid in self.labels}
+        for it in items if items is not None else self.items_by_id.values():
+            cid = it.comp.id
+            if cid not in self.labels:  # still being added
+                continue
+            used = self._port_sides(it, connected)
+            order = ([sd for sd in self.SIDES if sd not in used] + list(self.CORNERS)
+                     + [sd for sd in self.SIDES if sd in used])
+            best, best_hits = it.label_side, None
+            for side in [it.label_side, *order]:
+                r = self._label_rect(it, side)
+                hits = sum(routing.hits(a, b, r) for a, b in segments)
+                hits += sum(_overlap(r, q) for k, q in parts.items() if k != cid)
+                hits += sum(_overlap(r, q) for k, q in taken.items() if k != cid)
+                if best_hits is None or hits < best_hits:
+                    best, best_hits = side, hits
+                if hits == 0:
+                    break
+            it.label_side = best
+            taken[cid] = self._label_rect(it)
+            self.place_labels(it)
+
+    def _label_rect(self, item: ComponentItem, side: str | None = None) -> routing.Rect:
+        """The scene box both labels cover on ``side``, at least LABEL_WIDTH wide (values grow while running)."""
+        name, value = self.labels[item.comp.id]
+        nw = max(name.boundingRect().width(), 1.0)
+        vw = max(value.boundingRect().width(), LABEL_WIDTH)
+        (nx, ny), (vx, vy) = self._label_spots(item, side or item.label_side, nw, vw)
+        return (min(nx, vx), ny, max(nx + nw, vx + vw), vy + 11.0)
 
     def _add_wire(self, a: str, b: str) -> WireItem:
         w = WireItem(a, b)
@@ -419,6 +517,9 @@ class Scene(QGraphicsScene):
                     self.removeItem(lab)
                 self.removeItem(it)
                 del self.items_by_id[cid]
+        self.refresh_label_sides()
+        self.update_wires()
+        self.settle_labels()
         self.refresh_media()
         self.changed_system.emit()
 
@@ -439,8 +540,9 @@ class Scene(QGraphicsScene):
             if isinstance(it, ComponentItem):
                 it.comp.rotation = (it.comp.rotation + step) % 360
                 it.setRotation(it.comp.rotation)
+                self.refresh_label_sides([it])
                 self.update_wires(it.comp.id)
-                self.place_labels(it)
+        self.settle_labels()
         self.changed_system.emit()
 
     def rename(self, old: str, new: str) -> None:
@@ -523,7 +625,10 @@ class Scene(QGraphicsScene):
             return
         self.system.connect(a, b)
         w = self._add_wire(a, b)
+        self.refresh_label_sides([it for it in (self.items_by_id.get(a.split(".")[0]),
+                                                self.items_by_id.get(b.split(".")[0])) if it is not None])
         self.route_wire(w)
+        self.settle_labels()
         self.refresh_media()
         self.changed_system.emit()
 
