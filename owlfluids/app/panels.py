@@ -55,6 +55,15 @@ def _heading(text: str) -> QLabel:
     return h
 
 
+def _fluid_heading(fluid: str | None) -> QLabel:
+    """A section heading for one fluid's valves, led by its material colour swatch."""
+    h = _heading(fluid or "Other")
+    if fluid is not None:
+        h.setText(f'<span style="color: {T.FLUID_COLOURS.get(fluid, T.GRAY_300)}">&#9632;</span>&nbsp;{fluid.upper()}')
+    h.setContentsMargins(0, 6, 0, 0)
+    return h
+
+
 FLUID_PARAMS = ("fluid", "liquid", "pressurant")
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
                 "wall_temperature", "level", "purge_fraction")
@@ -368,7 +377,10 @@ class ValvePanel(QScrollArea):
         self.regulators: dict[str, RegulatorRow] = {}
         self.set_valves([], {})
 
-    def set_valves(self, names: list[str], manual: dict[str, bool], regulators: list[str] = ()) -> None:
+    def set_valves(self, names: list[str], manual: dict[str, bool], regulators: list[str] = (),
+                   fluids: dict[str, str | None] | None = None) -> None:
+        """One row per valve; with ``fluids`` (valve -> the fluid in its line) grouped under a heading per
+        fluid, once there is more than one."""
         body = QWidget()
         v = QVBoxLayout(body)
         v.setAlignment(Qt.AlignTop)
@@ -378,10 +390,18 @@ class ValvePanel(QScrollArea):
             hint = QLabel("Valves appear here while the simulation runs.")
             hint.setObjectName("hint")
             v.addWidget(hint)
+        fluids = fluids or {}
+        groups: dict[str | None, list[str]] = {}
         for n in names:
-            row = ValveRow(n, manual.get(n, False), self)
-            self.rows[n] = row
-            v.addWidget(row)
+            groups.setdefault(fluids.get(n), []).append(n)
+        order = sorted(f for f in groups if f is not None) + ([None] if None in groups else [])
+        for f in order:
+            if len(groups) > 1:
+                v.addWidget(_fluid_heading(f))
+            for n in groups[f]:
+                row = ValveRow(n, manual.get(n, False), self)
+                self.rows[n] = row
+                v.addWidget(row)
         if regulators:
             v.addWidget(_heading("Regulators"))
         for n in regulators:

@@ -424,7 +424,9 @@ class MainWindow(QMainWindow):
         self.runner = Runner(sim, rate=self.rate_box.currentData())
         self._warned = 0
         manual = {v: True for v in sim.manual_valves()}
-        self.valves.set_valves(sim.valves(), manual, sim.regulators())
+        media = self.scene.media  # the fluid each line carries, as traced for the line colours
+        fluids = {v: (media.get(f"{v}.in") or media.get(f"{v}.out") or (None,))[0] for v in sim.valves()}
+        self.valves.set_valves(sim.valves(), manual, sim.regulators(), fluids)
         self.plots.configure(sim.system, sim.valves())
         if not self.plot_dock.isVisible():
             self.plot_dock.show()
