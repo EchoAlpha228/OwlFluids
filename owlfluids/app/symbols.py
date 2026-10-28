@@ -32,7 +32,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),
-    "fitting": ((40, 10), {"in": (-20, 0), "out": (20, 0)}),
+    "fitting": ((24, 12), {"in": (-12, 0), "out": (12, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
     "valve": ((56, 40), {"in": (-28, 0), "out": (28, 0)}),
     "throttle_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
@@ -178,9 +178,13 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-5, -5, 10, 10))
     elif type_name == "fitting":
-        # a fitting (elbow, union...) is only a loss on the line: drawn as the line itself
+        # a fitting (elbow, union...): a small square on the line
         p.setPen(QPen(state.get("line_colour", T.qc(T.GRAY_300)), 2))
-        p.drawLine(QPointF(-w / 2, 0), QPointF(w / 2, 0))
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-5, 0))
+        p.drawLine(QPointF(5, 0), QPointF(w / 2, 0))
+        p.setPen(QPen(LINE, 1.4))
+        p.setBrush(QBrush(METAL))
+        p.drawRect(QRectF(-5, -5, 10, 10))
     elif type_name == "orifice":
         # restriction: two arcs bowing towards the flow path
         p.setBrush(Qt.NoBrush)
