@@ -35,7 +35,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "fitting": ((24, 12), {"in": (-12, 0), "out": (12, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
     "valve": ((56, 40), {"in": (-28, 0), "out": (28, 0)}),
-    "throttle_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
+    "manual_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
     "check_valve": ((50, 34), {"in": (-25, 0), "out": (25, 0)}),
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
     "regulator": ((40, 50), {"in": (-20, 19), "out": (20, 19)}),  # ends of the line it stands on
@@ -201,12 +201,14 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
             _coil(p, -10)
         else:  # pneumatic, normally open or closed: square actuator with the A
             _actuator(p, h, rot)
-    elif type_name == "throttle_valve":
-        # throttle: pneumatic actuator, arrow across the body for a variable opening
+    elif type_name == "manual_valve":
+        # hand valve: a stem with a T handle, no actuator
         _body(p, w, state)
-        _actuator(p, h, rot)
-        p.drawLine(QPointF(-14, 11), QPointF(12, -9))
-        _arrow_head(p, QPointF(15, -11), QPointF(1.3, -1), 5)
+        p.setPen(QPen(LINE, 1.4))
+        top = -h / 2 + 4
+        p.drawLine(QPointF(0, 0), QPointF(0, top))
+        p.setPen(QPen(LINE, 3))
+        p.drawLine(QPointF(-10, top), QPointF(10, top))
     elif type_name == "check_valve":
         # check valve: body with a bar across the outlet side (the seat) and a flow arrow above
         _body(p, w, state)

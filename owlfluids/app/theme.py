@@ -142,8 +142,9 @@ QTreeWidget, QListWidget {{ background: {PANEL}; border: none; outline: none; }}
 QTreeWidget::item, QListWidget::item {{ padding: 3px 2px; }}
 QTreeWidget::item:hover, QListWidget::item:hover {{ background: {GRAY_700}; }}
 QTreeWidget::item:selected, QListWidget::item:selected {{ background: {SELECTION}; }}
-QLineEdit, QComboBox {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 3px; padding: 4px 6px; }}
-QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT}; }}
+QLineEdit, QComboBox, QAbstractSpinBox {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 3px;
+                                         padding: 4px 6px; }}
+QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus {{ border-color: {ACCENT}; }}
 QLineEdit:read-only {{ color: {TEXT_DIM}; border-color: {GRAY_700}; }}
 QLineEdit[error="true"] {{ background: {DARK_RED}; border-color: {RED}; color: {WHITE}; }}
 QComboBox::drop-down {{ border: none; width: 18px; }}

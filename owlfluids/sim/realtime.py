@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .. import units
 from ..core import layout as L
 from .simulation import Simulation
 
@@ -41,6 +42,7 @@ class Frame:
     sensors: dict[str, float]  # SI units
     valves: dict[str, float]  # actual positions 0-1
     commands: dict[str, float]  # commanded positions 0-1
+    setpoints: dict[str, float] = field(default_factory=dict)  # regulator setpoints, Pa absolute
     lag: float = 0.0  # how far simulated time trails the wall clock, s
     load: float = 0.0  # share of wall time spent computing (recent average)
     stats: dict = field(default_factory=dict)
@@ -109,6 +111,7 @@ class Runner:
         names = list(sim.sensors()) + [f"valve:{v}" for v in sim.valves()]
         self.history = History(names, history_seconds, history_interval)
         self._next_record = 0.0
+        self._regulators = sim.regulators()
         self.frame = self._make_frame(0.0, 0.0, 0.0)
 
     # ------------------------------------------------------------------ control
@@ -184,6 +187,11 @@ class Runner:
     def set_position(self, valve: str, position: float) -> None:
         self.sim._valve(valve)
         self.submit(lambda sim: sim.set_position(valve, position))
+
+    def set_setpoint(self, regulator: str, pressure) -> None:
+        self.sim.setpoint(regulator)  # fail now, in the caller, on a bad name
+        units.parse(pressure, "pressure")
+        self.submit(lambda sim: sim.set_setpoint(regulator, pressure))
 
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
         self.sim.boundary_state(comp, pressure, temperature)  # fail now, in the caller
@@ -295,7 +303,8 @@ class Runner:
         sim = self.sim
         valves = {v: sim.valve_position(v) for v in sim.valves()}
         return Frame(t=sim.t, wall=wall, sensors=sim.sensors(), valves=valves,
-                     commands={v: sim.valve_command(v) for v in sim.valves()}, lag=lag, load=load,
+                     commands={v: sim.valve_command(v) for v in sim.valves()},
+                     setpoints={r: sim.setpoint(r) for r in self._regulators}, lag=lag, load=load,
                      stats=sim.solver_stats(), node_p=sim.nout[:, L.O_P].copy(),
                      node_t=sim.nout[:, L.O_T].copy(), node_x=sim.nout[:, L.O_X].copy(),
                      node_rho=sim.nout[:, L.O_RHO].copy(), node_m=sim.nout[:, L.O_M].copy(),

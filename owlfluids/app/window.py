@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self.properties.edited.connect(self._param_edited)
         self.properties.rename_requested.connect(self._rename)
         self.valves.commanded.connect(self._command)
+        self.valves.setpoint_changed.connect(self._set_setpoint)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
@@ -396,8 +397,8 @@ class MainWindow(QMainWindow):
         sim: Simulation = res
         self.runner = Runner(sim, rate=self.rate_box.currentData())
         self._warned = 0
-        throttles = {v: get_type(sim.system.component(v).type).type_name == "throttle_valve" for v in sim.valves()}
-        self.valves.set_valves(sim.valves(), throttles)
+        manual = {v: True for v in sim.manual_valves()}
+        self.valves.set_valves(sim.valves(), manual, sim.regulators())
         self.plots.configure(sim.system, sim.valves())
         names = sim.net.fluids.names
         self._node_fluids = [names[k] if k >= 0 else None for k in sim.net.NI[:, L.N_FLUID]]
@@ -460,6 +461,10 @@ class MainWindow(QMainWindow):
     def _command(self, name: str, position: float) -> None:
         if self.runner is not None:
             self.runner.command(name, position)
+
+    def _set_setpoint(self, name: str, pressure: float) -> None:
+        if self.runner is not None:
+            self.runner.set_setpoint(name, pressure)
 
     def toggle_log(self, on: bool) -> None:
         if on and self.runner is not None and self.log is None:
