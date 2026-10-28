@@ -4,7 +4,7 @@ import hashlib as _hashlib
 import os as _os
 from pathlib import Path as _Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def _numba_cache_dir() -> None:

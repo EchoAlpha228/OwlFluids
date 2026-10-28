@@ -1,18 +1,22 @@
 name: Release
 
-# To publish an installer, bump __version__ in owlfluids/__init__.py, merge, then either
-#   - Actions > Release > Run workflow with "publish" ticked (tags main as v<__version__>), or
-#   - git tag v0.2.0 && git push origin v0.2.0, or
-#   - draft a GitHub release with a new tag v0.2.0 (the installer is added to it).
+# Every merge to main publishes an installer. __version__ in owlfluids/__init__.py is the
+# major.minor line: the first merge after a bump releases it as is (v0.2.0), each later
+# merge takes the next patch (v0.2.1, v0.2.2, ...; packaging/release_version.py). Bump
+# __version__ only to start a new line. Changes to Markdown or tests alone don't release.
 # The installed app finds the new GitHub release and offers to update.
 #
-# Run it by hand without "publish" to build an installer without releasing it, for
-# example for an older Synnax Core. That installer is attached to the run as an
+# Also published: Actions > Release > Run workflow with "publish" ticked, a pushed tag
+# matching __version__, or a GitHub release drafted with a new tag (the installer is
+# added to it). Run it by hand without "publish" to build an installer without releasing
+# it, for example for an older Synnax Core: that installer is attached to the run as an
 # artifact, so installed copies won't update to it.
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md", "tests/**"]
   pull_request:  # check that installer changes still build; nothing is published
     paths: ["packaging/**", ".github/workflows/release.yml", "owlfluids/update.py"]
   workflow_dispatch:
@@ -22,12 +26,17 @@ on:
         required: false
         default: ""
       publish:
-        description: "Publish the build as release v<__version__> (tags this commit)"
+        description: "Publish the build as the next release (tags this commit)"
         type: boolean
         default: false
 
 permissions:
   contents: read
+
+# one release at a time, in merge order, so each takes the next free version
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   installer:
@@ -36,6 +45,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the tags, to pick the next version
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -43,8 +54,14 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $v = python -c "import ast,pathlib; t=pathlib.Path('owlfluids/__init__.py').read_text(); print([n.value.value for n in ast.parse(t).body if isinstance(n, ast.Assign) and n.targets[0].id == '__version__'][0])"
-          if ("${{ github.ref_type }}" -eq "tag" -and "v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} does not match __version__ $v" }
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = python packaging/release_version.py --base
+            if ("v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} does not match __version__ $v" }
+          } else {
+            # the build's copy of owlfluids/__init__.py gets the release number; nothing is committed
+            $v = python packaging/release_version.py --apply
+          }
+          if ($LASTEXITCODE) { throw "could not work out the version" }
           "version=$v" >> $env:GITHUB_OUTPUT
       - name: Synnax client override
         if: inputs.synnax_version != ''
@@ -80,9 +97,12 @@ jobs:
           path: dist/OwlFluids-Setup-*.exe
 
   publish:
-    # the only job that can write to the repository: tags, or a manual run with "publish"
-    # (a release built against a pinned Synnax client is never published, so updates stay on the newest)
-    if: github.ref_type == 'tag' || (inputs.publish && inputs.synnax_version == '')
+    # the only job that can write to the repository: merges to main, tags, or a manual run with
+    # "publish" (a build pinned to an older Synnax client is never published, so updates stay on the newest)
+    if: >-
+      github.ref_type == 'tag' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (inputs.publish && inputs.synnax_version == '')
     needs: installer
     runs-on: ubuntu-latest
     permissions:
@@ -101,7 +121,7 @@ jobs:
             # a release drafted on GitHub for this tag: add the installer to it
             gh release upload "$TAG" dist/OwlFluids-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber
           elif [ "$GITHUB_REF_TYPE" != tag ] && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then
-            echo "::error::tag $TAG already exists; bump __version__ before publishing" && exit 1
+            echo "::error::tag $TAG was published while this ran; run the workflow again" && exit 1
           else
             gh release create "$TAG" dist/OwlFluids-Setup-*.exe --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "OwlFluids $TAG" --generate-notes
