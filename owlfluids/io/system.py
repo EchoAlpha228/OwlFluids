@@ -96,6 +96,9 @@ class System:
     connections: list[tuple[str, str]] = field(default_factory=list)
     sensors: list[Sensor] = field(default_factory=list)
     settings: dict = field(default_factory=lambda: dict(DEFAULT_SETTINGS))
+    # wires shaped by hand on the schematic, ignored by the solver: "a -- b" ->
+    # {"h": leaves a horizontally, "bends": [[x, y], ...]}
+    routes: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)  # changes made on load, shown as build warnings
 
     # ---- editing helpers
@@ -150,7 +153,8 @@ class System:
             sensors.append(Sensor(str(s.pop("id")), s.pop("type"), str(s.pop("at")),
                                   _optional_float(s.pop("lag", None)), _optional_float(s.pop("noise", None)),
                                   float(s.pop("rate", 0) or 0), str(s.pop("units", "") or "")))
-        system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings)
+        routes = {str(k): dict(v) for k, v in (d.get("routes") or {}).items()}
+        system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings, routes)
         system._fold_pipes()
         system._throttles_to_manual()
         return system
@@ -233,6 +237,8 @@ class System:
         d["connections"] = [list(c) for c in self.connections]
         if self.sensors:
             d["sensors"] = [s.to_dict() for s in self.sensors]
+        if self.routes:
+            d["routes"] = self.routes
         return d
 
     @classmethod

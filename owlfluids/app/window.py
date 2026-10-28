@@ -30,7 +30,8 @@ from ..io.logger import open_logger, read_log
 from ..io.system import System
 from ..sim.realtime import Runner
 from ..sim.simulation import Simulation
-from . import symbols
+from . import prefs, symbols
+from . import theme as T
 from .panels import Palette, Properties, ValvePanel
 from .plots import FLOW_ZERO, PlotPanel
 from .schematic import Scene, View
@@ -49,6 +50,7 @@ def _flow_text(mdot: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        T.apply(QApplication.instance())
         self.path: Path | None = None
         self.dirty = False
         self.runner: Runner | None = None
@@ -67,12 +69,15 @@ class MainWindow(QMainWindow):
         self.properties = Properties()
         self.valves = ValvePanel()
         self.plots = PlotPanel()
-        self._dock("Parts", self.palette, Qt.LeftDockWidgetArea)
+        parts = self._dock("PARTS", self.palette, Qt.LeftDockWidgetArea)
         self.side_tabs = QTabWidget()
         self.side_tabs.addTab(self.properties, "Properties")
         self.side_tabs.addTab(self.valves, "Valves")
-        self._dock("Inspector", self.side_tabs, Qt.RightDockWidgetArea)
-        self.plot_dock = self._dock("Plots", self.plots, Qt.BottomDockWidgetArea)
+        inspector = self._dock("INSPECTOR", self.side_tabs, Qt.RightDockWidgetArea)
+        self.plot_dock = self._dock("PLOTS", self.plots, Qt.BottomDockWidgetArea)
+        self.resizeDocks([parts, inspector], [190, 340], Qt.Horizontal)  # the schematic gets the rest
+        # the schematic refits when the plots come and go, so the system stays in view
+        self.plot_dock.visibilityChanged.connect(lambda _on: QTimer.singleShot(0, self.view.fit))
 
         self._make_actions()
         self._make_status()
@@ -92,6 +97,11 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         g = screen.availableGeometry() if screen else None
         self.resize(min(1400, int(g.width() * 0.9)) if g else 1400, min(900, int(g.height() * 0.9)) if g else 900)
+        st = prefs.settings()  # the size and dock layout from last time, if any
+        if st.value("geometry") is not None:
+            self.restoreGeometry(st.value("geometry"))
+        if st.value("window_state") is not None:
+            self.restoreState(st.value("window_state"))
         self.new_system()
 
     def _dock(self, title, widget, area) -> QDockWidget:
@@ -131,6 +141,8 @@ class MainWindow(QMainWindow):
         act("Open…", self.open_dialog, QKeySequence.Open, m_file, True)
         act("Save", self.save, QKeySequence.Save, m_file, True)
         act("Save as…", self.save_as, QKeySequence.SaveAs, m_file)
+        self.m_recent = m_file.addMenu("Recent")
+        self.m_recent.aboutToShow.connect(self._fill_recent)
         m_ex = m_file.addMenu("Examples")
         for name in EXAMPLES:
             act(name, lambda _=False, n=name: self.load_example(n), menu=m_ex)
@@ -139,7 +151,11 @@ class MainWindow(QMainWindow):
         m_file.addSeparator()
         act("Quit", self.close, QKeySequence.Quit, m_file)
 
-        self.a_rotate = act("Rotate", self.scene.rotate_selected, "R", m_edit)
+        tb.addSeparator()
+        self.a_rotate = act("↻ Rotate", lambda: self.scene.rotate_selected(90), "R", m_edit, True,
+                            "Rotate the selected parts clockwise")
+        self.a_rotate_back = act("↺ Rotate back", lambda: self.scene.rotate_selected(-90), "Shift+R", m_edit, True,
+                                 "Rotate the selected parts counter-clockwise")
         self.a_delete = act("Delete", self.scene.delete_selected, QKeySequence.Delete, m_edit)
         act("Settings…", self.edit_settings, "Ctrl+,", m_edit, tip="Time step, ambient and solver settings")
 
@@ -181,10 +197,27 @@ class MainWindow(QMainWindow):
                           "Real-time 1-D fluid network simulator for test automation.")
 
     def _make_status(self) -> None:
-        self.status_time = QLabel("stopped")
+        self.status_badge = QLabel()
+        self.status_badge.setAlignment(Qt.AlignCenter)
+        self.status_badge.setMinimumWidth(84)
+        self._badge = None
+        self.status_time = QLabel("")
+        T.monospace(self.status_time)
         self.status_perf = QLabel("")
+        T.monospace(self.status_perf)
+        self.statusBar().addWidget(self.status_badge)
         self.statusBar().addWidget(self.status_time, 1)
         self.statusBar().addPermanentWidget(self.status_perf)
+        self._set_badge("stopped")
+
+    def _set_badge(self, state: str) -> None:
+        if state == self._badge:  # a style sheet change re-polishes the label; only on a change
+            return
+        self._badge = state
+        bg, fg = T.BADGES[state]
+        self.status_badge.setText(state.upper())
+        self.status_badge.setStyleSheet(f"background: {bg}; color: {fg}; font-weight: bold; padding: 2px 8px;"
+                                        " border-radius: 2px; letter-spacing: 1px;")
 
     def _set_running_ui(self, running: bool) -> None:
         self.a_run.setEnabled(not running)
@@ -194,6 +227,7 @@ class MainWindow(QMainWindow):
         self.a_log.setEnabled(running)
         self.a_synnax.setEnabled(running)
         self.a_rotate.setEnabled(not running)
+        self.a_rotate_back.setEnabled(not running)
         self.a_delete.setEnabled(not running)
         self.palette.setEnabled(not running)
 
@@ -222,12 +256,24 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open", str(e))
             return
         self._set_system(sysm, Path(fn))
+        prefs.add_recent(fn)
+
+    def _fill_recent(self) -> None:
+        self.m_recent.clear()
+        files = prefs.recent()
+        for f in files:
+            a = self.m_recent.addAction(Path(f).name)
+            a.setToolTip(f)
+            a.triggered.connect(lambda _c=False, f=f: self._confirm_discard() and self.open_file(f))
+        if not files:
+            self.m_recent.addAction("No recent systems").setEnabled(False)
 
     def _set_system(self, sysm: System, path: Path | None) -> None:
         self.stop()
         self.path = path
         self.scene.set_system(sysm)
         self.properties.show_component(None, sysm)
+        self.plot_dock.hide()  # nothing to plot while editing; the schematic gets the room (Run brings it back)
         self.dirty = False
         self._update_title()
         QTimer.singleShot(0, self.view.fit)
@@ -255,13 +301,14 @@ class MainWindow(QMainWindow):
         if self.scene.system.name == "untitled":
             self.scene.system.name = self.path.stem
         if self.save():
+            prefs.add_recent(self.path)
             return True
         self.path, self.scene.system.name = old_path, old_name  # Ctrl+S must not retry the bad path
         return False
 
     def _start_dir(self) -> str:
-        """Where file dialogs open: next to the current system file."""
-        return str(self.path.parent) if self.path else ""
+        """Where file dialogs open: next to the current system file, else the last folder used."""
+        return str(self.path.parent) if self.path else prefs.last_dir()
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:
@@ -275,6 +322,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         if self._confirm_discard():
             self.stop()
+            st = prefs.settings()
+            st.setValue("geometry", self.saveGeometry())
+            st.setValue("window_state", self.saveState())
             e.accept()
         else:
             e.ignore()
@@ -323,6 +373,7 @@ class MainWindow(QMainWindow):
         item = self.scene.items_by_id.get(self.properties.comp.id) if self.properties.comp else None
         if item is not None:
             item.update()
+        self.scene.refresh_media()
         self._mark_dirty()
 
     def _rename(self, old: str, new: str) -> None:
@@ -343,6 +394,7 @@ class MainWindow(QMainWindow):
         self._building = True
         self._build_result = None
         token = self._build_token = object()
+        self._set_badge("building")
         self.status_time.setText("building network and loading property tables…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         system = System.from_dict(self.scene.system.to_dict())
@@ -364,16 +416,28 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         _token, res = self._build_result
         if isinstance(res, Exception):
-            self.status_time.setText("stopped")
+            self._set_badge("stopped")
+            self.status_time.setText("")
             QMessageBox.critical(self, "Cannot run this system", str(res))
             return
         sim: Simulation = res
         self.runner = Runner(sim, rate=self.rate_box.currentData())
         self._warned = 0
         manual = {v: True for v in sim.manual_valves()}
-        self.valves.set_valves(sim.valves(), manual, sim.regulators())
+        media = self.scene.media  # the fluid each line carries, as traced for the line colours
+        fluids = {v: (media.get(f"{v}.in") or media.get(f"{v}.out") or (None,))[0] for v in sim.valves()}
+        self.valves.set_valves(sim.valves(), manual, sim.regulators(), fluids)
         self.plots.configure(sim.system, sim.valves())
+        if not self.plot_dock.isVisible():
+            self.plot_dock.show()
+            self.resizeDocks([self.plot_dock], [int(self.height() * 0.42)], Qt.Vertical)
+        names = sim.net.fluids.names
+        self._node_fluids = [names[k] if k >= 0 else None for k in sim.net.NI[:, L.N_FLUID]]
+        self._fluid_colours = {}
         self.scene.set_running(True)
+        self._colour_wires(sim)
+        self._flow_wires = self._wire_links(sim)
+        self._last_tick = time.perf_counter()
         self.properties.show_component(None, self.scene.system)
         self._set_running_ui(True)
         self.side_tabs.setCurrentWidget(self.valves)
@@ -405,9 +469,11 @@ class MainWindow(QMainWindow):
             self.runner = None
         self.a_pause.setText("⏸ Pause")
         self.scene.set_running(False)
+        self._colour_wires(None)
         self.valves.set_valves([], {})
         self._set_running_ui(False)
-        self.status_time.setText("stopped")
+        self._set_badge("stopped")
+        self.status_time.setText("")
 
     def reset(self) -> None:
         if self.runner is not None:
@@ -496,16 +562,92 @@ class MainWindow(QMainWindow):
         f = r.frame
         self.valves.show_frame(f)
         self.scene.show_values(self._component_values(r.sim, f))
+        self._show_wire_colours(f)
+        now = time.perf_counter()
+        dt, self._last_tick = (0.0 if r.paused else now - self._last_tick), now
+        mdot = f.link_mdot
+        flows = {}
+        for k, terms in self._flow_wires:
+            q = sum(sgn * mdot[li] for li, sgn in terms)
+            if abs(q) >= FLOW_ZERO:
+                flows[k] = 1 if q > 0 else -1
+        self.scene.show_flows(flows, dt)
         if self.plot_dock.isVisible():
             self.plots.update_from(r.history)
         st = f.stats
         rate = self.rate_box.currentData()
-        self.status_time.setText(f"t = {f.t:8.2f} s" + ("   (paused)" if r.paused else ""))
+        self._set_badge("paused" if r.paused else "running")
+        self.status_time.setText(f"T+ {f.t:9.2f} s")
+        warn = f.load > 0.8 or f.lag > 0.05  # near the real-time limit: caution colour
+        if warn != self.status_perf.property("warn"):
+            self.status_perf.setProperty("warn", warn)
+            self.status_perf.setStyleSheet(f"color: {T.AMBER};" if warn else "")
         self.status_perf.setText(
             f"CPU {f.load * 100:4.0f}% of {'real time' if rate else 'max speed'}   lag {f.lag * 1000:4.1f} ms   "
             f"slips {r.slips}   forced steps {st.get('forced_steps', 0)}"
             + (f"   Synnax ↑{self.driver.writes} ↓{self.driver.commands}" if self.driver else "")
             + ("   ● REC" if self.log else ""))
+
+    def _fluid_colour(self, node: int, gas: bool):
+        """Material colour of a node's fluid; cached, since it is asked for every component every tick."""
+        key = (node, gas)
+        c = self._fluid_colours.get(key)
+        if c is None:
+            c = self._fluid_colours[key] = symbols.fluid_colour(self._node_fluids[node], gas)
+        return c
+
+    def _colour_wires(self, sim: Simulation | None) -> None:
+        """While running, each wire takes the colour of what is in it; gas is see-through."""
+        if sim is None:
+            self._wire_nodes = []
+            self.scene.refresh_media()
+            return
+        net = sim.net
+        self._wire_nodes = [(w, net.port_nodes.get(w.a, net.port_nodes.get(w.b))) for w in self.scene.wires]
+        self._wire_nodes = [(w, i) for w, i in self._wire_nodes if i is not None]
+
+    def _show_wire_colours(self, f) -> None:
+        for w, i in self._wire_nodes:
+            w.set_colour(self._fluid_colour(i, f.node_x[i] > 0.5))
+
+    def _wire_links(self, sim: Simulation) -> list[tuple[int, list[tuple[int, float]]]]:
+        """For each wire that carries flow: (wire index, [(link, sign), ...]); flow a->b is the sum of sign * mdot.
+
+        A wire joins two ports that share a node. Its flow is the flow of the flow element
+        (valve, orifice, regulator...) at one of its ends; between a volume (tank, manifold)
+        and a tee it is everything leaving the volume's node.
+        """
+        net = sim.net
+        n_links = net.LI.shape[0]
+
+        def link_at(port: str):
+            """The link of the component that owns ``port`` with an end on that port's node, and that end."""
+            comp, node = port.split(".")[0], net.port_nodes.get(port)
+            for k in net.comp_links.get(comp, []):
+                if net.LI[k, L.L_A] == node:
+                    return [(k, -1.0)]  # positive flow leaves this node through the component
+                if net.LI[k, L.L_B] == node:
+                    return [(k, 1.0)]  # positive flow arrives here out of the component
+            return None
+
+        def out_of_volume(port: str):
+            """Everything leaving a volume's node, for a wire from the volume to a tee."""
+            comp, node = port.split(".")[0], net.port_nodes.get(port)
+            if node is None or not net.comp_nodes.get(comp) or get_type(sim.system.component(comp).type).merges_ports:
+                return None
+            terms = [(k, 1.0 if net.LI[k, L.L_A] == node else -1.0) for k in range(n_links)
+                     if node in (net.LI[k, L.L_A], net.LI[k, L.L_B])]
+            return terms or None
+
+        def flip(terms):
+            return None if terms is None else [(k, -sgn) for k, sgn in terms]
+
+        out = []
+        for k, w in enumerate(self.scene.wires):
+            terms = (link_at(w.a) or flip(link_at(w.b)) or out_of_volume(w.a) or flip(out_of_volume(w.b)))
+            if terms:
+                out.append((k, terms))
+        return out
 
     def _component_values(self, sim: Simulation, f) -> dict:
         net = sim.net
@@ -524,20 +666,29 @@ class MainWindow(QMainWindow):
             elif ct.type_name in ("orifice", "fitting"):
                 if links:
                     text = _flow_text(f.link_mdot[links[0]])
+                i = net.port_nodes.get(f"{c.id}.in")
+                if ct.type_name == "fitting" and i is not None:
+                    state["line_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
             elif ct.type_name == "boundary":
                 text = ""
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])
                 text = f"{p:.0f} psi  {f.node_t[i]:.0f} K"
+                if ct.type_name == "volume":
+                    state["fill_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
                 if ct.type_name == "pressurized_tank" and len(nodes) > 1:
                     liq = nodes[1]
                     vol = net.NF[nodes[0], L.NF_VOL]
                     state["fill"] = min(max(f.node_m[liq] / max(f.node_rho[liq], 1e-9) / vol, 0.0), 1.0)
-                    state["liquid_colour"] = symbols.CRYO if f.node_t[liq] < 150 else symbols.LIQUID
+                    state["liquid_colour"] = self._fluid_colour(liq, False)
+                    state["gas_colour"] = self._fluid_colour(i, True)
                     text = f"{p:.0f} psi  {f.node_t[liq]:.0f} K liq"
-                elif ct.type_name == "tank" and 0.0 <= f.node_x[i] <= 1.0:
-                    state["fill"] = 1.0 - f.node_x[i]
+                elif ct.type_name == "tank":
+                    state["liquid_colour"] = self._fluid_colour(i, False)
+                    state["gas_colour"] = self._fluid_colour(i, True)
+                    if 0.0 <= f.node_x[i] <= 1.0:
+                        state["fill"] = 1.0 - f.node_x[i]
             out[c.id] = (text, state)
         return out
 

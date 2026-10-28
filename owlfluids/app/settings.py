@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, Q
 from .. import units
 from ..fluids.registry import FLUIDS
 from ..io.system import DEFAULT_SETTINGS
-from .panels import UNIT_EXAMPLES, _show_error
+from .panels import UNIT_EXAMPLES, _set_error, _show_error
 
 LABELS = {"dt": "time step (dt)"}
 
@@ -62,7 +62,7 @@ class SettingsDialog(QDialog):
                 _show_error(ed, str(e))
                 ed.setFocus()
                 return
-            ed.setStyleSheet("")
+            _set_error(ed, False)
         s = self.system.settings
         self.system.name = self.name.text().strip() or self.system.name
         for key, (ed, _dim) in self.fields.items():

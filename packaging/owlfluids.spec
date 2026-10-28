@@ -22,6 +22,9 @@ for pkg in ("CoolProp", "pyqtgraph", "synnax"):
     binaries += b
     hiddenimports += h
 
+# the desktop app's bundled fonts (Lato, Roboto Mono, Barlow Semi Condensed; all OFL)
+datas.append((str(ROOT / "owlfluids" / "app" / "fonts"), "owlfluids/app/fonts"))
+
 bundled = ROOT / "owlfluids" / "fluids" / "bundled"
 if any(bundled.glob("*.npz")):
     datas.append((str(bundled), "owlfluids/fluids/bundled"))

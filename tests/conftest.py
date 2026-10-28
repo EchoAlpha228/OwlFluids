@@ -15,3 +15,9 @@ def gas_blowdown():
         s.connect("O1.out", "AMB.port")
         return s
     return make
+
+
+@pytest.fixture(autouse=True)
+def _app_settings(tmp_path, monkeypatch):
+    """Keep the desktop app's preferences (layout, recent files) out of the user's own."""
+    monkeypatch.setenv("OWLFLUIDS_SETTINGS", str(tmp_path / "owlfluids.ini"))

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -17,17 +17,34 @@ from PySide6.QtWidgets import (
     QGraphicsPathItem,
     QGraphicsScene,
     QGraphicsView,
+    QMenu,
 )
 
 from ..components import get_type
+from ..fluids.registry import canonical
 from ..io.system import Component, System
-from . import symbols
+from . import media as M
+from . import routing, symbols
+from . import theme as T
 
 GRID = 10.0
-WIRE = QColor("#2b3440")
-WIRE_SELECTED = QColor("#1f77d0")
-PORT = QColor("#ffffff")
-PORT_HOVER = QColor("#1f77d0")
+WIRE = T.qc(T.GRAY_300)
+WIRE_SELECTED = T.qc(T.ACCENT)
+PORT = T.qc(T.GRAY_900)
+PORT_HOVER = T.qc(T.ACCENT)
+LABEL_DEPTH = 28.0  # id and value labels take this much room above or below a symbol
+LABEL_WIDTH = 60.0  # ... or this much beside it
+FLOW_MARK = T.qc(T.WHITE)
+FLOW_SIZE = 2.5  # px, the side of each square
+FLOW_DASHES = [1.0, 5.0]  # square, gap; in multiples of FLOW_SIZE
+FLOW_SPEED = 2.0  # dash units per second the squares travel (2 x 2.5 = 5 px/s per unit)
+
+
+def _fluid(name) -> str | None:
+    try:
+        return canonical(name) if name else None
+    except (KeyError, ValueError):
+        return None
 
 
 def snap(p: QPointF) -> QPointF:
@@ -46,6 +63,7 @@ class PortItem(QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setZValue(2)
         self.setToolTip(f"{parent.comp.id}.{name}")
+        self.setVisible(False)  # shown while editing, on the part under the mouse or selected
 
     @property
     def ref(self) -> str:
@@ -58,6 +76,10 @@ class PortItem(QGraphicsEllipseItem):
         self.setBrush(QBrush(PORT))
 
 
+def _overlap(a: routing.Rect, b: routing.Rect) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
 class ComponentItem(QGraphicsObject):
     def __init__(self, comp: Component):
         super().__init__()
@@ -67,22 +89,74 @@ class ComponentItem(QGraphicsObject):
         self.ports = {name: PortItem(self, name, port_pos[name]) for name in self.ctype.ports if name in port_pos}
         self.state: dict = {}
         self.value_text = ""
+        self.label_side = "bottom"
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable
                       | QGraphicsItem.ItemSendsGeometryChanges)
         self.setRotation(comp.rotation)
         self.setZValue(1)
+        self.setAcceptHoverEvents(True)
         self.setToolTip(f"{comp.id} ({self.ctype.label or self.ctype.type_name})")
+
+    def hoverEnterEvent(self, e):
+        sc = self.scene()
+        if sc is not None:
+            sc.refresh_ports(self)
+
+    def hoverLeaveEvent(self, e):
+        sc = self.scene()
+        if sc is not None:
+            sc.refresh_ports(self, hovered=False)
+
+    def obstacle(self) -> routing.Rect:
+        """The symbol's footprint in the scene and its labels below it, which wires route around."""
+        w, h = self.size
+        r = self.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
+        left, top, right, bottom = r.left(), r.top(), r.right(), r.bottom()
+        side = self.label_side
+        if side not in ("bottom", "right", "left", "top"):  # a corner label is out of the lines' way already
+            return (left, top, right, bottom)
+        return (left - (LABEL_WIDTH if side == "left" else 0), top - (LABEL_DEPTH if side == "top" else 0),
+                right + (LABEL_WIDTH if side == "right" else 0), bottom + (LABEL_DEPTH if side == "bottom" else 0))
 
     def boundingRect(self) -> QRectF:
         w, h = self.size
         return QRectF(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12)
 
     def paint(self, p: QPainter, option, widget=None) -> None:
-        symbols.paint(p, self.ctype.type_name, self.size, self.state)
+        p.save()  # a symbol may mirror itself to read the right way round
+        symbols.paint(p, self.ctype.type_name, self.size,
+                      {**self._static_state(), **self.state, "rotation": self.rotation()})
+        p.restore()
         if self.isSelected():
             p.setPen(QPen(WIRE_SELECTED, 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
             p.drawRect(self.boundingRect().adjusted(2, 2, -2, -2))
+
+    def _static_state(self) -> dict:
+        """What the drawing needs from the parameters: valve actuators, and media while editing."""
+        prm = self.comp.params
+        t = self.ctype.type_name
+        sc = self.scene()
+        media = sc.media if sc is not None else {}
+        if t == "fitting":
+            m = media.get(f"{self.comp.id}.in")
+            return {"line_colour": symbols.fluid_colour(*m)} if m else {}
+        if t == "volume":
+            m = next((media[f"{self.comp.id}.{q}"] for q in self.ctype.ports if f"{self.comp.id}.{q}" in media), None)
+            return {"fill_colour": symbols.fluid_colour(*m)} if m else {}
+        if t == "tank":
+            m = media.get(f"{self.comp.id}.port")
+            if not m:
+                return {}
+            return ({"gas_colour": symbols.fluid_colour(*m)} if m[1] else
+                    {"fill": float(prm.get("fill") or 1.0), "liquid_colour": symbols.fluid_colour(m[0])})
+        if self.ctype.type_name == "valve":  # the "solenoid" type name is a valve drawn as one
+            default = "solenoid" if self.comp.type == "solenoid" else "pneumatic"
+            return {"actuator": prm.get("actuator", default)}
+        if self.ctype.type_name == "pressurized_tank":
+            return {"liquid_colour": symbols.fluid_colour(_fluid(prm.get("liquid"))),
+                    "gas_colour": symbols.fluid_colour(_fluid(prm.get("pressurant")), gas=True)}
+        return {}
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange:
@@ -92,7 +166,11 @@ class ComponentItem(QGraphicsObject):
             sc = self.scene()
             if sc is not None:
                 sc.update_wires(self.comp.id)
-                sc.place_labels(self)
+                sc.settle_labels([self])
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            sc = self.scene()
+            if sc is not None:
+                sc.refresh_ports(self)
         return super().itemChange(change, value)
 
     def port_scene_pos(self, port: str) -> QPointF:
@@ -106,24 +184,85 @@ class WireItem(QGraphicsPathItem):
     def __init__(self, a: str, b: str):
         super().__init__()
         self.a, self.b = a, b
-        self.setPen(QPen(WIRE, 2))
+        self.colour = WIRE
+        self.points: list[routing.Point] = []
+        self._shape = QPainterPath()
+        self._drag = None
+        self.flow = 0  # +1 fluid moving from a to b, -1 from b to a, 0 still
+        self.setPen(QPen(WIRE, 3))  # only sizes the bounding rect (paint picks the real pen)
         self.setFlags(QGraphicsItem.ItemIsSelectable)
         self.setZValue(0)
 
-    def route(self, pa: QPointF, pb: QPointF) -> None:
-        path = QPainterPath(pa)
-        if abs(pa.y() - pb.y()) < 0.5 or abs(pa.x() - pb.x()) < 0.5:
-            path.lineTo(pb)
-        else:
-            mid = QPointF((pa.x() + pb.x()) / 2, pa.y())
-            path.lineTo(mid)
-            path.lineTo(QPointF(mid.x(), pb.y()))
-            path.lineTo(pb)
+    def set_colour(self, colour) -> None:
+        """The colour of the medium in the line; None for a line nothing fills yet."""
+        colour = colour or WIRE
+        if colour != self.colour:
+            self.colour = colour
+            self.update()
+
+    def set_points(self, points: list[routing.Point]) -> None:
+        self.points = points
+        path = QPainterPath(QPointF(*points[0]))
+        for pt in points[1:]:
+            path.lineTo(QPointF(*pt))
         self.setPath(path)
+        st = QPainterPathStroker()
+        st.setWidth(9)
+        self._shape = st.createStroke(path)
+
+    def shape(self) -> QPainterPath:
+        """Clickable along the line itself (not the area its bends enclose)."""
+        return self._shape
+
+    @property
+    def key(self) -> str:
+        return f"{self.a} -- {self.b}"
+
+    # dragging a segment sideways reshapes the route by hand; a double click hands it back
+    def mousePressEvent(self, e):
+        sc = self.scene()
+        if sc is None or sc.running or e.button() != Qt.LeftButton:
+            return super().mousePressEvent(e)
+        i = routing.segment_at(self.points, (e.scenePos().x(), e.scenePos().y()))
+        self._drag = (list(self.points), i) if i is not None else None
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if getattr(self, "_drag", None) is None:
+            return super().mouseMoveEvent(e)
+        start, i = self._drag
+        to = snap(e.scenePos())
+        pts, _ = routing.drag_segment(start, i, (to.x(), to.y()))
+        self.set_points(routing.simplify(pts))
+
+    def mouseReleaseEvent(self, e):
+        if getattr(self, "_drag", None) is not None:
+            start, _ = self._drag
+            self._drag = None
+            if self.points != start:
+                bends, horizontal = routing.to_bends(self.points)
+                self.scene().set_route(self, {"h": horizontal, "bends": [[x, y] for x, y in bends]})
+        super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        sc = self.scene()
+        if sc is not None and not sc.running:
+            sc.set_route(self, None)
 
     def paint(self, p, option, widget=None):
-        self.setPen(QPen(WIRE_SELECTED if self.isSelected() else WIRE, 3 if self.isSelected() else 2))
-        super().paint(p, option, widget)
+        # drawn here rather than by QGraphicsPathItem: no dashed selection box (Cyan marks it), and
+        # no setPen, which would schedule another repaint every frame
+        selected = self.isSelected()
+        p.setPen(QPen(WIRE_SELECTED if selected else self.colour, 3 if selected else 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(self.path())
+        if self.flow:  # white squares marching along the line in the direction of flow
+            pen = QPen(FLOW_MARK, FLOW_SIZE, Qt.CustomDashLine, Qt.FlatCap)
+            pen.setDashPattern(FLOW_DASHES)
+            sc = self.scene()
+            pen.setDashOffset(-self.flow * (sc.flow_phase if sc is not None else 0.0))
+            p.setPen(pen)
+            p.drawPath(self.path())
 
 
 class Scene(QGraphicsScene):
@@ -140,6 +279,8 @@ class Scene(QGraphicsScene):
         self.wires: list[WireItem] = []
         self.labels: dict[str, tuple] = {}
         self.running = False
+        self.media: dict = {}  # port -> (fluid, is_gas), guessed while editing
+        self.flow_phase = 0.0
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsLineItem | None = None
         self.setSceneRect(QRectF(-2000, -2000, 6000, 4000))
@@ -158,32 +299,131 @@ class Scene(QGraphicsScene):
             self._add_item(c)
         for a, b in system.connections:
             self._add_wire(a, b)
+        self.refresh_label_sides()
         self.update_wires()
+        self.settle_labels()
+        self.refresh_media()
+
+    def refresh_media(self) -> None:
+        """Colour wires and tanks by the media the parts set (editing only; a run colours from the solver)."""
+        if self.running:
+            return
+        self.media = M.edit_media(self.system)
+        for w in self.wires:
+            m = self.media.get(w.a) or self.media.get(w.b)
+            w.set_colour(symbols.fluid_colour(*m) if m else None)
+        for it in self.items_by_id.values():
+            it.update()
 
     def _add_item(self, comp: Component) -> ComponentItem:
         item = ComponentItem(comp)
         self.addItem(item)
         item.setPos(QPointF(*(comp.position or (0.0, 0.0))))
         name = self.addSimpleText(comp.id)
-        name.setFont(QFont("Sans", 8, QFont.Bold))
-        name.setBrush(QBrush(symbols.LINE))
+        name.setFont(T.mono_font(7.5))
+        name.setBrush(QBrush(T.qc(T.TEXT_DIM)))
         name.setZValue(3)
         value = self.addSimpleText("")
-        value.setFont(QFont("Sans", 8))
-        value.setBrush(QBrush(QColor("#0b5394")))
+        value.setFont(T.mono_font(8))
+        value.setBrush(QBrush(T.qc(T.WHITE)))
         value.setZValue(3)
         self.labels[comp.id] = (name, value)
         self.items_by_id[comp.id] = item
         self.place_labels(item)
         return item
 
+    SIDES = ("bottom", "right", "left", "top")
+    CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
+
+    def _label_spots(self, item: ComponentItem, side: str, nw: float, vw: float):
+        """Where the id and value labels go for ``side``: two top-left points."""
+        w, h = item.size
+        r = item.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
+        gap, line = 4.0, 12.0
+        cx, cy = r.center().x(), r.center().y()
+        if side == "bottom":
+            return (cx - nw / 2, r.bottom() + gap), (cx - vw / 2, r.bottom() + gap + line)
+        if side == "top":
+            return (cx - nw / 2, r.top() - gap - 2 * line), (cx - vw / 2, r.top() - gap - line)
+        if side == "right":
+            return (r.right() + gap + 2, cy - line), (r.right() + gap + 2, cy)
+        if side == "left":
+            return (r.left() - gap - 2 - nw, cy - line), (r.left() - gap - 2 - vw, cy)
+        # corners, for when lines leave every side: diagonally off the symbol, clear of them
+        y = r.bottom() + gap if side.startswith("bottom") else r.top() - gap - 2 * line
+        if side.endswith("right"):
+            return (r.right() + gap, y), (r.right() + gap, y + line)
+        return (r.left() - gap - nw, y), (r.left() - gap - vw, y + line)
+
     def place_labels(self, item: ComponentItem) -> None:
+        """Id and value labels on the part's label side (see refresh_label_sides)."""
         name, value = self.labels.get(item.comp.id, (None, None))
         if name is None:
             return
-        r = item.sceneBoundingRect()
-        name.setPos(r.center().x() - name.boundingRect().width() / 2, r.bottom() - 2)
-        value.setPos(r.center().x() - value.boundingRect().width() / 2, r.bottom() + 10)
+        npos, vpos = self._label_spots(item, item.label_side,
+                                       name.boundingRect().width(), value.boundingRect().width())
+        name.setPos(*npos)
+        value.setPos(*vpos)
+
+    def _port_sides(self, item: ComponentItem, connected: set) -> set:
+        """The sides of a part that lines come out of."""
+        c = item.scenePos()
+        used = set()
+        for pname, port in item.ports.items():
+            if f"{item.comp.id}.{pname}" in connected:
+                pt = port.scenePos()
+                dx, dy = routing.port_direction((c.x(), c.y()), (pt.x(), pt.y()))
+                used.add("right" if dx > 0 else "left" if dx < 0 else "bottom" if dy > 0 else "top")
+        return used
+
+    def refresh_label_sides(self, items=None) -> None:
+        """Put each part's labels on the first side (bottom, right, left, top) no line comes out of,
+        or off a corner when lines leave every side. Wires are routed around this side."""
+        connected = {ref for conn in self.system.connections for ref in conn}
+        for it in items if items is not None else self.items_by_id.values():
+            used = self._port_sides(it, connected)
+            it.label_side = next((sd for sd in self.SIDES if sd not in used), "bottom-right")
+            self.place_labels(it)
+
+    def settle_labels(self, items=None) -> None:
+        """After routing: move labels that a wire or another part runs through to the first clear spot,
+        trying the free sides, then the corners, then the sides lines come out of."""
+        connected = {ref for conn in self.system.connections for ref in conn}
+        segments = [seg for w in self.wires for seg in routing.segments(w.points)]
+        parts = {}
+        for cid, it in self.items_by_id.items():
+            w, h = it.size
+            r = it.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
+            parts[cid] = (r.left(), r.top(), r.right(), r.bottom())
+        taken = {cid: self._label_rect(it) for cid, it in self.items_by_id.items() if cid in self.labels}
+        for it in items if items is not None else self.items_by_id.values():
+            cid = it.comp.id
+            if cid not in self.labels:  # still being added
+                continue
+            used = self._port_sides(it, connected)
+            order = ([sd for sd in self.SIDES if sd not in used] + list(self.CORNERS)
+                     + [sd for sd in self.SIDES if sd in used])
+            best, best_hits = it.label_side, None
+            for side in [it.label_side, *order]:
+                r = self._label_rect(it, side)
+                hits = sum(routing.hits(a, b, r) for a, b in segments)
+                hits += sum(_overlap(r, q) for k, q in parts.items() if k != cid)
+                hits += sum(_overlap(r, q) for k, q in taken.items() if k != cid)
+                if best_hits is None or hits < best_hits:
+                    best, best_hits = side, hits
+                if hits == 0:
+                    break
+            it.label_side = best
+            taken[cid] = self._label_rect(it)
+            self.place_labels(it)
+
+    def _label_rect(self, item: ComponentItem, side: str | None = None) -> routing.Rect:
+        """The scene box both labels cover on ``side``, at least LABEL_WIDTH wide (values grow while running)."""
+        name, value = self.labels[item.comp.id]
+        nw = max(name.boundingRect().width(), 1.0)
+        vw = max(value.boundingRect().width(), LABEL_WIDTH)
+        (nx, ny), (vx, vy) = self._label_spots(item, side or item.label_side, nw, vw)
+        return (min(nx, vx), ny, max(nx + nw, vx + vw), vy + 11.0)
 
     def _add_wire(self, a: str, b: str) -> WireItem:
         w = WireItem(a, b)
@@ -192,11 +432,53 @@ class Scene(QGraphicsScene):
         return w
 
     def update_wires(self, comp_id: str | None = None) -> None:
-        for w in self.wires:
-            if comp_id is None or w.a.split(".")[0] == comp_id or w.b.split(".")[0] == comp_id:
-                pa, pb = self._port_pos(w.a), self._port_pos(w.b)
-                if pa is not None and pb is not None:
-                    w.route(pa, pb)
+        todo = [w for w in self.wires
+                if comp_id is None or w.a.split(".")[0] == comp_id or w.b.split(".")[0] == comp_id]
+        if not todo:
+            return
+        obstacles = {cid: it.obstacle() for cid, it in self.items_by_id.items()}
+        for w in todo:
+            self.route_wire(w, obstacles)
+
+    def route_wire(self, w: WireItem, obstacles: dict | None = None) -> None:
+        """Route one wire: by hand if the system stores a route for it, otherwise around the parts."""
+        ends = []
+        for ref in (w.a, w.b):
+            cid, _, port = ref.partition(".")
+            item = self.items_by_id.get(cid)
+            if item is None:
+                return
+            pt, c = item.port_scene_pos(port), item.scenePos()
+            ends.append(((pt.x(), pt.y()), routing.port_direction((c.x(), c.y()), (pt.x(), pt.y()))))
+        (pa, da), (pb, db) = ends
+        manual = self.system.routes.get(w.key)
+        if manual:
+            w.set_points(routing.manual_route(pa, pb, [tuple(b) for b in manual.get("bends", [])],
+                                              bool(manual.get("h", True))))
+            return
+        if obstacles is None:
+            obstacles = {cid: it.obstacle() for cid, it in self.items_by_id.items()}
+        w.set_points(routing.auto_route(pa, da, pb, db, list(obstacles.values())))
+
+    def set_route(self, w: WireItem, route: dict | None) -> None:
+        """Store a hand-made route for a wire, or drop it (None) to route it automatically again."""
+        if route is None:
+            if self.system.routes.pop(w.key, None) is None:
+                return
+        else:
+            self.system.routes[w.key] = route
+        self.route_wire(w)
+        self.changed_system.emit()
+
+    def refresh_ports(self, item=None, hovered: bool | None = None) -> None:
+        """Ports show only while editing: on the part under the mouse, selected parts, or all while wiring."""
+        items = [item] if item is not None else list(self.items_by_id.values())
+        for it in items:
+            under = it.isUnderMouse() if hovered is None or it is not item else hovered
+            show = not self.running and (self._drag_from is not None or under or it.isSelected())
+            for port in it.ports.values():
+                if port.isVisible() != show:
+                    port.setVisible(show)
 
     def _port_pos(self, ref: str) -> QPointF | None:
         cid, _, port = ref.partition(".")
@@ -220,6 +502,7 @@ class Scene(QGraphicsScene):
         item = self._add_item(comp)
         self.clearSelection()
         item.setSelected(True)
+        self.refresh_media()
         self.changed_system.emit()
         return comp
 
@@ -240,9 +523,14 @@ class Scene(QGraphicsScene):
                     self.removeItem(lab)
                 self.removeItem(it)
                 del self.items_by_id[cid]
+        self.refresh_label_sides()
+        self.update_wires()
+        self.settle_labels()
+        self.refresh_media()
         self.changed_system.emit()
 
     def _remove_wire(self, w: WireItem) -> None:
+        self.system.routes.pop(w.key, None)
         if (w.a, w.b) in self.system.connections:
             self.system.connections.remove((w.a, w.b))
         elif (w.b, w.a) in self.system.connections:
@@ -250,15 +538,17 @@ class Scene(QGraphicsScene):
         self.wires.remove(w)
         self.removeItem(w)
 
-    def rotate_selected(self) -> None:
+    def rotate_selected(self, step: int = 90) -> None:
+        """Turn the selected parts by ``step`` degrees (clockwise positive)."""
         if self.running:
             return
         for it in self.selectedItems():
             if isinstance(it, ComponentItem):
-                it.comp.rotation = (it.comp.rotation + 90) % 360
+                it.comp.rotation = (it.comp.rotation + step) % 360
                 it.setRotation(it.comp.rotation)
+                self.refresh_label_sides([it])
                 self.update_wires(it.comp.id)
-                self.place_labels(it)
+        self.settle_labels()
         self.changed_system.emit()
 
     def rename(self, old: str, new: str) -> None:
@@ -275,6 +565,11 @@ class Scene(QGraphicsScene):
         sysm.connections[:] = [(fix(a), fix(b)) for a, b in sysm.connections]
         for s in sysm.sensors:
             s.at = fix(s.at)
+        routes = {}
+        for k, v in sysm.routes.items():
+            a, _, b = k.partition(" -- ")
+            routes[f"{fix(a)} -- {fix(b)}"] = v
+        sysm.routes = routes
         for w in self.wires:
             w.a, w.b = fix(w.a), fix(w.b)
         item = self.items_by_id.pop(old)
@@ -301,6 +596,7 @@ class Scene(QGraphicsScene):
             return
         if isinstance(item, PortItem) and e.button() == Qt.LeftButton:
             self._drag_from = item
+            self.refresh_ports()
             p = item.scenePos()
             self._drag_line = self.addLine(QLineF(p, p), QPen(WIRE_SELECTED, 2, Qt.DashLine))
             return
@@ -324,6 +620,7 @@ class Scene(QGraphicsScene):
                     target = it
                     break
             src, self._drag_from = self._drag_from, None
+            self.refresh_ports()
             if target is not None:
                 self.connect_ports(src.ref, target.ref)
             return
@@ -334,12 +631,18 @@ class Scene(QGraphicsScene):
             return
         self.system.connect(a, b)
         w = self._add_wire(a, b)
-        w.route(self._port_pos(a), self._port_pos(b))
+        self.refresh_label_sides([it for it in (self.items_by_id.get(a.split(".")[0]),
+                                                self.items_by_id.get(b.split(".")[0])) if it is not None])
+        self.route_wire(w)
+        self.settle_labels()
+        self.refresh_media()
         self.changed_system.emit()
 
     # ------------------------------------------------------------------ run mode
     def set_running(self, running: bool) -> None:
         self.running = running
+        self.refresh_ports()
+        self.refresh_media()
         for it in self.items_by_id.values():
             it.setFlag(QGraphicsItem.ItemIsMovable, not running)
             if not running:
@@ -348,6 +651,16 @@ class Scene(QGraphicsScene):
         if not running:
             for _name, value in self.labels.values():
                 value.setText("")
+            self.show_flows({})
+
+    def show_flows(self, flows: dict[int, int], dt: float = 0.0) -> None:
+        """``flows[wire index]`` = +1/-1/0; advances the moving squares by ``dt`` seconds."""
+        self.flow_phase = (self.flow_phase + dt * FLOW_SPEED * 6.0) % 6.0  # one dash period = 6 units
+        for k, w in enumerate(self.wires):
+            d = flows.get(k, 0)
+            if d or w.flow:
+                w.flow = d
+                w.update()
 
     def show_values(self, values: dict[str, tuple[str, dict]]) -> None:
         """``values[comp_id] = (text, state)``: label under the symbol and drawing state."""
@@ -389,7 +702,32 @@ class View(QGraphicsView):
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setAcceptDrops(True)
-        self.setBackgroundBrush(QBrush(QColor("#fbfcfd")))
+        self.setBackgroundBrush(QBrush(T.qc(T.BACKGROUND)))
+
+    def contextMenuEvent(self, e):
+        sc = self.scene()
+        if sc.running:
+            return
+        item = self.itemAt(e.pos())
+        if item is not None and item.parentItem() is not None:
+            item = item.parentItem()
+        menu = QMenu(self)
+        if isinstance(item, ComponentItem):
+            if not item.isSelected():
+                sc.clearSelection()
+                item.setSelected(True)
+            menu.addAction("Rotate clockwise\tR", lambda: sc.rotate_selected(90))
+            menu.addAction("Rotate counter-clockwise\tShift+R", lambda: sc.rotate_selected(-90))
+            menu.addAction("Rotate 180°", lambda: sc.rotate_selected(180))
+            menu.addSeparator()
+            menu.addAction("Delete\tDel", sc.delete_selected)
+        elif isinstance(item, WireItem):
+            a = menu.addAction("Reset route", lambda: sc.set_route(item, None))
+            a.setEnabled(item.key in sc.system.routes)
+            menu.addAction("Delete\tDel", lambda: (sc.clearSelection(), item.setSelected(True), sc.delete_selected()))
+        else:
+            return
+        menu.exec(e.globalPos())
 
     def wheelEvent(self, e):
         f = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
@@ -397,7 +735,7 @@ class View(QGraphicsView):
 
     def drawBackground(self, p: QPainter, rect: QRectF) -> None:
         super().drawBackground(p, rect)
-        p.setPen(QPen(QColor("#e8ecf0"), 0))
+        p.setPen(QPen(T.qc(T.GRAY_800), 0))
         step = GRID * 5
         x = int(rect.left() // step) * step
         while x < rect.right():

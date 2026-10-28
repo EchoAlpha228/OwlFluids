@@ -26,6 +26,7 @@ from .. import units
 from ..components import TYPES, get_type
 from ..fluids.registry import FLUIDS
 from ..io.system import Component, Sensor
+from . import theme as T
 
 UNIT_EXAMPLES = {"pressure": "300 psi", "temperature": "-196 C", "length": "0.5 in", "area": "0.1 in2",
                  "volume": "2 L", "time": "50 ms", "mass_flow": "1.2 kg/s"}
@@ -36,10 +37,31 @@ def _label(name: str) -> str:
 
 
 def _show_error(widget, message: str) -> None:
-    """Pink field plus the reason, shown right away rather than only in a tooltip."""
-    widget.setStyleSheet("background:#fde2e2")
+    """Red field plus the reason, shown right away rather than only in a tooltip."""
+    _set_error(widget, True)
     widget.setToolTip(message)
     QToolTip.showText(widget.mapToGlobal(widget.rect().bottomLeft()), message, widget)
+
+
+def _set_error(widget, on: bool) -> None:
+    widget.setProperty("error", on)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+def _heading(text: str) -> QLabel:
+    h = QLabel(text.upper())
+    h.setObjectName("heading")
+    return h
+
+
+def _fluid_heading(fluid: str | None) -> QLabel:
+    """A section heading for one fluid's valves, led by its material colour swatch."""
+    h = _heading(fluid or "Other")
+    if fluid is not None:
+        h.setText(f'<span style="color: {T.FLUID_COLOURS.get(fluid, T.GRAY_300)}">&#9632;</span>&nbsp;{fluid.upper()}')
+    h.setContentsMargins(0, 6, 0, 0)
+    return h
 
 
 FLUID_PARAMS = ("fluid", "liquid", "pressurant")
@@ -118,15 +140,17 @@ class Properties(QScrollArea):
             hint = QLabel("Select a component to edit it.\n\nDrag parts from the palette, then drag from one "
                           "port (circle) to another to connect them. R rotates, Delete removes.")
             hint.setWordWrap(True)
+            hint.setObjectName("hint")
             self._layout.addWidget(hint)
             return
         ct = get_type(comp.type)
-        title = QLabel(f"<b>{ct.label or ct.type_name}</b>")
+        title = QLabel(ct.label or ct.type_name)
+        title.setFont(T.ui_font(12, bold=True))
         self._layout.addWidget(title)
         if ct.help:
             about = QLabel(ct.help)
             about.setWordWrap(True)
-            about.setStyleSheet("color: grey")
+            about.setObjectName("hint")
             self._layout.addWidget(about)
         form_w = QWidget()
         form = QFormLayout(form_w)
@@ -137,12 +161,17 @@ class Properties(QScrollArea):
         for p in ct.params:
             form.addRow(_label(p.name), self._editor(p, comp, read_only))
         self._layout.addWidget(form_w)
-        self._layout.addWidget(QLabel("<b>Sensors</b>"))
+        self._layout.addWidget(_heading("Sensors"))
         for s in [s for s in system.sensors if s.at.split(".")[0] == comp.id]:
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
-            h.addWidget(QLabel(f"{s.id}: {s.type} at {s.at}" + (f" [{s.units}]" if s.units else "")))
+            sid = QLabel(s.id)
+            T.monospace(sid)
+            h.addWidget(sid)
+            what = QLabel(f"{_label(s.type)} at {s.at}" + (f" [{s.units}]" if s.units else ""))
+            what.setObjectName("hint")
+            h.addWidget(what, 1)
             if not read_only:
                 rm = QPushButton("remove")
                 rm.clicked.connect(lambda _=False, s=s: self._remove_sensor(s))
@@ -191,7 +220,7 @@ class Properties(QScrollArea):
             except (ValueError, TypeError) as e:
                 _show_error(ed, str(e))
                 return
-        ed.setStyleSheet("")
+        _set_error(ed, False)
         ed.setToolTip(ed.property("hint") or "")
         value: object = text
         try:
@@ -259,9 +288,11 @@ class ValveRow(QWidget):
     def __init__(self, name: str, manual: bool, panel: ValvePanel):
         super().__init__()
         self.name = name
+        self.manual = manual
         h = QHBoxLayout(self)
         h.setContentsMargins(2, 1, 2, 1)
         self.button = QPushButton(name)
+        T.monospace(self.button)
         self.button.setCheckable(True)
         self.button.setMinimumWidth(110)
         self.button.toggled.connect(lambda on: panel.commanded.emit(name, 1.0 if on else 0.0))
@@ -275,6 +306,7 @@ class ValveRow(QWidget):
             # every user change (drag, groove click, keys, wheel); set_values blocks its own updates
             self.slider.valueChanged.connect(lambda v: panel.commanded.emit(name, v / 100.0))
             h.addWidget(self.slider)
+        self._state = None
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(True)
@@ -283,11 +315,17 @@ class ValveRow(QWidget):
         h.addWidget(self.bar)
 
     def set_values(self, cmd: float, pos: float) -> None:
+        # open or closed, nothing between: a hand valve cracked off its seat is open
+        is_open = cmd > 0.001 if self.manual else cmd > 0.5
         self.button.blockSignals(True)
-        self.button.setChecked(cmd > 0.5)
+        self.button.setChecked(is_open)  # the button agrees with the colour
         self.button.blockSignals(False)
-        colour = "#3fae5a" if cmd > 0.5 else "#d64545"
-        self.button.setStyleSheet(f"QPushButton {{ background: {colour}; color: white; font-weight: bold; }}")
+        state = "open" if is_open else "closed"
+        if state != self._state:  # restyling is costly; only when the command flips
+            self._state = state
+            colour = T.VALVE_OPEN if is_open else T.VALVE_CLOSED
+            self.button.setStyleSheet(f"QPushButton {{ background: {colour}; color: {T.WHITE}; font-weight: bold;"
+                                      f" border: 1px solid {colour}; }}")
         if self.slider is not None and not self.slider.isSliderDown():
             self.slider.blockSignals(True)
             self.slider.setValue(int(round(cmd * 100)))
@@ -303,11 +341,11 @@ class RegulatorRow(QWidget):
         self.name = name
         h = QHBoxLayout(self)
         h.setContentsMargins(2, 1, 2, 1)
-        label = QLabel(name)
+        label = T.monospace(QLabel(name))
         label.setMinimumWidth(110)
         label.setToolTip("regulator: its setpoint is set from here only, never by Synnax")
         h.addWidget(label)
-        self.box = QDoubleSpinBox()
+        self.box = T.monospace(QDoubleSpinBox())
         self.box.setRange(0.0, 20000.0)
         self.box.setDecimals(1)
         self.box.setSingleStep(5.0)
@@ -341,20 +379,33 @@ class ValvePanel(QScrollArea):
         self.regulators: dict[str, RegulatorRow] = {}
         self.set_valves([], {})
 
-    def set_valves(self, names: list[str], manual: dict[str, bool], regulators: list[str] = ()) -> None:
+    def set_valves(self, names: list[str], manual: dict[str, bool], regulators: list[str] = (),
+                   fluids: dict[str, str | None] | None = None) -> None:
+        """One row per valve; with ``fluids`` (valve -> the fluid in its line) grouped under a heading per
+        fluid, once there is more than one."""
         body = QWidget()
         v = QVBoxLayout(body)
         v.setAlignment(Qt.AlignTop)
         self.rows = {}
         self.regulators = {}
         if not names and not regulators:
-            v.addWidget(QLabel("Valves appear here while the simulation runs."))
+            hint = QLabel("Valves appear here while the simulation runs.")
+            hint.setObjectName("hint")
+            v.addWidget(hint)
+        fluids = fluids or {}
+        groups: dict[str | None, list[str]] = {}
         for n in names:
-            row = ValveRow(n, manual.get(n, False), self)
-            self.rows[n] = row
-            v.addWidget(row)
+            groups.setdefault(fluids.get(n), []).append(n)
+        order = sorted(f for f in groups if f is not None) + ([None] if None in groups else [])
+        for f in order:
+            if len(groups) > 1:
+                v.addWidget(_fluid_heading(f))
+            for n in groups[f]:
+                row = ValveRow(n, manual.get(n, False), self)
+                self.rows[n] = row
+                v.addWidget(row)
         if regulators:
-            v.addWidget(QLabel("Regulators"))
+            v.addWidget(_heading("Regulators"))
         for n in regulators:
             row = RegulatorRow(n, self)
             self.regulators[n] = row
