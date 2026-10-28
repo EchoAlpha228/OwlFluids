@@ -98,8 +98,9 @@ def _orthogonal(pts: list[Point]) -> bool:
 def auto_route(pa: Point, da: Point, pb: Point, db: Point, obstacles: list[Rect]) -> list[Point]:
     """Best orthogonal route from port a (facing da) to port b (facing db), endpoints included.
 
-    The simple shapes come first; only when every one of them runs through a part are detours
-    tried, and then only around the parts they ran through.
+    The simple shapes come first; only when every one of them runs through a part are the
+    detours around each part tried. cost() gives up on a detour as soon as it is worse than the
+    best so far, so most are dropped after adding up their length.
     """
     sa = (pa[0] + da[0] * STUB, pa[1] + da[1] * STUB)
     sb = (pb[0] + db[0] * STUB, pb[1] + db[1] * STUB)
@@ -125,11 +126,8 @@ def auto_route(pa: Point, da: Point, pb: Point, db: Point, obstacles: list[Rect]
         consider(mid)
     if best is not None and best_cost < HIT_COST:
         return best
-    # every simple shape runs through a part: detour around the edges of the parts they hit
-    in_way = {r for mid in simple for r in obstacles
-              for i, (a, b) in enumerate(segments(simplify([pa, sa, *mid, sb, pb])))
-              if hits(a, b, r) and not (_inside(pa, r) or _inside(pb, r))}
-    for left, top, right, bottom in in_way:
+    # every simple shape runs through a part: detour around the edges of the parts
+    for left, top, right, bottom in obstacles:
         for x in (left - STUB, right + STUB):
             consider([(x, sa[1]), (x, sb[1])])
         for y in (top - STUB, bottom + STUB):

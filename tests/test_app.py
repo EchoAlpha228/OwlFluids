@@ -132,3 +132,22 @@ def test_recent_files_and_last_folder(tmp_path):
     files[3].unlink()  # a deleted file drops out of the list
     assert str(files[3].resolve()) not in prefs.recent()
     assert prefs.last_dir() == str(tmp_path.resolve())
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("example, a, b", [
+    ("test-stand", "V-OXM.in", "TEE-OXD.a"),
+    ("test-stand", "V-FUM.in", "TEE-FUD.a"),
+    ("lox-purge", "V-PG.out", "CK-PG.in"),
+])
+def test_wires_route_around_parts(app, example, a, b):
+    """Lines whose simple shapes all run through a part (here the wire's own valve) take a clear detour."""
+    from owlfluids.app import routing
+
+    w = MainWindow()
+    w.load_example(example)
+    sc = w.scene
+    wire = next(x for x in sc.wires if {x.a, x.b} == {a, b})
+    obstacles = [it.obstacle() for it in sc.items_by_id.values()]
+    assert routing.cost(wire.points, obstacles) < routing.HIT_COST
+    w.close()
