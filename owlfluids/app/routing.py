@@ -69,47 +69,71 @@ def _inside(p: Point, r: Rect) -> bool:
     return r[0] - CLEARANCE <= p[0] <= r[2] + CLEARANCE and r[1] - CLEARANCE <= p[1] <= r[3] + CLEARANCE
 
 
-def cost(points: list[Point], obstacles: list[Rect]) -> float:
-    length = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in segments(points))
+def cost(points: list[Point], obstacles: list[Rect], bound: float = float("inf")) -> float:
+    """Length plus penalties for bends, reversals and parts run through. Stops counting (and returns
+    something at least ``bound``) once the total passes ``bound``, the best route found so far."""
+    segs = list(segments(points))
+    length = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in segs)
     bends = max(len(points) - 2, 0)
-    reversals = sum(1 for (a, b), (_, c) in zip(segments(points), list(segments(points))[1:], strict=False)
+    reversals = sum(1 for (a, b), (_, c) in zip(segs, segs[1:], strict=False)
                     if (b[0] - a[0]) * (c[0] - b[0]) < 0 or (b[1] - a[1]) * (c[1] - b[1]) < 0)
-    last = len(points) - 2
-    n_hits = 0
-    for i, (a, b) in enumerate(segments(points)):
+    total = length + BEND_COST * bends + REVERSAL_COST * reversals
+    last = len(segs) - 1
+    for i, (a, b) in enumerate(segs):
         for r in obstacles:
+            if total >= bound:
+                return total
             # a wire's first and last runs leave the part they connect to; that part doesn't count
             if (i == 0 and _inside(points[0], r)) or (i == last and _inside(points[-1], r)):
                 continue
-            n_hits += hits(a, b, r)
-    return length + BEND_COST * bends + REVERSAL_COST * reversals + HIT_COST * n_hits
+            if hits(a, b, r):
+                total += HIT_COST
+    return total
+
+
+def _orthogonal(pts: list[Point]) -> bool:
+    return all(abs(a[0] - b[0]) < 1e-6 or abs(a[1] - b[1]) < 1e-6 for a, b in segments(pts))
 
 
 def auto_route(pa: Point, da: Point, pb: Point, db: Point, obstacles: list[Rect]) -> list[Point]:
-    """Best orthogonal route from port a (facing da) to port b (facing db), endpoints included."""
+    """Best orthogonal route from port a (facing da) to port b (facing db), endpoints included.
+
+    The simple shapes come first; only when every one of them runs through a part are detours
+    tried, and then only around the parts they ran through.
+    """
     sa = (pa[0] + da[0] * STUB, pa[1] + da[1] * STUB)
     sb = (pb[0] + db[0] * STUB, pb[1] + db[1] * STUB)
     mx, my = (sa[0] + sb[0]) / 2, (sa[1] + sb[1]) / 2
-    middles = [  # on a tie the earlier wins: a jog halfway reads better than one at a port
+    simple = [  # on a tie the earlier wins: a jog halfway reads better than one at a port
         [(mx, sa[1]), (mx, sb[1])],
         [(sa[0], my), (sb[0], my)],
         [(sb[0], sa[1])],  # across then down
         [(sa[0], sb[1])],  # down then across
     ]
-    # detours around the obstacles' edges, for when every simple shape runs through a part
-    for left, top, right, bottom in obstacles:
-        for x in (left - STUB, right + STUB):
-            middles.append([(x, sa[1]), (x, sb[1])])
-        for y in (top - STUB, bottom + STUB):
-            middles.append([(sa[0], y), (sb[0], y)])
     best, best_cost = None, float("inf")
-    for mid in middles:
+
+    def consider(mid) -> None:
+        nonlocal best, best_cost
         pts = simplify([pa, sa, *mid, sb, pb])
-        if any(abs(a[0] - b[0]) > 1e-6 and abs(a[1] - b[1]) > 1e-6 for a, b in segments(pts)):
-            continue  # not orthogonal
-        c = cost(pts, obstacles)
+        if not _orthogonal(pts):
+            return
+        c = cost(pts, obstacles, best_cost)
         if c < best_cost:
             best, best_cost = pts, c
+
+    for mid in simple:
+        consider(mid)
+    if best is not None and best_cost < HIT_COST:
+        return best
+    # every simple shape runs through a part: detour around the edges of the parts they hit
+    in_way = {r for mid in simple for r in obstacles
+              for i, (a, b) in enumerate(segments(simplify([pa, sa, *mid, sb, pb])))
+              if hits(a, b, r) and not (_inside(pa, r) or _inside(pb, r))}
+    for left, top, right, bottom in in_way:
+        for x in (left - STUB, right + STUB):
+            consider([(x, sa[1]), (x, sb[1])])
+        for y in (top - STUB, bottom + STUB):
+            consider([(sa[0], y), (sb[0], y)])
     if best is None:  # direct ports that face each other on one line
         best = simplify([pa, sa, (sb[0], sa[1]), sb, pb])
     return best
