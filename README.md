@@ -149,6 +149,24 @@ Without a `pneumatic_supply` in the system valves move on command alone.
 `owlfluids bench --pneumatic` times the test stand with its valves on a GN2 supply.
 `owlfluids app` shows every parameter with its default and meaning.
 
+Regulators have four behaviors, each switched with an `_on` parameter (`on`/`off`) and
+sized by the parameter of the same name:
+
+| Behavior | Default | What it does |
+| --- | --- | --- |
+| `droop` (`20 psi`) | on | The outlet falls as the flow rises, by `droop` at full opening. Off, the outlet settles back at the setpoint at any flow within a fraction of a second. |
+| `lockup` (`5 psi`) | off | As the flow stops, the outlet climbs up to `lockup` above the setpoint before the seat seals. |
+| `creep` (`5e-5`) | off | A worn seat leaks this share of the flow area, so a dead-ended outlet slowly rises toward the inlet pressure (about 4 psi a minute into 1 L for a Cv 0.1 regulator off a 3000 psi bottle). |
+| `supply_effect` (`0.01`) | off | The outlet rises by this much per unit fall of inlet pressure (0.01: 1 psi per 100 psi), counted from the inlet pressure when the setpoint was last set, so it shows as a bottle blows down. |
+
+```yaml
+- {id: REG, type: regulator, cv: 0.2, setpoint: 500 psig, lockup_on: on, creep_on: on, creep: 1e-4}
+```
+
+During a run they can be switched from a script (`sim.set_regulator_behavior("REG", "creep", True)`,
+`sim.regulator_behaviors("REG")`) or the console (`reg REG creep on`), for example to
+fail a regulator seat partway through a test. Synnax never switches them.
+
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
 `valve_position`, `mass`, `level` (a tank's liquid fill, shown in %),
 `purge_fraction` (share of a node's volume that is purge gas, in %; in LOX, nitrous,

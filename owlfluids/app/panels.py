@@ -153,6 +153,8 @@ class Properties(QScrollArea):
 
     def _editor(self, p, comp, read_only):
         cur = comp.params.get(p.name)
+        if isinstance(cur, bool) and p.choices == ("on", "off"):
+            cur = "on" if cur else "off"  # YAML reads a bare on/off as a bool
         if p.name in FLUID_PARAMS or p.choices:
             box = QComboBox()
             box.setEditable(p.name in FLUID_PARAMS)

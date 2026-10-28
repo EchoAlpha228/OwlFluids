@@ -43,6 +43,7 @@ class Frame:
     valves: dict[str, float]  # actual positions 0-1
     commands: dict[str, float]  # commanded positions 0-1
     setpoints: dict[str, float] = field(default_factory=dict)  # regulator setpoints, Pa absolute
+    behaviors: dict[str, dict[str, bool]] = field(default_factory=dict)  # regulator -> behavior -> on
     lag: float = 0.0  # how far simulated time trails the wall clock, s
     load: float = 0.0  # share of wall time spent computing (recent average)
     stats: dict = field(default_factory=dict)
@@ -193,6 +194,12 @@ class Runner:
         units.parse(pressure, "pressure")
         self.submit(lambda sim: sim.set_setpoint(regulator, pressure))
 
+    def set_regulator_behavior(self, regulator: str, behavior: str, on: bool = True) -> None:
+        if behavior not in self.sim.regulator_behaviors(regulator):  # fail now, in the caller
+            raise KeyError(f"no regulator behavior {behavior!r}; behaviors: "
+                           f"{', '.join(self.sim.regulator_behaviors(regulator))}")
+        self.submit(lambda sim: sim.set_regulator_behavior(regulator, behavior, on))
+
     def set_boundary(self, comp: str, pressure=None, temperature=None) -> None:
         self.sim.boundary_state(comp, pressure, temperature)  # fail now, in the caller
         # omitted values are filled in on the runner thread, after any earlier change
@@ -304,7 +311,8 @@ class Runner:
         valves = {v: sim.valve_position(v) for v in sim.valves()}
         return Frame(t=sim.t, wall=wall, sensors=sim.sensors(), valves=valves,
                      commands={v: sim.valve_command(v) for v in sim.valves()},
-                     setpoints={r: sim.setpoint(r) for r in self._regulators}, lag=lag, load=load,
+                     setpoints={r: sim.setpoint(r) for r in self._regulators},
+                     behaviors={r: sim.regulator_behaviors(r) for r in self._regulators}, lag=lag, load=load,
                      stats=sim.solver_stats(), node_p=sim.nout[:, L.O_P].copy(),
                      node_t=sim.nout[:, L.O_T].copy(), node_x=sim.nout[:, L.O_X].copy(),
                      node_rho=sim.nout[:, L.O_RHO].copy(), node_m=sim.nout[:, L.O_M].copy(),

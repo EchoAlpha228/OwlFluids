@@ -38,17 +38,24 @@ CTRL_AIR = 6  # a pneumatic actuator's draw on its air supply (a); LF_CDA: pilot
 # pressures where the valve starts to stroke and is fully stroked
 
 # ---- link float columns
-LF_CDA, LF_P1, LF_P2 = range(3)
-N_LF = 3
+LF_CDA, LF_P1, LF_P2, LF_LOCK, LF_LEAK, LF_SPE, LF_PREF, LF_RESET = range(8)
+N_LF = 8
+# Regulator behaviors (0 = off): LF_LOCK the rise above setpoint where the seat seals at
+# zero flow (lockup), LF_LEAK the share of its flow area that leaks past the closed seat
+# (creep), LF_SPE the outlet rise per unit of inlet fall (supply pressure effect) from
+# LF_PREF, the inlet pressure when the setpoint was last set. LF_P2 is the droop band;
+# with droop off, LF_RESET (1/s) is the rate at which V_BIAS raises the setpoint to win
+# the droop back, so the outlet settles at the setpoint at any flow.
 
 # ---- valve actuator columns (runtime)
-V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE, V_AIR, V_TGT, V_VALVE, V_PACT, V_VOL, V_NO, V_Q, V_EXCH = range(12)
-N_V = 12
+V_POS, V_CMD, V_RATE_OPEN, V_RATE_CLOSE, V_AIR, V_TGT, V_VALVE, V_PACT, V_VOL, V_NO, V_Q, V_EXCH, V_BIAS = range(13)
+N_V = 13
 # V_AIR: a pneumatic valve's actuator link (-1 for none); V_TGT: the position its actuator
 # pressure drives it to. On an actuator link (CTRL_AIR): V_VALVE its valve link, V_PACT the
 # actuator pressure (absolute), V_VOL its volume, V_NO 1 when air strokes the valve closed
 # (normally open), V_Q its draw on the supply over the current step, V_EXCH its volume when
-# it exchanges air with the supply this step (else 0).
+# it exchanges air with the supply this step (else 0). On a regulator link, V_BIAS: the
+# pressure (Pa) its droop reset adds to the setpoint (0 with droop on).
 # V_AIR and V_VALVE hold link indices as integer-valued floats.
 
 # ---- link outputs

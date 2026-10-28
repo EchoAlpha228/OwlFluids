@@ -463,6 +463,22 @@ class ReliefValve(ComponentType):
                       p1=cls.require(comp, "set_pressure"), p2=max(cls.param(comp, "overpressure"), 100.0))
 
 
+def flag(raw) -> bool:
+    """An on/off parameter: on/off, yes/no, true/false or 1/0 (YAML reads a bare on/off as a bool)."""
+    if isinstance(raw, str):
+        word = raw.strip().lower()
+        if word in ("on", "yes", "true", "1"):
+            return True
+        if word in ("off", "no", "false", "0", ""):
+            return False
+        raise ValueError(f"expected on or off, not {raw!r}")
+    return bool(raw)
+
+
+ON_OFF = ("on", "off")
+DROOP_RESET = 5.0  # 1/s: how fast a regulator with its droop off wins the droop back
+
+
 class Regulator(ComponentType):
     type_name = "regulator"
     label = "Regulator"
@@ -471,14 +487,53 @@ class Regulator(ComponentType):
     params = AREA_PARAMS + (
         Param("setpoint", "pressure", None, "outlet pressure (absolute) where it closes"),
         Param("droop", "pressure", "20 psi", "outlet pressure drop below setpoint that opens it fully"),
+        Param("droop_on", "choice", "on", "droop: the outlet falls as the flow rises (off: the outlet "
+              "settles back at the setpoint at any flow within a fraction of a second)", ON_OFF),
+        Param("lockup", "pressure", "5 psi", "rise above setpoint where the seat seals at zero flow"),
+        Param("lockup_on", "choice", "off", "lockup: the outlet climbs above setpoint as the flow stops", ON_OFF),
+        Param("creep", None, 5e-5, "share of the flow area that leaks past the closed seat"),
+        Param("creep_on", "choice", "off", "creep: a worn seat leaks, so a dead-ended outlet slowly rises "
+              "toward the inlet pressure", ON_OFF),
+        Param("supply_effect", None, 0.01, "outlet rise per unit fall of inlet pressure (0.01 = 1 psi per 100 psi)"),
+        Param("supply_effect_on", "choice", "off", "supply pressure effect: the outlet rises as the supply "
+              "bottle blows down (from the inlet pressure when the setpoint was set)", ON_OFF),
     )
+    BEHAVIORS = ("droop", "lockup", "creep", "supply_effect")
     help = ("Pressure-reducing regulator: throttles to hold its outlet near the setpoint. The operator can turn "
-            "the setpoint during a run from the valve panel; automation cannot.")
+            "the setpoint during a run from the valve panel; automation cannot. Droop, lockup, creep and "
+            "supply pressure effect can each be turned on or off, here or during a run.")
+
+    @classmethod
+    def behaviors(cls, comp) -> dict[str, tuple[float, bool]]:
+        """Each behavior's size (SI) and whether it starts on."""
+        out = {}
+        for name in cls.BEHAVIORS:
+            size = float(cls.param(comp, name))
+            if size < 0.0 and name != "supply_effect":
+                raise ValueError(f"{comp.id}.{name} can't be negative")
+            try:
+                on = flag(cls.param(comp, name + "_on"))
+            except ValueError as e:
+                raise ValueError(f"{comp.id}.{name}_on: {e}") from None
+            out[name] = (size, on)
+        return out
+
+    @staticmethod
+    def columns(behaviors: dict[str, tuple[float, bool]]) -> tuple[float, float, float, float, float]:
+        """The kernel's droop band, lockup rise, seat leak, supply effect and droop reset rate."""
+        def size(name):
+            v, on = behaviors[name]
+            return v if on else 0.0
+        # with droop off the band stays (a tight one is too stiff for a real-time step) and a
+        # slow reset raises the setpoint until the outlet sits at it
+        reset = 0.0 if behaviors["droop"][1] else DROOP_RESET
+        return max(behaviors["droop"][0], 100.0), size("lockup"), min(size("creep"), 1.0), size("supply_effect"), reset
 
     @classmethod
     def build(cls, b, comp):
+        band, *reg = cls.columns(cls.behaviors(comp))
         b.add_orifice(comp, "", "in", "out", cda=_flow_area(cls, comp), ctrl=CTRL_REGULATOR,
-                      p1=cls.require(comp, "setpoint"), p2=max(cls.param(comp, "droop"), 100.0))
+                      p1=cls.require(comp, "setpoint"), p2=band, reg=tuple(reg))
 
 
 class AirPump(ComponentType):

@@ -44,6 +44,11 @@ class Simulation:
         self.dt = self.net.dt
         self.seed = int(system.setting("noise_seed") if seed is None else seed)
         self.realistic = str(system.setting("sensor_noise")).strip().lower() not in ("off", "false", "none", "0")
+        self._regs = {}  # regulator id -> (its link, each behavior's size and whether it starts on)
+        for c in system.components:
+            ct = get_type(c.type)
+            if ct.type_name == "regulator":
+                self._regs[c.id] = (self.net.comp_links[c.id][0], ct.behaviors(c))
         self._alloc()
         self.reset()
 
@@ -153,6 +158,9 @@ class Simulation:
         for st in self._sensors.values():
             st.value = st.held = self._raw(st)
             self._sample_noise(st)
+        self._reg_on = {r: {b: on for b, (_, on) in spec.items()} for r, (_, spec) in self._regs.items()}
+        for k, _ in self._regs.values():
+            self._inlet_reference(k)
 
     # ------------------------------------------------------------------ time
     def step(self, n: int = 1) -> None:
@@ -234,6 +242,37 @@ class Simulation:
         """Turn a regulator's knob: its new outlet setpoint (absolute; text with units, or Pa)."""
         k = self._regulator(regulator)
         self.LF[k, L.LF_P1] = max(units.parse(pressure, "pressure"), 0.0)
+        self._inlet_reference(k)
+
+    def regulator_behaviors(self, regulator: str) -> dict[str, bool]:
+        """Which of a regulator's droop, lockup, creep and supply_effect are on now."""
+        self._regulator(regulator)
+        return dict(self._reg_on[regulator])
+
+    def set_regulator_behavior(self, regulator: str, behavior: str, on: bool = True) -> None:
+        """Turn one of a regulator's behaviors on or off during a run (its size comes from the system file).
+
+        ``behavior``: droop (off: an ideal regulator), lockup (the outlet climbs above setpoint as the
+        flow stops), creep (a leaking seat lets a dead-ended outlet rise toward the inlet) or
+        supply_effect (the outlet rises as the inlet falls, from the inlet pressure now).
+        """
+        k = self._regulator(regulator)
+        spec = self._regs[regulator][1]
+        if behavior not in spec:
+            raise KeyError(f"no regulator behavior {behavior!r}; behaviors: {', '.join(spec)}")
+        on = bool(on)
+        if behavior == "supply_effect" and on and not self._reg_on[regulator][behavior]:
+            self._inlet_reference(k)  # it holds the setpoint now, and drifts as the inlet moves
+        if behavior == "droop" and on:
+            self.LV[k, L.V_BIAS] = 0.0  # the reset lets go: the droop is back at once
+        self._reg_on[regulator][behavior] = on
+        now = {b: (size, self._reg_on[regulator][b]) for b, (size, _) in spec.items()}
+        (self.LF[k, L.LF_P2], self.LF[k, L.LF_LOCK], self.LF[k, L.LF_LEAK], self.LF[k, L.LF_SPE],
+         self.LF[k, L.LF_RESET]) = get_type("regulator").columns(now)
+
+    def _inlet_reference(self, k: int) -> None:
+        """The supply pressure effect counts from the regulator's inlet pressure now."""
+        self.LF[k, L.LF_PREF] = self.nout[self.net.LI[k, L.L_A], L.O_P]
 
     def _regulator(self, regulator: str) -> int:
         links = self.net.comp_links.get(regulator, [])

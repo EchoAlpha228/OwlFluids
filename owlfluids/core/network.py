@@ -78,6 +78,7 @@ class _Link:
     draw_b: int = L.DRAW_MIX
     valve: tuple | None = None
     air: tuple | None = None  # pneumatic actuator: (its valve link, volume, normally open)
+    reg: tuple = (0.0, 0.0, 0.0, 0.0)  # regulator lockup rise, seat leak, supply effect, droop reset rate
 
 
 @dataclass
@@ -256,7 +257,7 @@ class NetworkBuilder:
         self.port_node(comp, port)
 
     def add_orifice(self, comp, suffix, port_a, port_b, cda, ctrl=L.CTRL_FIXED, p1=0.0, p2=1.0, valve=None,
-                    port_volume=None):
+                    port_volume=None, reg=(0.0, 0.0, 0.0, 0.0)):
         a = self.port_node(comp, port_a)
         b = self.port_node(comp, port_b)
         # Valves, fittings and orifices have internal cavities on each side of the
@@ -274,7 +275,7 @@ class NetworkBuilder:
             raise BuildError(f"both ports of {comp.id} are connected to the same point")
         lk = _Link(comp.id + (f".{suffix}" if suffix else ""), a, b, comp.id, cda=cda, ctrl=ctrl,
                    p1=p1, p2=p2, draw_a=self.port_draw(comp, port_a), draw_b=self.port_draw(comp, port_b),
-                   valve=valve)
+                   valve=valve, reg=reg)
         self.links.append(lk)
         idx = len(self.links) - 1
         self.comp_links[comp.id].append(idx)
@@ -653,7 +654,8 @@ class NetworkBuilder:
         LV = np.zeros((nl, L.N_V))
         for k, lk in enumerate(self.links):
             LI[k] = (lk.a, lk.b, lk.draw_a, lk.draw_b, lk.ctrl)
-            LF[k] = (lk.cda, lk.p1, lk.p2)
+            LF[k, :L.LF_PREF] = (lk.cda, lk.p1, lk.p2, *lk.reg[:3])
+            LF[k, L.LF_RESET] = lk.reg[3]
             LV[k, L.V_AIR] = -1.0
             if lk.valve:
                 start, r_open, r_close = lk.valve

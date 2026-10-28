@@ -66,8 +66,13 @@ from .layout import (
     L_DRAWA,
     L_DRAWB,
     LF_CDA,
+    LF_LEAK,
+    LF_LOCK,
     LF_P1,
     LF_P2,
+    LF_PREF,
+    LF_RESET,
+    LF_SPE,
     LO_MDOT,
     LO_OPEN,
     N_FLUID,
@@ -101,6 +106,7 @@ from .layout import (
     O_TW,
     O_X,
     V_AIR,
+    V_BIAS,
     V_CMD,
     V_EXCH,
     V_NO,
@@ -128,6 +134,7 @@ DP_AIR = 10.0  # Pa; a pneumatic actuator this close to its supply's pressure is
 EXCH = 0.1  # exchange stream at zero flow, as a share of the flow at the linear band's edge
 DP_LIN = 2000.0  # Pa; below this pressure difference flow is linear in dP (keeps the Jacobian finite)
 R_LIN = 1e-3  # gas pressure ratio band near 1 treated the same way
+LOCK_KNEE = 0.02  # regulator opening at its setpoint when it has a lockup rise above it
 
 MIX_ITER = 40  # most iterations of each solve in a mixed node's state
 
@@ -463,6 +470,16 @@ def _soft_unit(o):
 
 
 @inl
+def _reg_target(k, LF, pa):
+    """The outlet pressure a regulator holds at small flow, before any droop reset."""
+    sp = LF[k, LF_P1]
+    if LF[k, LF_SPE] != 0.0:
+        # unbalanced poppet: the outlet rises as the supply falls
+        sp += LF[k, LF_SPE] * (LF[k, LF_PREF] - pa)
+    return sp
+
+
+@inl
 def _opening(k, LI, LF, LV, pa, pb):
     c = LI[k, L_CTRL]
     if c == CTRL_VALVE or c == CTRL_PUMP:
@@ -472,7 +489,18 @@ def _opening(k, LI, LF, LV, pa, pb):
     if c == CTRL_REGULATOR:
         if pa <= pb:
             return 0.0
-        return _soft_unit((LF[k, LF_P1] - pb) / LF[k, LF_P2])
+        sp = _reg_target(k, LF, pa) + LV[k, V_BIAS]
+        o = _soft_unit((sp - pb) / LF[k, LF_P2])
+        lock = LF[k, LF_LOCK]
+        if lock > 0.0:
+            # the seat seals only at the lockup pressure: from there down to the setpoint
+            # the poppet cracks over the first LOCK_KNEE of its travel, so a trickle of
+            # flow holds the outlet above setpoint
+            o += (1.0 - o) * LOCK_KNEE * _soft_unit((sp + lock - pb) / lock)
+        leak = LF[k, LF_LEAK]
+        if leak > 0.0:
+            o = leak + (1.0 - leak) * o  # a worn seat leaks when closed: the outlet creeps up
+        return o
     return 1.0
 
 
@@ -1254,11 +1282,14 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
     hrow = 0
     held = False  # a step held its state: the scratch W is the rejected iterate's
     has_air = False
+    has_reset = False
     for k in range(nl):
         if LI[k, L_CTRL] == CTRL_AIR:
             has_air = True
+        if LI[k, L_CTRL] == CTRL_REGULATOR and LF[k, LF_RESET] > 0.0:
+            has_reset = True
     for s in range(n_steps):
-        if held and has_air:
+        if held and (has_air or has_reset):
             # the scratch holds the rejected iterate: actuators read their supply from the kept state
             _node_props(x, NI, NF, fl, W)
             held = False
@@ -1270,6 +1301,14 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
             for k in range(nl):
                 if LI[k, L_CTRL] == CTRL_AIR:
                     _actuate(k, dt, NI, NF, LI, LF, LV, W, fl)
+        if has_reset:
+            for k in range(nl):
+                if LI[k, L_CTRL] == CTRL_REGULATOR and LF[k, LF_RESET] > 0.0:
+                    # droop off: the setpoint rises until the outlet sits at it, between no
+                    # reset (at lockup) and the whole droop band (wide open)
+                    err = _reg_target(k, LF, W[LI[k, L_A], W_P]) - W[LI[k, L_B], W_P]
+                    bias = LV[k, V_BIAS] + dt * LF[k, LF_RESET] * err
+                    LV[k, V_BIAS] = min(max(bias, 0.0), LF[k, LF_P2])
         for k in range(nl):
             c = LI[k, L_CTRL]
             if c == CTRL_PUMP:
