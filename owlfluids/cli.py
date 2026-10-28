@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from . import units
+from .components.library import flag
 from .core.network import BuildError
 
 
@@ -134,6 +135,7 @@ def _start_driver(args, runner):
 CONSOLE_HELP = """commands:
   open V [V ...]      close V [V ...]      set V 0.4      (valve position 0-1)
   setpoint REG 300    setpoint REG "20 bar"                (regulator outlet setpoint; bare numbers are psig)
+  reg REG creep on    reg REG droop off                    (droop, lockup, creep, supply_effect: on or off)
   status              valves               rate 1|0.5|0 (0 = as fast as possible)
   pause  resume  reset  log FILE.csv|FILE.h5  stoplog   quit"""
 
@@ -192,6 +194,10 @@ def cmd_console(args) -> int:
                     except ValueError:
                         pass
                     runner.set_setpoint(rest[0], value)
+                elif cmd == "reg":
+                    if len(rest) < 3:
+                        raise IndexError
+                    runner.set_regulator_behavior(rest[0], rest[1], flag(rest[2]))
                 elif cmd in ("status", "s"):
                     print(_fmt(sim, runner.frame))
                     print(f"lag {runner.frame.lag * 1000:.1f} ms, load {runner.frame.load * 100:.0f}%, "
@@ -203,7 +209,8 @@ def cmd_console(args) -> int:
                         tag = "  (manual)" if v in manual else ""
                         print(f"  {v}: cmd {f.commands[v]:.2f} pos {f.valves[v]:.2f}{tag}")
                     for r, p in f.setpoints.items():
-                        print(f"  {r}: setpoint {units.convert(p, 'psig'):.1f} psig")
+                        on = [b for b, v in f.behaviors.get(r, {}).items() if v]
+                        print(f"  {r}: setpoint {units.convert(p, 'psig'):.1f} psig; {', '.join(on) or 'ideal'}")
                 elif cmd == "rate":
                     if not rest:
                         raise IndexError
