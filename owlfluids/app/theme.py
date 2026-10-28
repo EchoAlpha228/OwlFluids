@@ -119,7 +119,7 @@ QWidget {{ background: {BACKGROUND}; selection-background-color: {SELECTION}; se
 QMenuBar, QToolBar, QStatusBar {{ background: {GRAY_950}; border: none; }}
 QToolBar {{ padding: 3px; spacing: 2px; border-bottom: 1px solid {BORDER}; }}
 QStatusBar {{ border-top: 1px solid {BORDER}; }}
-QStatusBar QLabel {{ background: transparent; }}
+QLabel {{ background: transparent; }}
 QMenuBar::item {{ background: transparent; padding: 4px 9px; }}
 QMenuBar::item:selected, QMenu::item:selected {{ background: {GRAY_600}; }}
 QMenu {{ background: {PANEL}; border: 1px solid {BORDER}; padding: 4px; }}
