@@ -78,6 +78,7 @@ TRACES = [CYAN, GREEN, BLUE, MAGENTA, GRAY_050, DARK_CYAN, DARK_GREEN, DARK_BLUE
 
 UI_FONT = "Lato"
 MONO_FONT = "Roboto Mono"
+LABEL_FONT = "Barlow Semi Condensed SemiBold"  # free condensed stand-in for DIN: labels and navigation
 _FONTS = Path(__file__).with_name("fonts")
 
 
@@ -86,7 +87,7 @@ def qc(hex_colour: str) -> QColor:
 
 
 def load_fonts() -> None:
-    """Register the bundled Lato and Roboto Mono; Qt falls back to system fonts if they are missing."""
+    """Register the bundled fonts (Lato, Roboto Mono, Barlow Semi Condensed); Qt falls back to system fonts."""
     for f in sorted(_FONTS.glob("*.ttf")):
         QFontDatabase.addApplicationFont(str(f))
 
@@ -169,6 +170,7 @@ QToolTip {{ background: {GRAY_700}; color: {TEXT}; border: 1px solid {BORDER}; p
 QLabel#hint {{ color: {TEXT_DIM}; }}
 QLabel#heading {{ color: {TEXT_DIM}; font-weight: bold; letter-spacing: 1px; }}
 *[mono="true"] {{ font-family: "{MONO_FONT}"; }}
+QMenuBar, QToolButton, QDockWidget, QTabBar::tab, QLabel#heading {{ font-family: "{LABEL_FONT}"; font-size: 10pt; }}
 """
 
 

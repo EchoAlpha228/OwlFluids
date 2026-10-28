@@ -190,7 +190,7 @@ class MainWindow(QMainWindow):
         self.status_badge.setAlignment(Qt.AlignCenter)
         self.status_badge.setMinimumWidth(84)
         self._badge = None
-        self.status_time = QLabel("stopped")
+        self.status_time = QLabel("")
         T.monospace(self.status_time)
         self.status_perf = QLabel("")
         T.monospace(self.status_perf)
@@ -390,7 +390,7 @@ class MainWindow(QMainWindow):
         _token, res = self._build_result
         if isinstance(res, Exception):
             self._set_badge("stopped")
-            self.status_time.setText("stopped")
+            self.status_time.setText("")
             QMessageBox.critical(self, "Cannot run this system", str(res))
             return
         sim: Simulation = res
@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
         self.valves.set_valves([], {})
         self._set_running_ui(False)
         self._set_badge("stopped")
-        self.status_time.setText("stopped")
+        self.status_time.setText("")
 
     def reset(self) -> None:
         if self.runner is not None:

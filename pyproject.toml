@@ -37,6 +37,9 @@ version = { attr = "owlfluids.__version__" }
 [tool.setuptools.packages.find]
 include = ["owlfluids*"]
 
+[tool.setuptools.package-data]
+"owlfluids.app" = ["fonts/*"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
