@@ -39,7 +39,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "throttle_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
     "check_valve": ((50, 34), {"in": (-25, 0), "out": (25, 0)}),
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
-    "regulator": ((40, 56), {"in": (0, -28), "out": (20, 20)}),
+    "regulator": ((56, 50), {"in": (-28, 0), "out": (28, 0)}),
     "air_pump": ((44, 44), {"out": (22, -18)}),  # the tip of the discharge arrow
     "pneumatic_supply": ((24, 24), {"a": (-12, 0), "b": (12, 0), "c": (0, -12), "d": (0, 12)}),
 }
@@ -85,12 +85,12 @@ def _arrow_head(p: QPainter, tip: QPointF, direction: QPointF, size: float = 5.0
     p.restore()
 
 
-def _actuator(p: QPainter, h: float) -> None:
+def _actuator(p: QPainter, h: float, rotation: float = 0.0) -> None:
     """Pneumatic actuator: a square on the stem, with the amber A at its top right."""
     p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 12))
     p.setBrush(QBrush(METAL))
     p.drawRect(QRectF(-6, -h / 2, 12, 12))
-    _pneumatic_badge(p, QPointF(10, -h / 2 - 1))
+    _pneumatic_badge(p, QPointF(10, -h / 2 - 1), rotation)
 
 
 def _coil(p: QPainter, bottom: float) -> None:
@@ -104,16 +104,25 @@ def _coil(p: QPainter, bottom: float) -> None:
     p.drawPath(coil)
 
 
-def _pneumatic_badge(p: QPainter, centre: QPointF) -> None:
+def _upright_text(p: QPainter, r: QRectF, text: str, font, rotation: float) -> None:
+    """Text centred in ``r`` that stays upright however the symbol is turned."""
+    p.save()
+    p.translate(r.center())
+    p.rotate(-rotation)
+    p.setPen(QPen(T.qc(T.GRAY_950)))
+    p.setFont(font)
+    p.drawText(QRectF(-r.width() / 2, -r.height() / 2, r.width(), r.height()), Qt.AlignCenter, text)
+    p.restore()
+
+
+def _pneumatic_badge(p: QPainter, centre: QPointF, rotation: float = 0.0) -> None:
     """Amber disc lettered A beside the actuator: a pneumatically operated valve."""
     p.save()
     p.setPen(QPen(T.qc(T.DARK_AMBER), 0.8))
     p.setBrush(QBrush(T.qc(T.AMBER)))
     r = QRectF(centre.x() - 4.5, centre.y() - 4.5, 9, 9)
     p.drawEllipse(r)
-    p.setPen(QPen(T.qc(T.GRAY_950)))
-    p.setFont(T.ui_font(4.5, bold=True))
-    p.drawText(r, Qt.AlignCenter, "A")
+    _upright_text(p, r, "A", T.ui_font(4.5, bold=True), rotation)
     p.restore()
 
 
@@ -130,6 +139,7 @@ def _bowtie(p: QPainter, w: float, h: float, fill: QColor) -> None:
 def paint(p: QPainter, type_name: str, size, state: dict) -> None:
     """Draw one component centred on (0, 0). ``state`` carries live values when running."""
     w, h = size
+    rot = state.get("rotation", 0.0)
     p.setRenderHint(QPainter.Antialiasing)
     p.setPen(QPen(LINE, 1.6))
     p.setBrush(QBrush(METAL))
@@ -191,11 +201,11 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         if state.get("actuator") == "solenoid":  # solenoid: coil on the stem
             _coil(p, -10)
         else:  # pneumatic, normally open or closed: square actuator with the A
-            _actuator(p, h)
+            _actuator(p, h, rot)
     elif type_name == "throttle_valve":
         # throttle: pneumatic actuator, arrow across the body for a variable opening
         _body(p, w, state)
-        _actuator(p, h)
+        _actuator(p, h, rot)
         p.drawLine(QPointF(-14, 11), QPointF(12, -9))
         _arrow_head(p, QPointF(15, -11), QPointF(1.3, -1), 5)
     elif type_name == "check_valve":
@@ -215,24 +225,18 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
         p.drawPath(s_path)
     elif type_name == "regulator":
-        # pressure regulator, drawn upright: inlet on top through the adjusting knob, outlet line
-        # along the bottom, and a sensing line from the body to the outlet
-        hw = 9.0
-        top, bot = -16.0, 16.0
-        p.drawLine(QPointF(0, -h / 2), QPointF(0, -22))
-        p.drawLine(QPointF(-8, -22), QPointF(8, -22))
-        p.drawLine(QPointF(0, -22), QPointF(0, top))
-        p.setBrush(QBrush(valve_colour(state.get("position"))))
-        p.drawPolygon(QPolygonF([QPointF(-hw, top), QPointF(hw, top), QPointF(0, 0)]))
-        p.drawPolygon(QPolygonF([QPointF(-hw, bot), QPointF(hw, bot), QPointF(0, 0)]))
+        # pressure regulator, in line: adjusting knob on the stem, sensing line from the body
+        # around to the outlet
+        _body(p, w, state)
+        p.drawLine(QPointF(0, 0), QPointF(0, -h / 2 + 4))
+        p.drawLine(QPointF(-8, -h / 2 + 4), QPointF(8, -h / 2 + 4))
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-3, -3, 6, 6))
+        p.drawLine(QPointF(0, 0), QPointF(0, 16))
         p.setBrush(QBrush(METAL))
-        p.drawLine(QPointF(0, 0), QPointF(11, 0))
-        p.drawEllipse(QRectF(11, -3, 6, 6))
-        p.drawLine(QPointF(14, 3), QPointF(14, 20))
-        p.drawLine(QPointF(0, bot), QPointF(0, 20))
-        p.drawLine(QPointF(-10, 20), QPointF(w / 2, 20))
+        p.drawEllipse(QRectF(-3, 16, 6, 6))
+        p.drawLine(QPointF(3, 19), QPointF(w / 2 - 2, 19))
+        p.drawLine(QPointF(w / 2 - 2, 19), QPointF(w / 2 - 2, 0))
     elif type_name == "air_pump":
         # pump / compressor: casing on a base, intake arrow to the centre; the discharge arrow
         # along the top ends at the outlet port
@@ -251,9 +255,7 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.setPen(QPen(T.qc(T.DARK_AMBER), 1.2))
         p.setBrush(QBrush(T.qc(T.AMBER)))
         p.drawEllipse(QRectF(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4))
-        p.setPen(QPen(T.qc(T.GRAY_950)))
-        p.setFont(T.ui_font(9, bold=True))
-        p.drawText(QRectF(-w / 2, -h / 2, w, h), Qt.AlignCenter, "A")
+        _upright_text(p, QRectF(-w / 2, -h / 2, w, h), "A", T.ui_font(9, bold=True), rot)
     else:
         p.drawRoundedRect(QRectF(-w / 2, -h / 2, w, h), 6, 6)
 

@@ -140,7 +140,11 @@ class MainWindow(QMainWindow):
         m_file.addSeparator()
         act("Quit", self.close, QKeySequence.Quit, m_file)
 
-        self.a_rotate = act("Rotate", self.scene.rotate_selected, "R", m_edit)
+        tb.addSeparator()
+        self.a_rotate = act("↻ Rotate", lambda: self.scene.rotate_selected(90), "R", m_edit, True,
+                            "Rotate the selected parts clockwise")
+        self.a_rotate_back = act("↺ Rotate back", lambda: self.scene.rotate_selected(-90), "Shift+R", m_edit, True,
+                                 "Rotate the selected parts counter-clockwise")
         self.a_delete = act("Delete", self.scene.delete_selected, QKeySequence.Delete, m_edit)
         act("Settings…", self.edit_settings, "Ctrl+,", m_edit, tip="Time step, ambient and solver settings")
 
@@ -212,6 +216,7 @@ class MainWindow(QMainWindow):
         self.a_log.setEnabled(running)
         self.a_synnax.setEnabled(running)
         self.a_rotate.setEnabled(not running)
+        self.a_rotate_back.setEnabled(not running)
         self.a_delete.setEnabled(not running)
         self.palette.setEnabled(not running)
 

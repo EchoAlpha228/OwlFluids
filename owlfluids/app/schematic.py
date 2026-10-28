@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -17,12 +17,13 @@ from PySide6.QtWidgets import (
     QGraphicsPathItem,
     QGraphicsScene,
     QGraphicsView,
+    QMenu,
 )
 
 from ..components import get_type
 from ..fluids.registry import canonical
 from ..io.system import Component, System
-from . import symbols
+from . import routing, symbols
 from . import theme as T
 
 GRID = 10.0
@@ -59,6 +60,7 @@ class PortItem(QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setZValue(2)
         self.setToolTip(f"{parent.comp.id}.{name}")
+        self.setVisible(False)  # shown while editing, on the part under the mouse or selected
 
     @property
     def ref(self) -> str:
@@ -84,14 +86,32 @@ class ComponentItem(QGraphicsObject):
                       | QGraphicsItem.ItemSendsGeometryChanges)
         self.setRotation(comp.rotation)
         self.setZValue(1)
+        self.setAcceptHoverEvents(True)
         self.setToolTip(f"{comp.id} ({self.ctype.label or self.ctype.type_name})")
+
+    def hoverEnterEvent(self, e):
+        sc = self.scene()
+        if sc is not None:
+            sc.refresh_ports(self)
+
+    def hoverLeaveEvent(self, e):
+        sc = self.scene()
+        if sc is not None:
+            sc.refresh_ports(self, hovered=False)
+
+    def obstacle(self) -> routing.Rect:
+        """The symbol's footprint in the scene, which wires route around."""
+        w, h = self.size
+        r = self.mapRectToScene(QRectF(-w / 2, -h / 2, w, h))
+        return (r.left(), r.top(), r.right(), r.bottom())
 
     def boundingRect(self) -> QRectF:
         w, h = self.size
         return QRectF(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12)
 
     def paint(self, p: QPainter, option, widget=None) -> None:
-        symbols.paint(p, self.ctype.type_name, self.size, {**self._static_state(), **self.state})
+        symbols.paint(p, self.ctype.type_name, self.size,
+                      {**self._static_state(), **self.state, "rotation": self.rotation()})
         if self.isSelected():
             p.setPen(QPen(WIRE_SELECTED, 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
@@ -117,6 +137,10 @@ class ComponentItem(QGraphicsObject):
             if sc is not None:
                 sc.update_wires(self.comp.id)
                 sc.place_labels(self)
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            sc = self.scene()
+            if sc is not None:
+                sc.refresh_ports(self)
         return super().itemChange(change, value)
 
     def port_scene_pos(self, port: str) -> QPointF:
@@ -131,6 +155,9 @@ class WireItem(QGraphicsPathItem):
         super().__init__()
         self.a, self.b = a, b
         self.colour = WIRE
+        self.points: list[routing.Point] = []
+        self._shape = QPainterPath()
+        self._drag = None
         self.flow = 0  # +1 fluid moving from a to b, -1 from b to a, 0 still
         self.setPen(QPen(WIRE, 2))
         self.setFlags(QGraphicsItem.ItemIsSelectable)
@@ -141,16 +168,54 @@ class WireItem(QGraphicsPathItem):
         self.colour = colour or WIRE
         self.update()
 
-    def route(self, pa: QPointF, pb: QPointF) -> None:
-        path = QPainterPath(pa)
-        if abs(pa.y() - pb.y()) < 0.5 or abs(pa.x() - pb.x()) < 0.5:
-            path.lineTo(pb)
-        else:
-            mid = QPointF((pa.x() + pb.x()) / 2, pa.y())
-            path.lineTo(mid)
-            path.lineTo(QPointF(mid.x(), pb.y()))
-            path.lineTo(pb)
+    def set_points(self, points: list[routing.Point]) -> None:
+        self.points = points
+        path = QPainterPath(QPointF(*points[0]))
+        for pt in points[1:]:
+            path.lineTo(QPointF(*pt))
         self.setPath(path)
+        st = QPainterPathStroker()
+        st.setWidth(9)
+        self._shape = st.createStroke(path)
+
+    def shape(self) -> QPainterPath:
+        """Clickable along the line itself (not the area its bends enclose)."""
+        return self._shape
+
+    @property
+    def key(self) -> str:
+        return f"{self.a} -- {self.b}"
+
+    # dragging a segment sideways reshapes the route by hand; a double click hands it back
+    def mousePressEvent(self, e):
+        sc = self.scene()
+        if sc is None or sc.running or e.button() != Qt.LeftButton:
+            return super().mousePressEvent(e)
+        i = routing.segment_at(self.points, (e.scenePos().x(), e.scenePos().y()))
+        self._drag = (list(self.points), i) if i is not None else None
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if getattr(self, "_drag", None) is None:
+            return super().mouseMoveEvent(e)
+        start, i = self._drag
+        to = snap(e.scenePos())
+        pts, _ = routing.drag_segment(start, i, (to.x(), to.y()))
+        self.set_points(routing.simplify(pts))
+
+    def mouseReleaseEvent(self, e):
+        if getattr(self, "_drag", None) is not None:
+            start, _ = self._drag
+            self._drag = None
+            if self.points != start:
+                bends, horizontal = routing.to_bends(self.points)
+                self.scene().set_route(self, {"h": horizontal, "bends": [[x, y] for x, y in bends]})
+        super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        sc = self.scene()
+        if sc is not None and not sc.running:
+            sc.set_route(self, None)
 
     def paint(self, p, option, widget=None):
         self.setPen(QPen(WIRE_SELECTED if self.isSelected() else self.colour, 3 if self.isSelected() else 2))
@@ -231,11 +296,53 @@ class Scene(QGraphicsScene):
         return w
 
     def update_wires(self, comp_id: str | None = None) -> None:
-        for w in self.wires:
-            if comp_id is None or w.a.split(".")[0] == comp_id or w.b.split(".")[0] == comp_id:
-                pa, pb = self._port_pos(w.a), self._port_pos(w.b)
-                if pa is not None and pb is not None:
-                    w.route(pa, pb)
+        todo = [w for w in self.wires
+                if comp_id is None or w.a.split(".")[0] == comp_id or w.b.split(".")[0] == comp_id]
+        if not todo:
+            return
+        obstacles = {cid: it.obstacle() for cid, it in self.items_by_id.items()}
+        for w in todo:
+            self.route_wire(w, obstacles)
+
+    def route_wire(self, w: WireItem, obstacles: dict | None = None) -> None:
+        """Route one wire: by hand if the system stores a route for it, otherwise around the parts."""
+        ends = []
+        for ref in (w.a, w.b):
+            cid, _, port = ref.partition(".")
+            item = self.items_by_id.get(cid)
+            if item is None:
+                return
+            pt, c = item.port_scene_pos(port), item.scenePos()
+            ends.append(((pt.x(), pt.y()), routing.port_direction((c.x(), c.y()), (pt.x(), pt.y()))))
+        (pa, da), (pb, db) = ends
+        manual = self.system.routes.get(w.key)
+        if manual:
+            w.set_points(routing.manual_route(pa, pb, [tuple(b) for b in manual.get("bends", [])],
+                                              bool(manual.get("h", True))))
+            return
+        if obstacles is None:
+            obstacles = {cid: it.obstacle() for cid, it in self.items_by_id.items()}
+        w.set_points(routing.auto_route(pa, da, pb, db, list(obstacles.values())))
+
+    def set_route(self, w: WireItem, route: dict | None) -> None:
+        """Store a hand-made route for a wire, or drop it (None) to route it automatically again."""
+        if route is None:
+            if self.system.routes.pop(w.key, None) is None:
+                return
+        else:
+            self.system.routes[w.key] = route
+        self.route_wire(w)
+        self.changed_system.emit()
+
+    def refresh_ports(self, item=None, hovered: bool | None = None) -> None:
+        """Ports show only while editing: on the part under the mouse, selected parts, or all while wiring."""
+        items = [item] if item is not None else list(self.items_by_id.values())
+        for it in items:
+            under = it.isUnderMouse() if hovered is None or it is not item else hovered
+            show = not self.running and (self._drag_from is not None or under or it.isSelected())
+            for port in it.ports.values():
+                if port.isVisible() != show:
+                    port.setVisible(show)
 
     def _port_pos(self, ref: str) -> QPointF | None:
         cid, _, port = ref.partition(".")
@@ -282,6 +389,7 @@ class Scene(QGraphicsScene):
         self.changed_system.emit()
 
     def _remove_wire(self, w: WireItem) -> None:
+        self.system.routes.pop(w.key, None)
         if (w.a, w.b) in self.system.connections:
             self.system.connections.remove((w.a, w.b))
         elif (w.b, w.a) in self.system.connections:
@@ -289,12 +397,13 @@ class Scene(QGraphicsScene):
         self.wires.remove(w)
         self.removeItem(w)
 
-    def rotate_selected(self) -> None:
+    def rotate_selected(self, step: int = 90) -> None:
+        """Turn the selected parts by ``step`` degrees (clockwise positive)."""
         if self.running:
             return
         for it in self.selectedItems():
             if isinstance(it, ComponentItem):
-                it.comp.rotation = (it.comp.rotation + 90) % 360
+                it.comp.rotation = (it.comp.rotation + step) % 360
                 it.setRotation(it.comp.rotation)
                 self.update_wires(it.comp.id)
                 self.place_labels(it)
@@ -314,6 +423,11 @@ class Scene(QGraphicsScene):
         sysm.connections[:] = [(fix(a), fix(b)) for a, b in sysm.connections]
         for s in sysm.sensors:
             s.at = fix(s.at)
+        routes = {}
+        for k, v in sysm.routes.items():
+            a, _, b = k.partition(" -- ")
+            routes[f"{fix(a)} -- {fix(b)}"] = v
+        sysm.routes = routes
         for w in self.wires:
             w.a, w.b = fix(w.a), fix(w.b)
         item = self.items_by_id.pop(old)
@@ -340,6 +454,7 @@ class Scene(QGraphicsScene):
             return
         if isinstance(item, PortItem) and e.button() == Qt.LeftButton:
             self._drag_from = item
+            self.refresh_ports()
             p = item.scenePos()
             self._drag_line = self.addLine(QLineF(p, p), QPen(WIRE_SELECTED, 2, Qt.DashLine))
             return
@@ -363,6 +478,7 @@ class Scene(QGraphicsScene):
                     target = it
                     break
             src, self._drag_from = self._drag_from, None
+            self.refresh_ports()
             if target is not None:
                 self.connect_ports(src.ref, target.ref)
             return
@@ -373,12 +489,13 @@ class Scene(QGraphicsScene):
             return
         self.system.connect(a, b)
         w = self._add_wire(a, b)
-        w.route(self._port_pos(a), self._port_pos(b))
+        self.route_wire(w)
         self.changed_system.emit()
 
     # ------------------------------------------------------------------ run mode
     def set_running(self, running: bool) -> None:
         self.running = running
+        self.refresh_ports()
         for it in self.items_by_id.values():
             it.setFlag(QGraphicsItem.ItemIsMovable, not running)
             if not running:
@@ -439,6 +556,31 @@ class View(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setAcceptDrops(True)
         self.setBackgroundBrush(QBrush(T.qc(T.BACKGROUND)))
+
+    def contextMenuEvent(self, e):
+        sc = self.scene()
+        if sc.running:
+            return
+        item = self.itemAt(e.pos())
+        if item is not None and item.parentItem() is not None:
+            item = item.parentItem()
+        menu = QMenu(self)
+        if isinstance(item, ComponentItem):
+            if not item.isSelected():
+                sc.clearSelection()
+                item.setSelected(True)
+            menu.addAction("Rotate clockwise\tR", lambda: sc.rotate_selected(90))
+            menu.addAction("Rotate counter-clockwise\tShift+R", lambda: sc.rotate_selected(-90))
+            menu.addAction("Rotate 180°", lambda: sc.rotate_selected(180))
+            menu.addSeparator()
+            menu.addAction("Delete\tDel", sc.delete_selected)
+        elif isinstance(item, WireItem):
+            a = menu.addAction("Reset route", lambda: sc.set_route(item, None))
+            a.setEnabled(item.key in sc.system.routes)
+            menu.addAction("Delete\tDel", lambda: (sc.clearSelection(), item.setSelected(True), sc.delete_selected()))
+        else:
+            return
+        menu.exec(e.globalPos())
 
     def wheelEvent(self, e):
         f = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
