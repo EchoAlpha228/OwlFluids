@@ -36,9 +36,9 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
     "valve": ((56, 40), {"in": (-28, 0), "out": (28, 0)}),
     "manual_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
-    "check_valve": ((50, 34), {"in": (-25, 0), "out": (25, 0)}),
+    "check_valve": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),  # ports on the seats' line
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
-    "regulator": ((40, 50), {"in": (-20, 19), "out": (20, 19)}),  # ends of the line it stands on
+    "regulator": ((50, 40), {"in": (-25, 0), "out": (25, 0)}),
     "air_pump": ((44, 44), {"out": (22, -18)}),  # the tip of the discharge arrow
     "pneumatic_supply": ((30, 30), {"a": (-15, 0), "b": (15, 0), "c": (0, -15), "d": (0, 15)}),
 }
@@ -210,13 +210,19 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.setPen(QPen(LINE, 3))
         p.drawLine(QPointF(-10, top), QPointF(10, top))
     elif type_name == "check_valve":
-        # check valve: body with a bar across the outlet side (the seat) and a flow arrow above
-        _body(p, w, state)
-        p.setPen(QPen(LINE, 2.4))
-        p.drawLine(QPointF(4, -11), QPointF(4, 11))
+        # check valve as on the reference P&ID: two seats joined by the flapper (a diagonal from
+        # the top of the inlet seat to the foot of the outlet seat), and an arrow in the allowed
+        # flow direction, in to out. The flapper takes the open / closed colour.
+        sx, sh = 14.0, 9.0
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-sx, 0))
+        p.drawLine(QPointF(sx, 0), QPointF(w / 2, 0))
+        p.drawLine(QPointF(-sx, -sh), QPointF(-sx, sh))
+        p.drawLine(QPointF(sx, -sh), QPointF(sx, sh))
+        p.setPen(QPen(_state_colour(state, LINE), 2.4))
+        p.drawLine(QPointF(-sx, -sh), QPointF(sx, sh))
         p.setPen(QPen(LINE, 1.4))
-        p.drawLine(QPointF(-10, -h / 2 + 2), QPointF(6, -h / 2 + 2))
-        _arrow_head(p, QPointF(11, -h / 2 + 2), QPointF(1, 0), 5)
+        p.drawLine(QPointF(-7, -h / 2 + 3), QPointF(4, -h / 2 + 3))
+        _arrow_head(p, QPointF(9, -h / 2 + 3), QPointF(1, 0), 5)
     elif type_name == "relief_valve":
         # relief valve: body with an S across it
         _body(p, w, state)
@@ -226,23 +232,29 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
         p.drawPath(s_path)
     elif type_name == "regulator":
-        # pressure regulator as on the reference P&ID: the line runs along the bottom, the body
-        # stands on it with its adjusting handle on top, and a sensing line drops from the body
-        # to the line downstream
-        hw, top, bot, base = 8.0, -15.0, 15.0, 19.0
-        p.drawLine(QPointF(-w / 2, base), QPointF(w / 2, base))
-        p.drawLine(QPointF(0, bot), QPointF(0, base))
-        p.drawLine(QPointF(0, top), QPointF(0, -h / 2 + 3))
-        p.drawLine(QPointF(-7, -h / 2 + 3), QPointF(7, -h / 2 + 3))
+        # pressure regulator as on the reference NPR: an in-line body flanged at both ends with a
+        # filled dot at its centre; the sensing line rises from the dot and runs downstream
+        # through a small open circle to a bar across the outlet side. Turned to run the other
+        # way (180 or 270 degrees) it is mirrored rather than turned over, so the sensing line
+        # stays up (or right) and the bar always sits on the outlet side.
+        if rot % 360 in (180, 270):
+            p.scale(1, -1)
+        hw, hh, stem, bar = 12.0, 8.0, -11.0, 17.0
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-hw - 3, 0))
+        p.drawLine(QPointF(hw + 3, 0), QPointF(w / 2, 0))
         p.setBrush(QBrush(valve_colour(state.get("position"))))
-        p.drawPolygon(QPolygonF([QPointF(-hw, top), QPointF(hw, top), QPointF(0, 0)]))
-        p.drawPolygon(QPolygonF([QPointF(-hw, bot), QPointF(hw, bot), QPointF(0, 0)]))
+        p.drawPolygon(QPolygonF([QPointF(-hw, -hh), QPointF(0, 0), QPointF(-hw, hh)]))
+        p.drawPolygon(QPolygonF([QPointF(hw, -hh), QPointF(0, 0), QPointF(hw, hh)]))
+        for x in (-hw, -hw - 3, hw, hw + 3):  # flanges: a double line at each end
+            p.drawLine(QPointF(x, -hh), QPointF(x, hh))
+        p.drawLine(QPointF(0, 0), QPointF(0, stem))
+        p.drawLine(QPointF(0, stem), QPointF(4.5, stem))
+        p.drawLine(QPointF(10.5, stem), QPointF(bar, stem))
+        p.drawLine(QPointF(bar, stem - 6), QPointF(bar, hh + 4))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QRectF(4.5, stem - 3, 6, 6))
         p.setBrush(QBrush(LINE))
-        p.drawEllipse(QRectF(-2.5, -2.5, 5, 5))
-        p.drawLine(QPointF(2.5, 0), QPointF(10, 0))
-        p.setBrush(QBrush(T.qc(T.GRAY_900)))
-        p.drawEllipse(QRectF(10, -3, 6, 6))
-        p.drawLine(QPointF(13, 3), QPointF(13, base))
+        p.drawEllipse(QRectF(-3.5, -3.5, 7, 7))
     elif type_name == "air_pump":
         # pump / compressor: casing on a base, intake arrow to the centre; the discharge arrow
         # along the top ends at the outlet port

@@ -123,8 +123,10 @@ class ComponentItem(QGraphicsObject):
         return QRectF(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12)
 
     def paint(self, p: QPainter, option, widget=None) -> None:
+        p.save()  # a symbol may mirror itself to read the right way round
         symbols.paint(p, self.ctype.type_name, self.size,
                       {**self._static_state(), **self.state, "rotation": self.rotation()})
+        p.restore()
         if self.isSelected():
             p.setPen(QPen(WIRE_SELECTED, 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
