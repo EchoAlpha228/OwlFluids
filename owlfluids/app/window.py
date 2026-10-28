@@ -191,9 +191,9 @@ class MainWindow(QMainWindow):
         self.status_badge.setMinimumWidth(84)
         self._badge = None
         self.status_time = QLabel("stopped")
-        self.status_time.setFont(T.mono_font())
+        T.monospace(self.status_time)
         self.status_perf = QLabel("")
-        self.status_perf.setFont(T.mono_font())
+        T.monospace(self.status_perf)
         self.statusBar().addWidget(self.status_badge)
         self.statusBar().addWidget(self.status_time, 1)
         self.statusBar().addPermanentWidget(self.status_perf)

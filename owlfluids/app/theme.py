@@ -105,6 +105,12 @@ def mono_font(size: float = 9) -> QFont:
     return f
 
 
+def monospace(widget):
+    """Show a widget in Roboto Mono. The style sheet's font wins over setFont, so this goes through it."""
+    widget.setProperty("mono", True)
+    return widget
+
+
 STYLE_SHEET = f"""
 * {{ font-family: "{UI_FONT}"; font-size: 9pt; color: {TEXT}; }}
 QMainWindow, QDialog, QMessageBox {{ background: {BACKGROUND}; }}
@@ -162,6 +168,7 @@ QSplitter::handle, QMainWindow::separator {{ background: {BORDER}; width: 1px; h
 QToolTip {{ background: {GRAY_700}; color: {TEXT}; border: 1px solid {BORDER}; padding: 4px; }}
 QLabel#hint {{ color: {TEXT_DIM}; }}
 QLabel#heading {{ color: {TEXT_DIM}; font-weight: bold; letter-spacing: 1px; }}
+*[mono="true"] {{ font-family: "{MONO_FONT}"; }}
 """
 
 
