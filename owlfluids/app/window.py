@@ -69,12 +69,15 @@ class MainWindow(QMainWindow):
         self.properties = Properties()
         self.valves = ValvePanel()
         self.plots = PlotPanel()
-        self._dock("PARTS", self.palette, Qt.LeftDockWidgetArea)
+        parts = self._dock("PARTS", self.palette, Qt.LeftDockWidgetArea)
         self.side_tabs = QTabWidget()
         self.side_tabs.addTab(self.properties, "Properties")
         self.side_tabs.addTab(self.valves, "Valves")
-        self._dock("INSPECTOR", self.side_tabs, Qt.RightDockWidgetArea)
+        inspector = self._dock("INSPECTOR", self.side_tabs, Qt.RightDockWidgetArea)
         self.plot_dock = self._dock("PLOTS", self.plots, Qt.BottomDockWidgetArea)
+        self.resizeDocks([parts, inspector], [190, 340], Qt.Horizontal)  # the schematic gets the rest
+        # the schematic refits when the plots come and go, so the system stays in view
+        self.plot_dock.visibilityChanged.connect(lambda _on: QTimer.singleShot(0, self.view.fit))
 
         self._make_actions()
         self._make_status()
@@ -252,6 +255,7 @@ class MainWindow(QMainWindow):
         self.path = path
         self.scene.set_system(sysm)
         self.properties.show_component(None, sysm)
+        self.plot_dock.hide()  # nothing to plot while editing; the schematic gets the room (Run brings it back)
         self.dirty = False
         self._update_title()
         QTimer.singleShot(0, self.view.fit)
@@ -400,6 +404,9 @@ class MainWindow(QMainWindow):
         manual = {v: True for v in sim.manual_valves()}
         self.valves.set_valves(sim.valves(), manual, sim.regulators())
         self.plots.configure(sim.system, sim.valves())
+        if not self.plot_dock.isVisible():
+            self.plot_dock.show()
+            self.resizeDocks([self.plot_dock], [int(self.height() * 0.42)], Qt.Vertical)
         names = sim.net.fluids.names
         self._node_fluids = [names[k] if k >= 0 else None for k in sim.net.NI[:, L.N_FLUID]]
         self._fluid_colours = {}
