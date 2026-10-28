@@ -133,6 +133,7 @@ def _start_driver(args, runner):
 
 CONSOLE_HELP = """commands:
   open V [V ...]      close V [V ...]      set V 0.4      (valve position 0-1)
+  setpoint REG "300 psig"                                  (regulator outlet setpoint)
   status              valves               rate 1|0.5|0 (0 = as fast as possible)
   pause  resume  reset  log FILE.csv|FILE.h5  stoplog   quit"""
 
@@ -182,14 +183,22 @@ def cmd_console(args) -> int:
                     if len(rest) < 2:
                         raise IndexError
                     runner.command(rest[0], float(rest[1]))
+                elif cmd == "setpoint":
+                    if len(rest) < 2:
+                        raise IndexError
+                    runner.set_setpoint(rest[0], " ".join(rest[1:]))
                 elif cmd in ("status", "s"):
                     print(_fmt(sim, runner.frame))
                     print(f"lag {runner.frame.lag * 1000:.1f} ms, load {runner.frame.load * 100:.0f}%, "
                           f"slips {runner.slips}")
                 elif cmd == "valves":
                     f = runner.frame
+                    manual = set(sim.manual_valves())
                     for v in sim.valves():
-                        print(f"  {v}: cmd {f.commands[v]:.2f} pos {f.valves[v]:.2f}")
+                        tag = "  (manual)" if v in manual else ""
+                        print(f"  {v}: cmd {f.commands[v]:.2f} pos {f.valves[v]:.2f}{tag}")
+                    for r, p in f.setpoints.items():
+                        print(f"  {r}: setpoint {units.convert(p, 'psig'):.1f} psig")
                 elif cmd == "rate":
                     if not rest:
                         raise IndexError

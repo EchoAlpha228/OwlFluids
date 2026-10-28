@@ -208,7 +208,7 @@ class Scene(QGraphicsScene):
         ct = get_type(type_name)
         prefix = {"valve": "V", "tank": "K", "pressurized_tank": "TK", "boundary": "ATM",
                   "orifice": "O", "fitting": "F", "tee": "T", "check_valve": "CV", "relief_valve": "RV",
-                  "regulator": "REG", "volume": "VOL", "throttle_valve": "TV"}.get(type_name, type_name.upper())
+                  "regulator": "REG", "volume": "VOL", "manual_valve": "MV"}.get(type_name, type_name.upper())
         n = 1
         while any(c.id == f"{prefix}{n}" for c in self.system.components):
             n += 1
@@ -374,7 +374,7 @@ NEW_DEFAULTS = {
     "fitting": {"kind": "elbow90", "diameter": "10 mm"},
     "orifice": {"cda": "10 mm2"},
     "valve": {"cv": 0.5},
-    "throttle_valve": {"cv": 0.5},
+    "manual_valve": {"cv": 0.5},
     "check_valve": {"cv": 0.5},
     "relief_valve": {"cv": 0.3, "set_pressure": "500 psi"},
     "regulator": {"cv": 0.3, "setpoint": "300 psi"},

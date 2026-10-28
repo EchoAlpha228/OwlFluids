@@ -7,7 +7,8 @@ synnax:
   password: seldon
   secure: false
   # hootl: no hardware. Reads each valve's cmd channel and fakes its state channel
-  #        (1/0, or the position for throttle valves) so valves work in Synnax.
+  #        (1/0) so valves work in Synnax. Manual valves and regulators get no
+  #        channels: only the operator works them, from the OwlFluids window.
   # hitl:  real valves. Reads each valve's state channel from the hardware and
   #        never writes it; only sensors are faked.
   # `--synnax-mode hitl` on the command line overrides this.

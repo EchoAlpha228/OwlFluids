@@ -6,6 +6,7 @@ from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -253,7 +254,7 @@ class Properties(QScrollArea):
 
 
 class ValveRow(QWidget):
-    def __init__(self, name: str, throttle: bool, panel: ValvePanel):
+    def __init__(self, name: str, manual: bool, panel: ValvePanel):
         super().__init__()
         self.name = name
         h = QHBoxLayout(self)
@@ -264,7 +265,8 @@ class ValveRow(QWidget):
         self.button.toggled.connect(lambda on: panel.commanded.emit(name, 1.0 if on else 0.0))
         h.addWidget(self.button)
         self.slider = None
-        if throttle:
+        if manual:  # a hand valve can be cracked to any opening
+            self.button.setToolTip("manual valve: worked from here only, never by Synnax")
             self.slider = QSlider(Qt.Horizontal)
             self.slider.setRange(0, 100)
             self.slider.setMaximumWidth(90)
@@ -291,30 +293,72 @@ class ValveRow(QWidget):
         self.bar.setValue(int(round(pos * 100)))
 
 
+class RegulatorRow(QWidget):
+    """A regulator's knob: its outlet setpoint in psig, applied when the operator finishes typing or steps it."""
+
+    def __init__(self, name: str, panel: ValvePanel):
+        super().__init__()
+        self.name = name
+        h = QHBoxLayout(self)
+        h.setContentsMargins(2, 1, 2, 1)
+        label = QLabel(name)
+        label.setMinimumWidth(110)
+        label.setToolTip("regulator: its setpoint is set from here only, never by Synnax")
+        h.addWidget(label)
+        self.box = QDoubleSpinBox()
+        self.box.setRange(0.0, 20000.0)
+        self.box.setDecimals(1)
+        self.box.setSingleStep(5.0)
+        self.box.setSuffix(" psig")
+        self.box.setKeyboardTracking(False)  # one setpoint per edit, not one per keystroke
+        self.box.valueChanged.connect(lambda v: panel.setpoint_changed.emit(name, units.parse(f"{v} psig")))
+        h.addWidget(self.box)
+        h.addStretch(1)
+
+    def set_value(self, setpoint: float) -> None:
+        if self.box.hasFocus():
+            return  # don't fight the operator's typing
+        self.box.blockSignals(True)
+        self.box.setValue(units.convert(setpoint, "psig"))
+        self.box.blockSignals(False)
+
+
 class ValvePanel(QScrollArea):
-    """One button per commandable valve: click to toggle; throttles also get a slider."""
+    """One button per valve: click to toggle; manual valves also get a slider, regulators a setpoint box."""
 
     commanded = Signal(str, float)
+    setpoint_changed = Signal(str, float)  # regulator, Pa absolute
 
     def __init__(self):
         super().__init__()
         self.setWidgetResizable(True)
         self.rows: dict[str, ValveRow] = {}
+        self.regulators: dict[str, RegulatorRow] = {}
         self.set_valves([], {})
 
-    def set_valves(self, names: list[str], throttles: dict[str, bool]) -> None:
+    def set_valves(self, names: list[str], manual: dict[str, bool], regulators: list[str] = ()) -> None:
         body = QWidget()
         v = QVBoxLayout(body)
         v.setAlignment(Qt.AlignTop)
         self.rows = {}
-        if not names:
+        self.regulators = {}
+        if not names and not regulators:
             v.addWidget(QLabel("Valves appear here while the simulation runs."))
         for n in names:
-            row = ValveRow(n, throttles.get(n, False), self)
+            row = ValveRow(n, manual.get(n, False), self)
             self.rows[n] = row
+            v.addWidget(row)
+        if regulators:
+            v.addWidget(QLabel("Regulators"))
+        for n in regulators:
+            row = RegulatorRow(n, self)
+            self.regulators[n] = row
             v.addWidget(row)
         self.setWidget(body)
 
     def show_frame(self, frame) -> None:
         for n, row in self.rows.items():
             row.set_values(frame.commands.get(n, 0.0), frame.valves.get(n, 0.0))
+        for n, row in self.regulators.items():
+            if n in frame.setpoints:
+                row.set_value(frame.setpoints[n])
