@@ -31,7 +31,6 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "pressurized_tank": ((70, 120), {"gas": (0, -60), "liquid": (0, 60)}),
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
-    "pipe": ((100, 16), {"in": (-50, 0), "out": (50, 0)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),
     "fitting": ((40, 30), {"in": (-20, 0), "out": (20, 0)}),
     "orifice": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),
@@ -41,7 +40,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
     "regulator": ((56, 50), {"in": (-28, 0), "out": (28, 0)}),
     "air_pump": ((44, 44), {"out": (22, -18)}),  # the tip of the discharge arrow
-    "pneumatic_supply": ((24, 24), {"a": (-12, 0), "b": (12, 0), "c": (0, -12), "d": (0, 12)}),
+    "pneumatic_supply": ((30, 30), {"a": (-15, 0), "b": (15, 0), "c": (0, -15), "d": (0, 15)}),
 }
 DEFAULT_SHAPE = ((50, 40), {})
 
@@ -172,11 +171,6 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.setPen(QPen(LINE, 1.6))
     elif type_name == "volume":
         p.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
-    elif type_name == "pipe":
-        p.drawRect(QRectF(-w / 2, -h / 2, w, h))
-        if "pipe_colour" in state:
-            p.setBrush(QBrush(state["pipe_colour"]))
-            p.drawRect(QRectF(-w / 2, -h / 2, w, h))
     elif type_name == "tee":
         p.setBrush(QBrush(LINE))
         p.drawEllipse(QRectF(-5, -5, 10, 10))

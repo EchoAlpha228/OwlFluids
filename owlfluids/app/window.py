@@ -528,8 +528,12 @@ class MainWindow(QMainWindow):
         now = time.perf_counter()
         dt, self._last_tick = (0.0 if r.paused else now - self._last_tick), now
         mdot = f.link_mdot
-        self.scene.show_flows({k: (1 if sign * mdot[li] > 0 else -1) for k, li, sign in self._flow_wires
-                               if abs(mdot[li]) >= FLOW_ZERO}, dt)
+        flows = {}
+        for k, terms in self._flow_wires:
+            q = sum(sgn * mdot[li] for li, sgn in terms)
+            if abs(q) >= FLOW_ZERO:
+                flows[k] = 1 if q > 0 else -1
+        self.scene.show_flows(flows, dt)
         if self.plot_dock.isVisible():
             self.plots.update_from(r.history)
         st = f.stats
@@ -564,53 +568,43 @@ class MainWindow(QMainWindow):
                     colour = symbols.fluid_colour(self._node_fluids[i])
             w.set_colour(colour)
 
-    def _wire_links(self, sim: Simulation) -> list[tuple[int, int, float]]:
-        """For each wire that carries flow: (wire index, link, sign); flow a->b is sign * mdot[link].
+    def _wire_links(self, sim: Simulation) -> list[tuple[int, list[tuple[int, float]]]]:
+        """For each wire that carries flow: (wire index, [(link, sign), ...]); flow a->b is the sum of sign * mdot.
 
-        A wire joins two ports that share a node. Its flow is the flow of the nearest
-        flow element (valve, orifice, regulator...): at one of its ends, or reached
-        through pipes, which are nodes with no flow element of their own.
+        A wire joins two ports that share a node. Its flow is the flow of the flow element
+        (valve, orifice, regulator...) at one of its ends; between a volume (tank, manifold)
+        and a tee it is everything leaving the volume's node.
         """
         net = sim.net
-        by_port: dict[str, list[tuple[int, str]]] = {}
-        for k, w in enumerate(self.scene.wires):
-            by_port.setdefault(w.a, []).append((k, w.b))
-            by_port.setdefault(w.b, []).append((k, w.a))
+        n_links = net.LI.shape[0]
 
         def link_at(port: str):
             """The link of the component that owns ``port`` with an end on that port's node, and that end."""
             comp, node = port.split(".")[0], net.port_nodes.get(port)
             for k in net.comp_links.get(comp, []):
                 if net.LI[k, L.L_A] == node:
-                    return k, -1.0  # positive flow leaves this node through the component
+                    return [(k, -1.0)]  # positive flow leaves this node through the component
                 if net.LI[k, L.L_B] == node:
-                    return k, 1.0  # positive flow arrives here out of the component
+                    return [(k, 1.0)]  # positive flow arrives here out of the component
             return None
 
-        def trace(port: str, seen: set) -> tuple[int, float] | None:
-            """Flow out of ``port``'s component into its wire, as (link, sign)."""
-            found = link_at(port)
-            if found is not None:
-                return found
-            comp = port.split(".")[0]
-            ports = [q for q in net.port_nodes if q.split(".")[0] == comp and q != port]
-            if comp in seen or len(ports) != 1 or get_type(sim.system.component(comp).type).type_name != "pipe":
+        def out_of_volume(port: str):
+            """Everything leaving a volume's node, for a wire from the volume to a tee."""
+            comp, node = port.split(".")[0], net.port_nodes.get(port)
+            if node is None or not net.comp_nodes.get(comp) or get_type(sim.system.component(comp).type).merges_ports:
                 return None
-            seen.add(comp)
-            for _k, other in by_port.get(ports[0], []):
-                r = trace(other, seen)  # flow into the pipe at its other end = out of it at this one
-                if r is not None:
-                    return r
-            return None
+            terms = [(k, 1.0 if net.LI[k, L.L_A] == node else -1.0) for k in range(n_links)
+                     if node in (net.LI[k, L.L_A], net.LI[k, L.L_B])]
+            return terms or None
+
+        def flip(terms):
+            return None if terms is None else [(k, -sgn) for k, sgn in terms]
 
         out = []
         for k, w in enumerate(self.scene.wires):
-            r = trace(w.a, set())  # flow out of a's component = a -> b
-            if r is None:
-                r = trace(w.b, set())
-                r = None if r is None else (r[0], -r[1])
-            if r is not None:
-                out.append((k, r[0], r[1]))
+            terms = (link_at(w.a) or flip(link_at(w.b)) or out_of_volume(w.a) or flip(out_of_volume(w.b)))
+            if terms:
+                out.append((k, terms))
         return out
 
     def _component_values(self, sim: Simulation, f) -> dict:
@@ -632,11 +626,6 @@ class MainWindow(QMainWindow):
                     text = _flow_text(f.link_mdot[links[0]])
             elif ct.type_name == "boundary":
                 text = ""
-            elif ct.type_name == "pipe":
-                i = net.port_nodes.get(f"{c.id}.in")
-                if i is not None:
-                    text = f"{units.to_psi(f.node_p[i]):.0f} psi"
-                    state["pipe_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
             elif nodes:
                 i = nodes[0]
                 p = units.to_psi(f.node_p[i])

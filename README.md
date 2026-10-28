@@ -5,7 +5,7 @@ Build a system from tanks, tubing, fittings, valves, regulators and orifices, se
 starting conditions, and run it against the wall clock while you (or a sequence,
 or Synnax) open and close valves.
 
-- **Real time first.** An 81-component LOX/ethanol stand takes about 0.03–0.05 ms
+- **Real time first.** A 60-component LOX/ethanol stand takes about 0.03–0.05 ms
   per 1 ms step in steady operation and about 0.1 ms during valve transients and
   purges on a desktop CPU, and every step has a work budget, timed on your machine at start-up,
   so hard transients (LOX hitting a warm line) can't stall the clock. A slower CPU
@@ -58,9 +58,11 @@ The installed program runs sequence scripts (`owlfluids run --script`) with its
 bundled packages only. To `import owlfluids` from your own Python, use the
 development install below; both can be installed side by side.
 
-**Publishing a release:** bump `__version__` in `owlfluids/__init__.py`, merge,
-then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The
-Release workflow builds the installer on Windows and publishes it.
+**Publishing a release:** bump `__version__` in `owlfluids/__init__.py` and merge.
+Then run Actions > Release > Run workflow with *publish* ticked, which tags main
+as `v<__version__>`; pushing a matching tag (`git tag v0.2.0 && git push origin
+v0.2.0`) or publishing a GitHub release with a new tag works too. The Release
+workflow builds the installer on Windows and publishes it.
 `packaging\build.ps1` builds the same installer locally (needs Inno Setup 6).
 
 ### From source
@@ -95,7 +97,7 @@ under `settings:` in the system file).
 | `owlfluids run file.yaml --script seq.py --log run.csv` | Headless run of a sequence; `--rate 0` runs as fast as possible |
 | `owlfluids run file.yaml --synnax examples/synnax.yaml` | Run against Synnax (HOOTL, or `--synnax-mode hitl`) |
 | `owlfluids check file.yaml` | Build the network and print a summary (catches wiring mistakes) |
-| `owlfluids bench` | Time the 81-component example stand |
+| `owlfluids bench` | Time the 60-component example stand |
 | `owlfluids example NAME -o file.yaml` | Write one of the examples |
 | `owlfluids update` | Install a newer release (Windows installer; `--check` only reports) |
 
@@ -124,11 +126,24 @@ sensors:
 Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally with a
 `wall_mass` shell that stores heat),
 `pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`
-(also takes `wall_mass`, for example to chill down a cryogenic line), `pipe` (drawing
-only, see below), `tee`, `fitting`,
+(also takes `wall_mass`, for example to chill down a cryogenic line), `tee`, `fitting`,
 `orifice`, `valve`, `throttle_valve`, `check_valve`, `relief_valve`, `regulator`,
 `air_pump` (a compressor with a pressure switch: `flow`, `start_pressure`,
-`stop_pressure`; a `valve_position` sensor on it reads 1 while it runs).
+`stop_pressure`; a `valve_position` sensor on it reads 1 while it runs),
+`pneumatic_supply` (the "A" air or GN2 header pneumatic valves run on; feed it from an
+`air_pump` or a bottle through a regulator).
+
+On/off valves have `actuator: pneumatic` (the default) or `solenoid` (also the default
+for type `solenoid`). A pneumatic valve is spring return: it draws air from its supply
+(`air_supply`, by default the only `pneumatic_supply` in the system) while it is held
+away from its normal state, so a normally closed valve draws to open and a normally
+open one draws to close, and it vents to the atmosphere on the way back. The actuator
+fills through its pilot (`pilot_cv`) to `actuator_volume`, starts to move at
+`stroke_pressure` and is fully stroked at `full_stroke_pressure`, so a weak supply
+strokes it slowly, partway or not at all, and losing the supply springs it back.
+Without a `pneumatic_supply` in the system valves move on command alone.
+`examples/pneumatic-valves.yaml` shows a compressor running a fill and a vent valve;
+`owlfluids bench --pneumatic` times the test stand with its valves on a GN2 supply.
 `owlfluids app` shows every parameter with its default and meaning.
 
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
@@ -147,10 +162,13 @@ still line reads 0), and a level reading jitters as the level moves. Give a sens
 for a given `noise_seed` setting. It changes only what sensors read, never the
 simulation.
 
-Lines are not modelled. The valves, orifices, regulators and fittings are the
-restrictions that matter on a stand, so their Cv sets every flow; tubing adds no
-pressure drop, volume or inertia, and a `pipe` on the drawing just joins its two
-ends. Each point where components meet holds a small volume (`junction_volume`,
+Lines are not modelled and are not components: connect component ports directly
+(`[V1.out, INJ.in]`), and in the app a line is the wire between two ports. The
+valves, orifices, regulators and fittings are the restrictions that matter on a
+stand, so their Cv sets every flow; tubing adds no pressure drop, volume or
+inertia. A file from before October 2026 that still has `pipe` components loads
+with each one folded into a direct connection (with a warning; save it to keep the
+change), and a sensor on a pipe moves to a port at the same point. Each point where components meet holds a small volume (`junction_volume`,
 1 cc by default; valve and fitting bodies hold more, and a flashing liquid such as
 nitrous runs smoother with about 20 cc). To keep a line's volume or its steel (for
 a chilldown), draw it as a `volume`. Line friction is usually a few percent of a
@@ -258,7 +276,7 @@ equalization (mass and energy conserved), Torricelli drain, table accuracy again
 flow, a self-pressurizing LN2 dewar, nitrous blowdown, line chilldown, purges with
 every purge gas (mass conserved, LOX, water, ethanol and methane pushed out), the
 nitrous fill-purge-refill sequence, air pump switching, and the real-time gate on
-the 81-component stand, purges included.
+the 60-component stand, purges included.
 
 ## Limits worth knowing
 

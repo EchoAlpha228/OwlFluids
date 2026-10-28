@@ -10,11 +10,9 @@ def gn2_blowdown() -> System:
     s = System("GN2 bottle blowdown")
     s.add("K1", "tank", fluid="nitrogen", volume="49 L", pressure="2400 psi", temperature="20 C", at=[0, 0])
     s.add("V1", "valve", cv=0.3, open_time="50 ms", at=[150, 0])
-    s.add("L1", "pipe", at=[300, 0])
-    s.add("ATM", "boundary", fluid="nitrogen", at=[450, 0])
+    s.add("ATM", "boundary", fluid="nitrogen", at=[300, 0])
     s.connect("K1.port", "V1.in")
-    s.connect("V1.out", "L1.in")
-    s.connect("L1.out", "ATM.port")
+    s.connect("V1.out", "ATM.port")
     s.sense("PT-K1", "pressure", "K1.port", units="psi")
     s.sense("TC-K1", "temperature", "K1.port", units="F")
     s.sense("FM-V1", "mass_flow", "V1", units="kg/s")
@@ -28,16 +26,12 @@ def lox_feed() -> System:
     s.add("K-N2", "tank", fluid="nitrogen", volume="49 L", pressure="4000 psi", temperature="20 C", at=[0, -200])
     s.add("REG", "regulator", cv=0.4, setpoint="300 psi", droop="20 psi", at=[150, -200])
     s.add("V-P", "valve", cv=0.5, normally="open", at=[300, -200])
-    s.add("L-P", "pipe", at=[300, -100])
-    s.add("L1", "pipe", at=[0, 150])
     s.add("F1", "fitting", kind="elbow90", diameter="19 mm", at=[150, 150])
     s.add("V-M", "valve", cv=6, open_time="150 ms", at=[300, 150])
-    s.add("L2", "pipe", at=[450, 150])
     s.add("INJ", "orifice", cda="60 mm2", at=[600, 150])
     s.add("AMB", "boundary", fluid="oxygen", at=[750, 150])
-    for a, b in [("K-N2.port", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "L-P.in"), ("L-P.out", "TK.gas"),
-                 ("TK.liquid", "L1.in"), ("L1.out", "F1.in"), ("F1.out", "V-M.in"), ("V-M.out", "L2.in"),
-                 ("L2.out", "INJ.in"), ("INJ.out", "AMB.port")]:
+    for a, b in [("K-N2.port", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "TK.gas"), ("TK.liquid", "F1.in"),
+                 ("F1.out", "V-M.in"), ("V-M.out", "INJ.in"), ("INJ.out", "AMB.port")]:
         s.connect(a, b)
     s.sense("PT-TK", "pressure", "TK.gas", units="psi")
     s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
@@ -60,7 +54,7 @@ def lox_purge() -> System:
     s.add("V-PG", "valve", cv=0.2, open_time="50 ms", at=[600, 300])
     s.add("CK-PG", "check_valve", cv=0.2, at=[600, 230])
     for a, b in [("K-HE.port", "REG-PG.in"), ("REG-PG.out", "V-PG.in"), ("V-PG.out", "CK-PG.in"),
-                 ("CK-PG.out", "L2.in")]:
+                 ("CK-PG.out", "INJ.in")]:
         s.connect(a, b)
     s.sense("PT-PG", "pressure", "V-PG.out", units="psi")
     s.sense("FM-PG", "mass_flow", "CK-PG", units="kg/s")
@@ -84,7 +78,6 @@ def nitrous_fill() -> System:
           wall_material="aluminum", at=[0, 260])
     s.add("OFTV", "valve", cv=1.5, open_time="1 s", at=[0, 150])
     s.add("OFF", "orifice", cv=2.0, at=[60, 0])
-    s.add("L-OF1", "pipe", at=[200, 0])
     s.add("OFRV-1", "relief_valve", cv=0.3, set_pressure="1000 psi", at=[370, -80])
     s.add("ATM-1", "boundary", fluid="nitrous", at=[370, -160])
     s.add("OFV", "valve", cv=1.2, open_time="300 ms", at=[420, 0])
@@ -94,7 +87,6 @@ def nitrous_fill() -> System:
     s.add("OFRV-2", "relief_valve", cv=0.3, set_pressure="1000 psi", at=[650, -80])
     s.add("ATM-3", "boundary", fluid="nitrous", at=[650, -160])
     s.add("OFIF", "orifice", cv=2.0, at=[660, 0])
-    s.add("L-OF2", "pipe", at=[780, 0])
     s.add("OQD", "fitting", kind="quick_disconnect", diameter="0.43 in", at=[880, 0])
     s.add("RFCV", "check_valve", cv=1.2, at=[960, 0])  # the run tank's own fill check valve
     s.add("RT", "tank", fluid="nitrous", volume="15 L", pressure="1 atm", temperature="20 C", wall_mass="6 kg",
@@ -109,21 +101,20 @@ def nitrous_fill() -> System:
     s.add("APR", "regulator", cv=0.3, setpoint="90 psig", droop="10 psi", at=[350, 340])
     s.add("AIV", "valve", cv=0.5, normally="open", at=[400, 340])
     s.add("ACF", "orifice", cv=0.8, at=[450, 340])
-    s.add("L-A", "pipe", at=[470, 260])
     s.add("OPGS", "valve", cv=0.3, open_time="50 ms", at=[470, 180])
     s.add("OPGCV", "check_valve", cv=0.3, at=[470, 90])
-    for a, b in [("NOS.bottom", "OFTV.in"), ("OFTV.out", "OFF.in"), ("OFF.out", "L-OF1.in"),
-                 ("L-OF1.out", "OFV.in"), ("L-OF1.out", "OFRV-1.in"), ("OFRV-1.out", "ATM-1.port"),
+    for a, b in [("NOS.bottom", "OFTV.in"), ("OFTV.out", "OFF.in"), ("OFF.out", "OFV.in"),
+                 ("OFF.out", "OFRV-1.in"), ("OFRV-1.out", "ATM-1.port"),
                  ("OFV.out", "OFCV.in"), ("OFCV.out", "OFIF.in"), ("OFCV.out", "ODV.in"), ("ODV.out", "ATM-2.port"),
-                 ("OFCV.out", "OFRV-2.in"), ("OFRV-2.out", "ATM-3.port"), ("OFIF.out", "L-OF2.in"),
-                 ("L-OF2.out", "OQD.in"), ("OQD.out", "RFCV.in"), ("RFCV.out", "RT.bottom"), ("RT.top", "RTV.in"),
+                 ("OFCV.out", "OFRV-2.in"), ("OFRV-2.out", "ATM-3.port"), ("OFIF.out", "OQD.in"),
+                 ("OQD.out", "RFCV.in"), ("RFCV.out", "RT.bottom"), ("RT.top", "RTV.in"),
                  ("RTV.out", "ATM-4.port"),
                  ("AC.out", "AR.port"), ("AR.port", "APRV.in"), ("APRV.out", "ATM-A.port"), ("AR.port", "APR.in"),
-                 ("APR.out", "AIV.in"), ("AIV.out", "ACF.in"), ("ACF.out", "L-A.in"), ("L-A.out", "OPGS.in"),
+                 ("APR.out", "AIV.in"), ("AIV.out", "ACF.in"), ("ACF.out", "OPGS.in"),
                  ("OPGS.out", "OPGCV.in"), ("OPGCV.out", "OFV.out")]:
         s.connect(a, b)
-    s.sense("OFPT", "pressure", "L-OF1.out", units="psig")
-    s.sense("OFT", "temperature", "L-OF1.out", units="F")
+    s.sense("OFPT", "pressure", "OFV.in", units="psig")
+    s.sense("OFT", "temperature", "OFV.in", units="F")
     s.sense("OIPT", "pressure", "OFIF.out", units="psig")
     s.sense("APT", "pressure", "ACF.out", units="psig")
     s.sense("ART", "pressure", "AR.port", units="psig")
@@ -141,7 +132,6 @@ def ln2_wet_dress() -> System:
     s.add("K-N2", "tank", fluid="nitrogen", volume="49 L", pressure="3000 psi", temperature="20 C", at=[0, -220])
     s.add("REG", "regulator", cv=0.3, setpoint="250 psi", droop="20 psi", at=[150, -220])
     s.add("V-P", "valve", cv=0.3, at=[300, -220])
-    s.add("L-P", "pipe", at=[300, -120])
     s.add("TK", "pressurized_tank", liquid="nitrogen", pressurant="nitrogen", volume="100 L", fill=0.85,
           pressure="40 psi", liquid_temperature="78 K", diameter="0.4 m", at=[0, 0])
     s.add("V-V", "valve", cv=0.3, at=[150, -80])
@@ -154,8 +144,8 @@ def ln2_wet_dress() -> System:
     s.add("ATM-B", "boundary", fluid="nitrogen", at=[600, 260])
     s.add("INJ", "orifice", cda="25 mm2", at=[600, 160])
     s.add("ATM", "boundary", fluid="nitrogen", at=[750, 160])
-    for a, b in [("K-N2.port", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "L-P.in"), ("L-P.out", "TK.gas"),
-                 ("TK.gas", "V-V.in"), ("V-V.out", "ATM-V.port"), ("TK.liquid", "V-M.in"), ("V-M.out", "L-F.a"),
+    for a, b in [("K-N2.port", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "TK.gas"), ("TK.gas", "V-V.in"),
+                 ("V-V.out", "ATM-V.port"), ("TK.liquid", "V-M.in"), ("V-M.out", "L-F.a"),
                  ("L-F.b", "TEE.a"), ("TEE.b", "INJ.in"), ("INJ.out", "ATM.port"), ("TEE.d", "V-B.in"),
                  ("V-B.out", "ATM-B.port")]:
         s.connect(a, b)
@@ -188,6 +178,27 @@ def n2o_blowdown() -> System:
     return s
 
 
+def pneumatic_valves() -> System:
+    """A compressor-fed air supply running a normally closed fill valve and a normally open vent."""
+    s = System("Pneumatic valves")
+    s.add("C", "air_pump", flow="2 g/s", start_pressure="90 psig", stop_pressure="110 psig", at=[0, -150])
+    s.add("A", "pneumatic_supply", volume="2 L", fluid="air", pressure="105 psig", temperature="20 C",
+          at=[150, -150])
+    s.add("K", "tank", fluid="nitrogen", volume="49 L", pressure="2000 psi", temperature="20 C", at=[0, 0])
+    s.add("V-FILL", "valve", cv=0.3, at=[150, 0])
+    s.add("TK", "volume", volume="20 L", fluid="nitrogen", pressure="1 atm", temperature="20 C", at=[300, 0])
+    s.add("V-VENT", "valve", cv=0.3, normally="open", at=[450, 0])
+    s.add("ATM", "boundary", fluid="nitrogen", at=[600, 0])
+    for a, b in [("C.out", "A.a"), ("K.port", "V-FILL.in"), ("V-FILL.out", "TK.a"), ("TK.b", "V-VENT.in"),
+                 ("V-VENT.out", "ATM.port")]:
+        s.connect(a, b)
+    s.sense("PT-A", "pressure", "A.a", units="psig")
+    s.sense("PT-TK", "pressure", "TK.a", units="psi")
+    s.sense("ZS-FILL", "valve_position", "V-FILL")
+    s.sense("ZS-VENT", "valve_position", "V-VENT")
+    return s
+
+
 EXAMPLES = {
     "gn2-blowdown": gn2_blowdown,
     "lox-feed": lox_feed,
@@ -195,5 +206,6 @@ EXAMPLES = {
     "ln2-wet-dress": ln2_wet_dress,
     "n2o-blowdown": n2o_blowdown,
     "nitrous-fill": nitrous_fill,
+    "pneumatic-valves": pneumatic_valves,
     "test-stand": engine_test_stand,
 }

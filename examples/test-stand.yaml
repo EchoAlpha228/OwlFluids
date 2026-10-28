@@ -2,61 +2,44 @@ name: LOX/ethanol test stand
 components:
 - {id: GN2-K1, type: tank, fluid: nitrogen, volume: 49 L, pressure: 4500 psi, temperature: 20 C, at: [0.0, 0.0]}
 - {id: GN2-K2, type: tank, fluid: nitrogen, volume: 49 L, pressure: 4500 psi, temperature: 20 C, at: [0.0, 154.0]}
-- {id: L-K1, type: pipe, at: [150.0, 0.0]}
-- {id: L-K2, type: pipe, at: [150.0, 154.0]}
 - {id: V-K1, type: valve, cv: 0.6, normally: open, at: [300.0, 0.0]}
 - {id: V-K2, type: valve, cv: 0.6, normally: open, at: [300.0, 154.0]}
 - {id: MAN-HP, type: volume, volume: 0.2 L, at: [450.0, 77.0]}
 - {id: PT-HP-RV, type: relief_valve, cv: 0.2, set_pressure: 4800 psi, at: [450.0, -66.0]}
 - {id: ATM-HP, type: boundary, fluid: nitrogen, at: [600.0, -66.0]}
 - {id: TEE-HP, type: tee, at: [750.0, 77.0]}
-- {id: L-HP, type: pipe, at: [600.0, 77.0]}
 - {id: REG-OX, type: regulator, cv: 0.4, setpoint: 600 psi, droop: 30 psi, at: [900.0, -165.0]}
-- {id: L-OX1, type: pipe, at: [1050.0, -165.0]}
 - {id: V-OXP, type: valve, cv: 0.5, at: [1200.0, -165.0]}
 - {id: CV-OX, type: check_valve, cv: 0.5, at: [1350.0, -165.0]}
-- {id: L-OX2, type: pipe, at: [1500.0, -165.0]}
 - {id: F-OX1, type: fitting, kind: elbow90, diameter: 8 mm, at: [1650.0, -165.0]}
 - {id: REG-FU, type: regulator, cv: 0.4, setpoint: 650 psi, droop: 30 psi, at: [900.0, 385.0]}
-- {id: L-FU1, type: pipe, at: [1050.0, 385.0]}
 - {id: V-FUP, type: valve, cv: 0.5, at: [1200.0, 385.0]}
 - {id: CV-FU, type: check_valve, cv: 0.5, at: [1350.0, 385.0]}
-- {id: L-FU2, type: pipe, at: [1500.0, 385.0]}
 - {id: F-FU1, type: fitting, kind: elbow90, diameter: 8 mm, at: [1650.0, 385.0]}
 - {id: TK-OX, type: pressurized_tank, liquid: oxygen, pressurant: nitrogen, volume: 60 L, fill: 0.85, pressure: 80 psi, liquid_temperature: 90 K, diameter: 0.3 m, at: [1800.0, -22.0]}
 - {id: TEE-OXU, type: tee, at: [1800.0, -165.0]}
 - {id: V-OXV, type: valve, cv: 0.8, normally: open, at: [1950.0, -165.0]}
-- {id: L-OXV, type: pipe, at: [2100.0, -165.0]}
 - {id: ATM-OX, type: boundary, fluid: nitrogen, at: [2250.0, -165.0]}
 - {id: RV-OX, type: relief_valve, cv: 0.5, set_pressure: 750 psi, at: [1800.0, -264.0]}
 - {id: ATM-OXR, type: boundary, fluid: nitrogen, at: [1950.0, -264.0]}
-- {id: L-OXF1, type: pipe, at: [1950.0, 88.0]}
 - {id: F-OXF1, type: fitting, kind: elbow90, diameter: 19 mm, at: [2100.0, 88.0]}
 - {id: V-OXM, type: valve, cv: 6.0, open_time: 150 ms, at: [2400.0, 88.0]}
-- {id: L-OXF2, type: pipe, at: [2550.0, 88.0]}
 - {id: F-OXF2, type: fitting, kind: tee_run, diameter: 19 mm, at: [2700.0, 88.0]}
-- {id: L-OXF3, type: pipe, at: [2850.0, 88.0]}
 - {id: INJ-OX, type: orifice, cda: 60 mm2, at: [3000.0, 88.0]}
 - {id: V-OXD, type: valve, cv: 1.0, at: [2250.0, 187.0]}
-- {id: L-OXD, type: pipe, at: [2400.0, 187.0]}
 - {id: DUMP-OX, type: boundary, fluid: oxygen, at: [2550.0, 187.0]}
 - {id: TEE-OXD, type: tee, at: [2250.0, 88.0]}
 - {id: TK-FU, type: pressurized_tank, liquid: ethanol, pressurant: nitrogen, volume: 60 L, fill: 0.85, pressure: 80 psi, liquid_temperature: 20 C, diameter: 0.3 m, at: [1800.0, 528.0]}
 - {id: TEE-FUU, type: tee, at: [1800.0, 385.0]}
 - {id: V-FUV, type: valve, cv: 0.8, normally: open, at: [1950.0, 385.0]}
-- {id: L-FUV, type: pipe, at: [2100.0, 385.0]}
 - {id: ATM-FU, type: boundary, fluid: nitrogen, at: [2250.0, 385.0]}
 - {id: RV-FU, type: relief_valve, cv: 0.5, set_pressure: 750 psi, at: [1800.0, 286.0]}
 - {id: ATM-FUR, type: boundary, fluid: nitrogen, at: [1950.0, 286.0]}
-- {id: L-FUF1, type: pipe, at: [1950.0, 638.0]}
 - {id: F-FUF1, type: fitting, kind: elbow90, diameter: 19 mm, at: [2100.0, 638.0]}
 - {id: V-FUM, type: valve, cv: 6.0, open_time: 150 ms, at: [2400.0, 638.0]}
-- {id: L-FUF2, type: pipe, at: [2550.0, 638.0]}
 - {id: F-FUF2, type: fitting, kind: tee_run, diameter: 19 mm, at: [2700.0, 638.0]}
-- {id: L-FUF3, type: pipe, at: [2850.0, 638.0]}
 - {id: INJ-FU, type: orifice, cda: 60 mm2, at: [3000.0, 638.0]}
 - {id: V-FUD, type: valve, cv: 1.0, at: [2250.0, 737.0]}
-- {id: L-FUD, type: pipe, at: [2400.0, 737.0]}
 - {id: DUMP-FU, type: boundary, fluid: ethanol, at: [2550.0, 737.0]}
 - {id: TEE-FUD, type: tee, at: [2250.0, 638.0]}
 - {id: CH-OX, type: volume, volume: 0.5 L, at: [3150.0, 88.0]}
@@ -67,79 +50,58 @@ components:
 - {id: ATM-CFU, type: boundary, fluid: ethanol, at: [3450.0, 638.0]}
 - {id: K-P1, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 935.0]}
 - {id: V-P1, type: valve, cv: 0.1, at: [150.0, 935.0]}
-- {id: L-P1, type: pipe, at: [300.0, 935.0]}
 - {id: CK-P1, type: check_valve, cv: 0.1, at: [450.0, 935.0]}
 - {id: K-P2, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 1072.5]}
 - {id: V-P2, type: valve, cv: 0.1, at: [150.0, 1072.5]}
-- {id: L-P2, type: pipe, at: [300.0, 1072.5]}
 - {id: CK-P2, type: check_valve, cv: 0.1, at: [450.0, 1072.5]}
 - {id: K-P3, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 1210.0]}
 - {id: V-P3, type: valve, cv: 0.1, at: [150.0, 1210.0]}
-- {id: L-P3, type: pipe, at: [300.0, 1210.0]}
 - {id: CK-P3, type: check_valve, cv: 0.1, at: [450.0, 1210.0]}
 - {id: K-P4, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C, at: [0.0, 1347.5]}
 - {id: V-P4, type: valve, cv: 0.1, at: [150.0, 1347.5]}
-- {id: L-P4, type: pipe, at: [300.0, 1347.5]}
 - {id: CK-P4, type: check_valve, cv: 0.1, at: [450.0, 1347.5]}
 connections:
-- [GN2-K1.port, L-K1.in]
-- [L-K1.out, V-K1.in]
+- [GN2-K1.port, V-K1.in]
 - [V-K1.out, MAN-HP.a]
-- [GN2-K2.port, L-K2.in]
-- [L-K2.out, V-K2.in]
+- [GN2-K2.port, V-K2.in]
 - [V-K2.out, MAN-HP.b]
 - [MAN-HP.c, PT-HP-RV.in]
 - [PT-HP-RV.out, ATM-HP.port]
-- [MAN-HP.d, L-HP.in]
-- [L-HP.out, TEE-HP.a]
-- [REG-OX.out, L-OX1.in]
-- [L-OX1.out, V-OXP.in]
+- [MAN-HP.d, TEE-HP.a]
+- [REG-OX.out, V-OXP.in]
 - [V-OXP.out, CV-OX.in]
-- [CV-OX.out, L-OX2.in]
-- [L-OX2.out, F-OX1.in]
-- [REG-FU.out, L-FU1.in]
-- [L-FU1.out, V-FUP.in]
+- [CV-OX.out, F-OX1.in]
+- [REG-FU.out, V-FUP.in]
 - [V-FUP.out, CV-FU.in]
-- [CV-FU.out, L-FU2.in]
-- [L-FU2.out, F-FU1.in]
+- [CV-FU.out, F-FU1.in]
 - [TEE-HP.b, REG-OX.in]
 - [TEE-HP.c, REG-FU.in]
 - [F-OX1.out, TEE-OXU.a]
 - [TEE-OXU.b, TK-OX.gas]
 - [TEE-OXU.c, V-OXV.in]
-- [V-OXV.out, L-OXV.in]
-- [L-OXV.out, ATM-OX.port]
+- [V-OXV.out, ATM-OX.port]
 - [TEE-OXU.d, RV-OX.in]
 - [RV-OX.out, ATM-OXR.port]
-- [TK-OX.liquid, L-OXF1.in]
-- [L-OXF1.out, F-OXF1.in]
+- [TK-OX.liquid, F-OXF1.in]
 - [F-OXF1.out, V-OXM.in]
-- [V-OXM.out, L-OXF2.in]
-- [L-OXF2.out, F-OXF2.in]
-- [F-OXF2.out, L-OXF3.in]
-- [L-OXF3.out, INJ-OX.in]
+- [V-OXM.out, F-OXF2.in]
+- [F-OXF2.out, INJ-OX.in]
 - [V-OXM.in, TEE-OXD.a]
 - [TEE-OXD.b, V-OXD.in]
-- [V-OXD.out, L-OXD.in]
-- [L-OXD.out, DUMP-OX.port]
+- [V-OXD.out, DUMP-OX.port]
 - [F-FU1.out, TEE-FUU.a]
 - [TEE-FUU.b, TK-FU.gas]
 - [TEE-FUU.c, V-FUV.in]
-- [V-FUV.out, L-FUV.in]
-- [L-FUV.out, ATM-FU.port]
+- [V-FUV.out, ATM-FU.port]
 - [TEE-FUU.d, RV-FU.in]
 - [RV-FU.out, ATM-FUR.port]
-- [TK-FU.liquid, L-FUF1.in]
-- [L-FUF1.out, F-FUF1.in]
+- [TK-FU.liquid, F-FUF1.in]
 - [F-FUF1.out, V-FUM.in]
-- [V-FUM.out, L-FUF2.in]
-- [L-FUF2.out, F-FUF2.in]
-- [F-FUF2.out, L-FUF3.in]
-- [L-FUF3.out, INJ-FU.in]
+- [V-FUM.out, F-FUF2.in]
+- [F-FUF2.out, INJ-FU.in]
 - [V-FUM.in, TEE-FUD.a]
 - [TEE-FUD.b, V-FUD.in]
-- [V-FUD.out, L-FUD.in]
-- [L-FUD.out, DUMP-FU.port]
+- [V-FUD.out, DUMP-FU.port]
 - [INJ-OX.out, CH-OX.a]
 - [CH-OX.b, NOZ-OX.in]
 - [NOZ-OX.out, ATM-COX.port]
@@ -147,20 +109,16 @@ connections:
 - [CH-FU.b, NOZ-FU.in]
 - [NOZ-FU.out, ATM-CFU.port]
 - [K-P1.port, V-P1.in]
-- [V-P1.out, L-P1.in]
-- [L-P1.out, CK-P1.in]
+- [V-P1.out, CK-P1.in]
 - [CK-P1.out, F-OXF2.out]
 - [K-P2.port, V-P2.in]
-- [V-P2.out, L-P2.in]
-- [L-P2.out, CK-P2.in]
+- [V-P2.out, CK-P2.in]
 - [CK-P2.out, F-FUF2.out]
 - [K-P3.port, V-P3.in]
-- [V-P3.out, L-P3.in]
-- [L-P3.out, CK-P3.in]
+- [V-P3.out, CK-P3.in]
 - [CK-P3.out, CH-OX.c]
 - [K-P4.port, V-P4.in]
-- [V-P4.out, L-P4.in]
-- [L-P4.out, CK-P4.in]
+- [V-P4.out, CK-P4.in]
 - [CK-P4.out, CH-FU.c]
 sensors:
 - {id: PT-HP, type: pressure, at: MAN-HP.a, units: psi}

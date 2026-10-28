@@ -1,4 +1,4 @@
-"""The real-time gate: an 80-component stand must step well inside 1 ms."""
+"""The real-time gate: a 60-component stand must step well inside 1 ms."""
 import time
 
 import numpy as np
@@ -11,8 +11,8 @@ from owlfluids.sim.simulation import Simulation
 @pytest.mark.slow
 def test_engine_stand_runs_faster_than_real_time():
     system = engine_test_stand()
-    assert len(system.components) >= 80
     sim = Simulation(system)
+    assert sim.net.n_states >= 66
     sim.run(0.05)  # compile and settle
     times = []
 
