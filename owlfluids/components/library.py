@@ -381,15 +381,19 @@ class Valve(ComponentType):
             return
         supply = cls.param(comp, "air_supply")
         supplies = [c.id for c in b.system.components if get_type(c.type) is PneumaticSupply]
+        if not supplies:
+            # no pneumatic supply in the system: no air sim, it moves on command alone
+            if supply is not None:
+                b.warnings.append(f"{comp.id}: air_supply {supply!r} is not in the system; with no pneumatic "
+                                  "supply it moves on command alone")
+            return
         if supply is None:
-            if not supplies:
-                return  # nothing to draw on: it moves on command alone
             if len(supplies) > 1:
                 raise ValueError(f"set air_supply to one of {', '.join(supplies)}")
             supply = supplies[0]
         elif supply not in supplies:
-            raise ValueError(f"air_supply {supply!r} is not a pneumatic supply"
-                             + (f"; pneumatic supplies: {', '.join(supplies)}" if supplies else ""))
+            raise ValueError(f"air_supply {supply!r} is not a pneumatic supply; pneumatic supplies: "
+                             f"{', '.join(supplies)}")
         p_start = cls.param(comp, "stroke_pressure") - units.ATM
         p_full = cls.param(comp, "full_stroke_pressure") - units.ATM
         if p_full <= p_start:

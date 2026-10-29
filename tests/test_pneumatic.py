@@ -122,6 +122,21 @@ def test_without_a_supply_valves_move_on_command():
     assert sim.actuator_pressure("NC") is None
 
 
+def test_deleting_the_supply_turns_off_the_air_sim():
+    """Valves still naming a supply that was deleted move on command, with a note, not a build error."""
+    s = _stand(actuator="pneumatic", air_supply="A")
+    s.components = [c for c in s.components if c.id not in ("A", "V-DUMP", "ATM-A")]
+    s.connections = [c for c in s.connections if not any(e.startswith(("A.", "V-DUMP.")) for e in c)]
+    sim = Simulation(s)
+    assert sim.net.actuators == {}
+    assert any(w.startswith("NC: air_supply 'A' is not in the system") for w in sim.net.warnings)
+    sim.open("NC")
+    sim.close("NO")
+    sim.run(0.06)
+    assert sim.valve_position("NC") == 1.0
+    assert sim.valve_position("NO") == 0.0
+
+
 def test_solenoid_type_and_actuator_setting_draw_nothing():
     s = _stand(actuator="solenoid")
     s.add("SOL", "solenoid", cv=0.1)

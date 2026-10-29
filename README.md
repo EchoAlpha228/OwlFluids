@@ -157,7 +157,8 @@ open one draws to close, and it vents to the atmosphere on the way back. The act
 fills through its pilot (`pilot_cv`) to `actuator_volume`, starts to move at
 `stroke_pressure` and is fully stroked at `full_stroke_pressure`, so a weak supply
 strokes it slowly, partway or not at all, and losing the supply springs it back.
-Without a `pneumatic_supply` in the system valves move on command alone.
+Without a `pneumatic_supply` in the system the air sim is off and every valve moves on
+command alone, even one whose `air_supply` names a supply since deleted (it gets a note).
 `examples/pneumatic-valves.yaml` shows a compressor running a fill and a vent valve;
 `owlfluids bench --pneumatic` times the test stand with its valves on a GN2 supply.
 `owlfluids app` shows every parameter with its default and meaning.
