@@ -400,7 +400,7 @@ class Scene(QGraphicsScene):
         item = ComponentItem(comp)
         self.addItem(item)
         item.setPos(QPointF(*(comp.position or (0.0, 0.0))))
-        name = self.addSimpleText(comp.id)
+        name = self.addSimpleText(comp.id if naming.shows_name(comp.type) else "")  # plumbing goes unnamed
         name.setFont(T.mono_font(7.5))
         name.setBrush(QBrush(T.qc(T.TEXT_DIM)))
         name.setZValue(3)
@@ -788,7 +788,7 @@ class Scene(QGraphicsScene):
         item = self.items_by_id.pop(old)
         self.items_by_id[new] = item
         self.labels[new] = self.labels.pop(old)
-        self.labels[new][0].setText(new)
+        self.labels[new][0].setText(new if naming.shows_name(comp.type) else "")
         item.setToolTip(f"{new} ({item.ctype.label or item.ctype.type_name})")
         self.place_labels(item)
         for it in self.sensor_items.values():

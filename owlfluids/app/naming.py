@@ -1,9 +1,12 @@
 """Default names for new parts and line sensors: commodity letter, part letter, dash, number.
 
 An oxidizer valve is OV-1, the next one OV-2, a fuel tank FT-1, a helium regulator HR-1.
-A line sensor takes its instrument tag after the commodity: OPT-1 for a pressure
-transducer on an oxidizer line. A part with no fluid reaching it yet is X (XV-1)
-until it is wired to one.
+A relief valve takes two letters (ORV-1), and a line sensor its instrument tag
+after the commodity: OPT-1 for a pressure transducer on an oxidizer line. A part
+with no fluid reaching it yet is X (XV-1) until it is wired to one.
+
+Fittings, tees, volumes, boundaries and pneumatic supplies are plumbing, not named
+parts: they get a plain id the schematic doesn't draw (TEE-1).
 """
 
 from __future__ import annotations
@@ -31,15 +34,12 @@ PART = {
     "check_valve": "C",
     "regulator": "R",
     "tank": "T",
-    "relief_valve": "S",  # safety relief, as in PSV
+    "relief_valve": "RV",
     "orifice": "O",
-    "fitting": "F",
-    "tee": "J",  # junction; T is the tank
-    "volume": "D",  # dead volume
-    "boundary": "B",
-    "pneumatic_supply": "G",  # gas supply
     "air_pump": "P",
 }
+# part type -> the plain id prefix of a part with no drawn name
+UNNAMED = {"fitting": "FIT", "tee": "TEE", "volume": "VOL", "boundary": "BND", "pneumatic_supply": "SUP"}
 
 # line sensor type -> instrument tag
 SENSOR = {"pressure": "PT", "temperature": "TC", "mass_flow": "FM"}
@@ -63,8 +63,14 @@ def part_commodity(comp, media: dict) -> str:
     return commodity(comp.params.get("fluid"))
 
 
+def shows_name(type_name: str) -> bool:
+    return get_type(type_name).type_name not in UNNAMED
+
+
 def part_prefix(comp, media: dict) -> str:
     t = get_type(comp.type).type_name
+    if t in UNNAMED:
+        return UNNAMED[t]
     return part_commodity(comp, media) + PART.get(t, t[:1].upper())
 
 

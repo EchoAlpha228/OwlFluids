@@ -111,8 +111,9 @@ New parts are named commodity letter, part letter, number: `OV-1` is the first o
 valve, `FT-1` a fuel tank, `HR-1` a helium regulator, and line sensors add their tag
 (`OPT-1`). Commodities are O oxidizer (LOX, N2O), F fuel (ethanol, methane), H helium,
 N nitrogen, A air, W water, and X while no fluid reaches the part yet. Parts are V valve,
-M manual valve, C check valve, R regulator, T tank, S relief valve, O orifice, F fitting,
-J tee, D volume, B boundary, G pneumatic supply and P air pump. A default name follows the
+M manual valve, C check valve, R regulator, T tank, RV relief valve, O orifice and P air
+pump. Fittings, tees, volumes, boundaries and pneumatic supplies are left unnamed on the
+schematic (their ids, like `TEE-1`, show in the properties panel). A default name follows the
 fluid wired to the part until you rename it: **F2** or double-click a part or sensor
 to type a new id.
 Press **Run**; valves appear in the **Valves** tab and can also be clicked on the
