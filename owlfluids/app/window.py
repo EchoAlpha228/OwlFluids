@@ -88,6 +88,8 @@ class MainWindow(QMainWindow):
         self.scene.valve_clicked.connect(self._toggle_valve)
         self.properties.edited.connect(self._param_edited)
         self.properties.rename_requested.connect(self._rename)
+        self.scene.rename_wanted.connect(self.properties.focus_id)
+        self.scene.renamed.connect(self._renamed_by_fluid)
         self.valves.commanded.connect(self._command)
         self.valves.setpoint_changed.connect(self._set_setpoint)
 
@@ -157,6 +159,8 @@ class MainWindow(QMainWindow):
         self.a_rotate_back = act("↺ Rotate back", lambda: self.scene.rotate_selected(-90), "Shift+R", m_edit, True,
                                  "Rotate the selected parts counter-clockwise")
         self.a_delete = act("Delete", self.scene.delete_selected, QKeySequence.Delete, m_edit)
+        self.a_rename = act("Rename", self.properties.focus_id, "F2", m_edit,
+                            tip="Rename the selected part or sensor (or double-click it)")
         act("Settings…", self.edit_settings, "Ctrl+,", m_edit, tip="Time step, ambient and solver settings")
 
         tb.addSeparator()
@@ -229,6 +233,7 @@ class MainWindow(QMainWindow):
         self.a_rotate.setEnabled(not running)
         self.a_rotate_back.setEnabled(not running)
         self.a_delete.setEnabled(not running)
+        self.a_rename.setEnabled(not running)
         self.palette.setEnabled(not running)
 
     # ------------------------------------------------------------------ files
@@ -388,6 +393,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Rename", str(e))
         self.properties.show_component(self.scene.system.component(new) if any(
             c.id == new for c in self.scene.system.components) else None, self.scene.system)
+
+    def _renamed_by_fluid(self) -> None:
+        """A default name followed its commodity: show it in the panel once the edit that caused it is done."""
+        QTimer.singleShot(0, self.scene._on_selection)
 
     # ------------------------------------------------------------------ running
     def run(self) -> None:

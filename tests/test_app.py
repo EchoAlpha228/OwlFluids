@@ -33,14 +33,14 @@ def test_edit_save_and_run(app, tmp_path):
     sc.add_component("tank", QPointF(0, 0))
     sc.add_component("valve", QPointF(150, 0))
     sc.add_component("boundary", QPointF(300, 0))
-    sc.connect_ports("K1.port", "V1.in")
-    sc.connect_ports("V1.out", "ATM1.port")
-    sc.system.sense("PT-K1", "pressure", "K1.port", units="psi")
+    sc.connect_ports("NT-1.port", "XV-1.in")  # the valve takes the tank's nitrogen once wired to it
+    sc.connect_ports("NV-1.out", "BND-1.port")
+    sc.system.sense("PT-K1", "pressure", "NT-1.port", units="psi")
     assert w.dirty
     w.path = tmp_path / "s.yaml"
     assert w.save()
     w.open_file(tmp_path / "s.yaml")
-    assert [c.id for c in w.scene.system.components] == ["K1", "V1", "ATM1"]
+    assert [c.id for c in w.scene.system.components] == ["NT-1", "NV-1", "BND-1"]
 
     w.run()
     deadline = time.time() + 60
@@ -48,9 +48,9 @@ def test_edit_save_and_run(app, tmp_path):
         pump(app, 0.05)
     assert w.runner is not None, w.status_time.text()
     p0 = w.runner.frame.sensors["PT-K1"]
-    w._toggle_valve("V1")
+    w._toggle_valve("NV-1")
     pump(app, 1.0)
-    assert w.runner.frame.commands["V1"] == 1.0
+    assert w.runner.frame.commands["NV-1"] == 1.0
     assert w.runner.frame.sensors["PT-K1"] < p0
     w.stop()
     assert w.runner is None
@@ -162,10 +162,10 @@ def test_sensors_on_lines(app):
     wire = next(x for x in sc.wires if {x.a, x.b} == {"V-M.out", "INJ.in"})
     p = sc.add_line_sensor(wire, "pressure")
     q = sc.add_line_sensor(wire, "mass_flow")
-    assert (p.id, q.id) == ("PT-1", "FM-1")  # named like the properties panel names them
+    assert (p.id, q.id) == ("OPT-1", "OFM-1")  # oxidizer pressure and flow
     assert q.at in ("V-M.out", "INJ.in")  # a flow element's end
-    assert set(sc.sensor_items) >= {"PT-1", "FM-1", "PT-TK"}  # sensors at a port already show on its line
-    a, b = sc.sensor_items["PT-1"].pos(), sc.sensor_items["FM-1"].pos()
+    assert set(sc.sensor_items) >= {"OPT-1", "OFM-1", "PT-TK"}  # sensors at a port already show on its line
+    a, b = sc.sensor_items["OPT-1"].pos(), sc.sensor_items["OFM-1"].pos()
     assert a != b and a.y() == b.y()  # spread along the line, above it
     tee_line = sc.line_sensor_end
     assert tee_line(wire, "temperature") is not None
@@ -176,19 +176,19 @@ def test_sensors_on_lines(app):
     assert w.runner is not None
     w._toggle_valve("V-M")
     pump(app, 1.0)
-    assert sc.sensor_labels["FM-1"][1].text().endswith("kg/s")
-    assert float(sc.sensor_labels["FM-1"][1].text().split()[0]) > 0.5
-    assert sc.sensor_labels["PT-1"][1].text().endswith("psi")
+    assert sc.sensor_labels["OFM-1"][1].text().endswith("kg/s")
+    assert float(sc.sensor_labels["OFM-1"][1].text().split()[0]) > 0.5
+    assert sc.sensor_labels["OPT-1"][1].text().endswith("psi")
     w.stop()
     sc.clearSelection()
-    sc.sensor_items["PT-1"].setSelected(True)
-    assert w.properties.findChild(QtWidgets.QLineEdit).text() == "PT-1"  # the sensor's own panel
+    sc.sensor_items["OPT-1"].setSelected(True)
+    assert w.properties.findChild(QtWidgets.QLineEdit).text() == "OPT-1"  # the sensor's own panel
     sc.delete_selected()
-    assert "PT-1" not in [s.id for s in sc.system.sensors] and "PT-1" not in sc.sensor_items
+    assert "OPT-1" not in [s.id for s in sc.system.sensors] and "OPT-1" not in sc.sensor_items
     sc.clearSelection()
     wire.setSelected(True)
     sc.delete_selected()  # the line's sensors go with it
-    assert "FM-1" not in [s.id for s in sc.system.sensors]
+    assert "OFM-1" not in [s.id for s in sc.system.sensors]
     w.dirty = False
     w.close()
 
@@ -231,3 +231,40 @@ def test_tank_drawing_follows_its_fill():
     assert _tank_state({"fluid": "nitrous", "fill": "0.6"})["gas_colour"] == symbols.fluid_colour("nitrous", gas=True)
     assert "fill" not in _tank_state({"fluid": "nitrogen", "pressure": "1000 psi"})  # a gas bottle
     assert _tank_state({"fluid": "water"})["fill"] == 1.0
+
+
+@pytest.mark.gui
+def test_default_names_follow_commodity(app):
+    w = MainWindow()
+    w.show()
+    sc = w.scene
+    from PySide6.QtCore import QPointF
+
+    tank = sc.add_component("tank", QPointF(0, 0))
+    v1 = sc.add_component("valve", QPointF(150, 0))
+    v2 = sc.add_component("valve", QPointF(300, 0))
+    cv = sc.add_component("check_valve", QPointF(450, 0))
+    rv = sc.add_component("relief_valve", QPointF(600, 0))
+    tee = sc.add_component("tee", QPointF(0, 150))
+    assert [c.id for c in sc.system.components] == ["NT-1", "XV-1", "XV-2", "XC-1", "XRV-1", "TEE-1"]
+    assert sc.labels["TEE-1"][0].text() == "" and sc.labels["XRV-1"][0].text() == "XRV-1"  # plumbing goes unnamed
+    sc.connect_ports("NT-1.port", "XV-1.in")
+    sc.connect_ports("NV-1.out", "XV-2.in")
+    assert (v1.id, v2.id) == ("NV-1", "NV-2")
+    tank.params["fluid"] = "LOX"
+    sc.refresh_media()
+    assert (tank.id, v1.id, v2.id, cv.id, rv.id, tee.id) == ("OT-1", "OV-1", "OV-2", "XC-1", "XRV-1", "TEE-1")
+    assert ("OT-1.port", "OV-1.in") in sc.system.connections
+    wire = next(x for x in sc.wires if "OV-1.out" in (x.a, x.b))
+    s = sc.add_line_sensor(wire, "pressure")
+    assert s.id == "OPT-1"
+    w._rename("OV-2", "MAIN")  # named by hand: it keeps that name
+    tank.params["fluid"] = "ethanol"
+    sc.refresh_media()
+    assert (tank.id, v1.id, v2.id, s.id) == ("FT-1", "FV-1", "MAIN", "FPT-1")
+    sc.clearSelection()
+    sc.items_by_id["FV-1"].setSelected(True)
+    w.properties.focus_id()
+    assert w.properties._ident.text() == "FV-1" and w.properties._ident.selectedText() == "FV-1"
+    w.dirty = False
+    w.close()
