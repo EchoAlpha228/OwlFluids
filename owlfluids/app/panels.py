@@ -64,7 +64,7 @@ def _fluid_heading(fluid: str | None) -> QLabel:
     return h
 
 
-FLUID_PARAMS = ("fluid", "liquid", "pressurant")
+FLUID_PARAMS = ("fluid", "pressurant")
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
                 "wall_temperature", "level", "purge_fraction")
 
@@ -179,6 +179,69 @@ class Properties(QScrollArea):
             self._layout.addWidget(row)
         if not read_only:
             self._layout.addWidget(self._sensor_adder(comp, ct))
+
+    def show_sensor(self, s: Sensor, system, read_only: bool = False) -> None:
+        """A sensor on a line: its id, display units and where it reads."""
+        self._clear()
+        self.comp, self.system = None, system
+        title = QLabel(f"{_label(s.type).capitalize()} sensor")
+        title.setFont(T.ui_font(12, bold=True))
+        self._layout.addWidget(title)
+        where = ("Reads the flow along the line at " if s.type == "mass_flow" else "Reads the line at ") + s.at
+        if s.type == "mass_flow":
+            where += (": positive in to out through a valve, orifice or fitting, or out of a tank or volume. "
+                      "Right-click the line to add another sensor.")
+        about = QLabel(where)
+        about.setWordWrap(True)
+        about.setObjectName("hint")
+        self._layout.addWidget(about)
+        form_w = QWidget()
+        form = QFormLayout(form_w)
+        ident = QLineEdit(s.id)
+        ident.setReadOnly(read_only)
+        T.monospace(ident)
+
+        def rename():
+            new = ident.text().strip()
+            if not new or new == s.id:
+                return
+            if any(o.id == new for o in system.sensors):
+                _show_error(ident, f"{new} is already used")
+                return
+            _set_error(ident, False)
+            s.id = new
+            self.edited.emit()
+
+        ident.editingFinished.connect(rename)
+        form.addRow("id", ident)
+        unit = QLineEdit(s.units)
+        unit.setPlaceholderText(f"default: {units.DEFAULT_UNITS.get(s.type, '')}")
+        unit.setReadOnly(read_only)
+
+        def set_unit():
+            text = unit.text().strip()
+            try:
+                units.convert(1.0, text)
+            except (ValueError, KeyError) as e:
+                _show_error(unit, str(e))
+                return
+            _set_error(unit, False)
+            s.units = text
+            self.edited.emit()
+
+        unit.editingFinished.connect(set_unit)
+        form.addRow("units", unit)
+        self._layout.addWidget(form_w)
+        if not read_only:
+            rm = QPushButton("remove sensor")
+
+            def remove():
+                system.sensors.remove(s)
+                self.edited.emit()
+                self.show_component(None, system)
+
+            rm.clicked.connect(remove)
+            self._layout.addWidget(rm)
 
     def _editor(self, p, comp, read_only):
         cur = comp.params.get(p.name)

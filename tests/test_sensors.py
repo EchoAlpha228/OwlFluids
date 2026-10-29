@@ -34,12 +34,12 @@ def test_noise_is_repeatable_and_can_be_turned_off(lox):
     exact = Simulation(quiet, step_budget=200)
     for _ in range(5):
         exact.step(1)
-        assert exact.read("PT-TK") == exact.pressure("TK.gas")
+        assert exact.read("PT-TK") == exact.pressure("TK.top")
     one = lox_feed()
     one.sensors[0].noise = 0.0  # a sensor can opt out on its own
     solo = Simulation(one, step_budget=200)
     solo.step(3)
-    assert solo.read("PT-TK") == solo.pressure("TK.gas")
+    assert solo.read("PT-TK") == solo.pressure("TK.top")
 
 
 def test_noise_follows_what_the_sensor_sees(lox):

@@ -50,21 +50,21 @@ def test_closed_system_equalizes_and_conserves_mass_and_energy():
 
 def test_torricelli_drain():
     s = System("drain")
-    s.add("TK", "pressurized_tank", liquid="water", pressurant="nitrogen", volume="1 m3", fill=0.9,
+    s.add("TK", "tank", fluid="water", pressurant="nitrogen", volume="1 m3", fill=0.9,
           pressure="1 atm", diameter="1 m")
     s.add("VENT", "orifice", cda="0.01 m2")
     s.add("AIR", "boundary", fluid="nitrogen")
     s.add("DR", "orifice", cda="5 cm2")
     s.add("OUT", "boundary", fluid="water")
-    s.connect("TK.gas", "VENT.in")
+    s.connect("TK.top", "VENT.in")
     s.connect("VENT.out", "AIR.port")
-    s.connect("TK.liquid", "DR.in")
+    s.connect("TK.bottom", "DR.in")
     s.connect("DR.out", "OUT.port")
     sim = Simulation(s)
     area = math.pi / 4
     h0 = 0.9 / area
     sim.run(60.0)
-    rho = sim.density("TK.liquid")
-    h = sim.mass("TK.liquid") / rho / area
+    rho = sim.density("TK.bottom")
+    h = sim.mass("TK.bottom") / rho / area
     exact = (math.sqrt(h0) - 5e-4 / area * math.sqrt(9.80665 / 2) * 60.0) ** 2
     assert h == pytest.approx(exact, rel=2e-3)

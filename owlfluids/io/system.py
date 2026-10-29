@@ -39,6 +39,19 @@ DEFAULT_SETTINGS = {
 PIPE_TYPES = ("pipe", "tubing", "line")
 # Throttle valves from before manual valves replaced them; they load as manual valves.
 THROTTLE_TYPES = ("throttle_valve", "needle_valve")
+# Pressurized tanks from before they became tanks with a pressurant, and their old port names.
+PRESSURIZED_TANK = "pressurized_tank"
+TANK_PORTS = {"gas": "top", "liquid": "bottom"}
+
+
+def _tank_params(params: dict) -> dict:
+    """An old pressurized tank's parameters as a tank's: the liquid is its fluid."""
+    out = {}
+    for k, v in params.items():
+        out[{"liquid": "fluid", "liquid_temperature": "temperature"}.get(k, k)] = v
+    out.setdefault("pressurant", "nitrogen")  # the old defaults
+    out.setdefault("fill", 0.8)
+    return out
 
 
 @dataclass
@@ -100,6 +113,7 @@ class System:
     # {"h": leaves a horizontally, "bends": [[x, y], ...]}
     routes: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)  # changes made on load, shown as build warnings
+    _old_tanks: set = field(default_factory=set, repr=False, compare=False)  # added as pressurized tanks
 
     # ---- editing helpers
     def component(self, cid: str) -> Component:
@@ -112,15 +126,23 @@ class System:
         if any(c.id == cid for c in self.components):
             raise ValueError(f"component id {cid!r} is already used")
         pos = params.pop("at", None)
+        if ctype == PRESSURIZED_TANK:  # scripts written before tanks took a pressurant
+            ctype, params = "tank", _tank_params(params)
+            self._old_tanks.add(cid)
         c = Component(cid, ctype, params, tuple(pos) if pos else None)
         self.components.append(c)
         return c
 
+    def _tank_port(self, ref: str) -> str:
+        """An old pressurized tank's port (TK.gas, TK.liquid) by its tank name (TK.top, TK.bottom)."""
+        cid, dot, port = ref.rpartition(".")
+        return f"{cid}.{TANK_PORTS[port]}" if cid in self._old_tanks and port in TANK_PORTS else ref
+
     def connect(self, a: str, b: str) -> None:
-        self.connections.append((a, b))
+        self.connections.append((self._tank_port(a), self._tank_port(b)))
 
     def sense(self, sid: str, stype: str, at: str, **kw) -> Sensor:
-        s = Sensor(sid, stype, at, **kw)
+        s = Sensor(sid, stype, self._tank_port(at), **kw)
         self.sensors.append(s)
         return s
 
@@ -157,7 +179,28 @@ class System:
         system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings, routes)
         system._fold_pipes()
         system._throttles_to_manual()
+        system._merge_pressurized_tanks()
         return system
+
+    def _merge_pressurized_tanks(self) -> None:
+        """Turn old pressurized tanks into tanks with a pressurant: gas port on top, liquid at the bottom."""
+        for c in self.components:
+            if c.type == PRESSURIZED_TANK:
+                c.type, c.params = "tank", _tank_params(c.params)
+                self._old_tanks.add(c.id)
+        if not self._old_tanks:
+            return
+        fix = self._tank_port
+        self.connections = [(fix(a), fix(b)) for a, b in self.connections]
+        for s in self.sensors:
+            s.at = fix(s.at)
+        routes = {}
+        for k, v in self.routes.items():
+            a, _, b = k.partition(" -- ")
+            routes[f"{fix(a)} -- {fix(b)}" if b else k] = v
+        self.routes = routes
+        self.notes.append(f"pressurized tanks are now tanks with a pressurant: {', '.join(sorted(self._old_tanks))} "
+                          "(their gas port is 'top' and their liquid port 'bottom'; save the file to keep it that way)")
 
     def _throttles_to_manual(self) -> None:
         """Turn old throttle valves into manual valves, keeping their 2 s default stroke."""

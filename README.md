@@ -103,7 +103,9 @@ under `settings:` in the system file).
 | `owlfluids update` | Install a newer release (Windows installer; `--check` only reports) |
 
 In the app: drag parts from **Parts**, drag from one port (small circle) to another
-to connect, **R** rotates, **Delete** removes. Select a part to edit its
+to connect, **R** rotates, **Delete** removes, and the middle mouse button drags the
+schematic around. Right-click a line to put a pressure, temperature or mass flow sensor on
+it; its reading shows beside it during a run. Select a part to edit its
 parameters; quantities take units (`3000 psi`, `-196 C`, `0.5 in`, `49 L`).
 Press **Run**; valves appear in the **Valves** tab and can also be clicked on the
 schematic. Manual valves there also have a slider to throttle them to any opening, and
@@ -125,9 +127,10 @@ sensors:
 - {id: PT-K1, type: pressure, at: K1.port, units: psi}
 ```
 
-Component types: `tank` (gas, or saturated liquid/vapor with `fill`, optionally with a
-`wall_mass` shell that stores heat),
-`pressurized_tank` (propellant with a pressurant ullage), `boundary`, `volume`
+Component types: `tank` (gas, saturated liquid/vapor with `fill`, optionally with a
+`wall_mass` shell that stores heat, or liquid under a separate gas with `pressurant` and
+`fill`; ports `top` (gas), `bottom` (liquid) and `port`; old `pressurized_tank` parts load
+as one, their `gas` and `liquid` ports becoming `top` and `bottom`), `boundary`, `volume`
 (also takes `wall_mass`, for example to chill down a cryogenic line), `tee`, `fitting`,
 `orifice`, `valve`, `manual_valve` (a hand valve the operator opens, closes or throttles from the
 valve panel; Synnax never commands it, and old `throttle_valve` parts load as one),
@@ -230,7 +233,7 @@ homogeneous (each fluid leaves in proportion to its mass).
 Only a purge gas may meet another fluid. Two propellants meeting (GOX in a methane
 line) is still a build error, since that would need combustion. When two purge
 gases meet (helium into a nitrogen line), the one listed first in helium,
-nitrogen, air is the purge gas. A tank, pressurized tank or `boundary` holds only its
+nitrogen, air is the purge gas. A tank or `boundary` holds only its
 own fluid: purge gas flowing into it is counted as that fluid at the same
 temperature, and the builder lists each place this can happen. Give a vent
 boundary the line's own fluid.
@@ -307,7 +310,7 @@ the 60-component stand, purges included.
 ## Limits worth knowing
 
 - One fluid per connected line, plus one purge gas (separate propellants with a
-  tank or a pressurized tank). A purge gas is an ideal gas with constant heat
+  tank). A purge gas is an ideal gas with constant heat
   capacity and does not dissolve in the liquid. In LOX, nitrous, LN2 and methane
   lines it spreads over the whole node, so a gas pocket pushing on liquid there
   presses less hard than a real one: purges clear these lines, a little more

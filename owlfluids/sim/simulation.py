@@ -23,7 +23,7 @@ from ..core import kernel
 from ..core import layout as L
 from ..core.network import Network, build_network
 from ..fluids import props
-from ..io.system import System
+from ..io.system import TANK_PORTS, System
 from . import sensors as sensor_model
 
 MIN_BUDGET = 8.0  # smallest work per step: one Jacobian and two Newton iterations
@@ -376,6 +376,9 @@ class Simulation:
             return net.comp_nodes[ref][0]
         if f"{ref}.in" in net.port_nodes:
             return net.port_nodes[f"{ref}.in"]
+        cid, _, port = ref.rpartition(".")
+        if port in TANK_PORTS and f"{cid}.{TANK_PORTS[port]}" in net.port_nodes:  # an old pressurized tank's port
+            return net.port_nodes[f"{cid}.{TANK_PORTS[port]}"]
         raise KeyError(f"no node {ref!r}")
 
     def link(self, ref: str) -> int:
@@ -400,7 +403,7 @@ class Simulation:
         return float(self.nout[self.node(ref), L.O_RHO])
 
     def mass(self, ref: str) -> float:
-        """Fluid mass in a component's volumes (both regions for a pressurized tank)."""
+        """Fluid mass in a component's volumes (both regions for a tank with a pressurant)."""
         if ref in self.net.comp_nodes:
             return float(sum(self.nout[i, L.O_M] for i in self.net.comp_nodes[ref]))
         return float(self.nout[self.node(ref), L.O_M])
@@ -443,6 +446,12 @@ class Simulation:
         if s.type not in SENSOR_TYPES:
             raise ValueError(f"sensor {s.id}: unknown type {s.type!r}; types: {', '.join(SENSOR_TYPES)}")
         if s.type == "mass_flow":
+            terms = self.net.port_flows.get(s.at)
+            if terms:  # on a line, at one of its ports
+                return "flow", (np.array([k for k, _ in terms], dtype=np.int64), np.array([g for _, g in terms]))
+            if "." in s.at and s.at not in self.net.link_names:
+                raise ValueError(f"sensor {s.id}: no flow can be read at {s.at} (a tee's ports are all one point, "
+                                 "and a flow needs a valve, orifice, fitting or pump on the line)")
             return "link", self.link(s.at)
         if s.type == "valve_position":
             # on a pump it reads how far it has spun up (0 stopped, 1 running)
@@ -457,7 +466,7 @@ class Simulation:
         comp = s.at.split(".")[0]
         nodes = self.net.comp_nodes.get(comp, [])
         ctype = next((c.type for c in self.system.components if c.id == comp), None)
-        if ctype not in ("tank", "pressurized_tank") or not nodes:
+        if ctype != "tank" or not nodes:
             raise ValueError(f"sensor {s.id}: a level sensor goes on a tank, not {s.at!r}")
         return nodes[0]
 
@@ -473,26 +482,35 @@ class Simulation:
         """Liquid volume fraction 0-1 of a tank."""
         nodes = self.net.comp_nodes[comp]
         o = self.nout
-        if len(nodes) > 1:  # pressurized tank: ullage, then liquid
+        if len(nodes) > 1:  # tank with a pressurant: ullage, then liquid
             vol = self.net.NF[nodes[0], L.NF_VOL]
             liq = nodes[1]
             return min(max(o[liq, L.O_M] / max(o[liq, L.O_RHO], 1e-9) / vol, 0.0), 1.0)
         i = nodes[0]
-        x = o[i, L.O_X]
+        return self.liquid_fraction(i, float(o[i, L.O_T]), float(o[i, L.O_X]), float(o[i, L.O_RHO]))
+
+    def liquid_fraction(self, i: int, t: float, x: float, rho: float) -> float:
+        """Liquid volume fraction 0-1 of single-fluid node ``i`` at temperature, quality code and density."""
+        f = int(self.net.NI[i, L.N_FLUID])
+        if self.net.fluids.models[f] != "table":  # an ideal gas, or a liquid that never boils here
+            return 1.0 if math.isfinite(x) and x <= 0.0 else 0.0
         fl = self.fl
         # the saturation table, not CoolProp: this runs on the runner thread every chunk
-        sat = props.saturation(int(self.net.NI[i, L.N_FLUID]), float(o[i, L.O_T]), fl[0], fl[1], fl[7], fl[8])
+        sat = props.saturation(f, t, fl[0], fl[1], fl[7], fl[8])
         if not sat[8] or not math.isfinite(x) or x >= 1.0:  # supercritical or all vapor: no liquid level
             return 0.0
         if x <= 0.0:
             return 1.0
-        return min(max((1.0 - x) * o[i, L.O_RHO] / sat[1], 0.0), 1.0)
+        return min(max((1.0 - x) * rho / sat[1], 0.0), 1.0)
 
     def _raw(self, st) -> float:
         kind, idx = st.source
         t = st.spec.type
         if kind == "link":
             return float(self.lout[idx, L.LO_MDOT])
+        if kind == "flow":
+            links, signs = idx
+            return float(signs @ self.lout[links, L.LO_MDOT])
         if kind == "valve":
             return float(self.LV[idx, L.V_POS])
         if kind == "mass":

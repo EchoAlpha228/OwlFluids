@@ -9,7 +9,7 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     """A pressure-fed LOX/ethanol test stand with GN2 pressurization and purges.
 
     Roughly 60 components: supply bottles, regulators, pressurant lines with check
-    valves, two pressurized propellant tanks with vents and reliefs, main valves,
+    valves, two propellant tanks under nitrogen with vents and reliefs, main valves,
     feed lines with fittings, injector orifices into a chamber, and GN2 purges of the
     feed lines and injector manifolds. With ``pneumatic`` its on/off valves run on a
     GN2 pneumatic supply regulated down from the high-pressure manifold.
@@ -45,10 +45,10 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     con("TEE-HP.b", "REG-OX.in"), con("TEE-HP.c", "REG-FU.in")
 
     def prop_tank(tag, liquid, t_liq):
-        add(f"TK-{tag}", "pressurized_tank", liquid=liquid, pressurant="nitrogen", volume="60 L", fill=0.85,
-            pressure="80 psi", liquid_temperature=t_liq, diameter="0.3 m")
+        add(f"TK-{tag}", "tank", fluid=liquid, pressurant="nitrogen", volume="60 L", fill=0.85,
+            pressure="80 psi", temperature=t_liq, diameter="0.3 m")
         add(f"TEE-{tag}U", "tee")
-        con(f"F-{tag}1.out", f"TEE-{tag}U.a"), con(f"TEE-{tag}U.b", f"TK-{tag}.gas")
+        con(f"F-{tag}1.out", f"TEE-{tag}U.a"), con(f"TEE-{tag}U.b", f"TK-{tag}.top")
         add(f"V-{tag}V", "valve", cv=0.8, normally="open")
         add(f"ATM-{tag}", "boundary", fluid="nitrogen")
         con(f"TEE-{tag}U.c", f"V-{tag}V.in")
@@ -61,7 +61,7 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
         add(f"V-{tag}M", "valve", cv=6.0, open_time="150 ms")
         add(f"F-{tag}F2", "fitting", kind="tee_run", diameter="19 mm")
         add(f"INJ-{tag}", "orifice", cda="60 mm2")
-        con(f"TK-{tag}.liquid", f"F-{tag}F1.in"), con(f"F-{tag}F1.out", f"V-{tag}M.in")
+        con(f"TK-{tag}.bottom", f"F-{tag}F1.in"), con(f"F-{tag}F1.out", f"V-{tag}M.in")
         con(f"V-{tag}M.out", f"F-{tag}F2.in"), con(f"F-{tag}F2.out", f"INJ-{tag}.in")
         # drain / dump
         add(f"V-{tag}D", "valve", cv=1.0)
@@ -102,11 +102,11 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     _place(s, n_purge)
 
     s.sense("PT-HP", "pressure", "MAN-HP.a", units="psi")
-    s.sense("PT-OX", "pressure", "TK-OX.gas", units="psi")
-    s.sense("PT-FU", "pressure", "TK-FU.gas", units="psi")
+    s.sense("PT-OX", "pressure", "TK-OX.top", units="psi")
+    s.sense("PT-FU", "pressure", "TK-FU.top", units="psi")
     s.sense("PT-OXI", "pressure", "INJ-OX.in", units="psi")
     s.sense("PT-FUI", "pressure", "INJ-FU.in", units="psi")
-    s.sense("TC-OX", "temperature", "TK-OX.liquid")
+    s.sense("TC-OX", "temperature", "TK-OX.bottom")
     s.sense("FM-OX", "mass_flow", "V-OXM")
     s.sense("FM-FU", "mass_flow", "V-FUM")
     return s
