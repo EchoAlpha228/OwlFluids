@@ -5,8 +5,8 @@ from owlfluids.examples import EXAMPLES
 
 def test_media_spread_from_tanks_through_parts():
     m = edit_media(EXAMPLES["lox-feed"]())
-    assert m["TK.liquid"] == ("oxygen", False)  # liquid side of the run tank
-    assert m["TK.gas"] == ("nitrogen", True)  # its pressurant
+    assert m["TK.bottom"] == ("oxygen", False)  # liquid side of the run tank
+    assert m["TK.top"] == ("nitrogen", True)  # its pressurant
     assert m["V-M.out"] == ("oxygen", False)  # carried through the main valve
     assert m["REG.out"] == ("nitrogen", True)
     assert m["AMB.port"] == ("oxygen", False)  # a vent takes what flows into it

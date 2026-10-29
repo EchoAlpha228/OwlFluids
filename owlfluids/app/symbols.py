@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
 
@@ -28,7 +30,6 @@ def fluid_colour(fluid: str | None, gas: bool = False) -> QColor:
 # (width, height) and port positions relative to the centre, before rotation
 SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = {
     "tank": ((60, 110), {"top": (0, -55), "bottom": (0, 55), "port": (30, 0)}),
-    "pressurized_tank": ((70, 120), {"gas": (0, -60), "liquid": (0, 60)}),
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),
@@ -145,20 +146,14 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
     fill_frac = state.get("fill")
     liquid = state.get("liquid_colour", LIQUID)
     if type_name == "tank":
+        # gas (or vapor) over liquid, the liquid's surface where its share of the drawn tank is its fill
         r = QRectF(-w / 2, -h / 2, w, h)
-        p.drawRoundedRect(r, 18, 18)
+        p.drawRoundedRect(r, TANK_RADIUS, TANK_RADIUS)
         if "gas_colour" in state:
             p.setBrush(QBrush(state["gas_colour"]))
-            p.drawRoundedRect(r, 18, 18)
+            p.drawRoundedRect(r, TANK_RADIUS, TANK_RADIUS)
         if fill_frac:
             _fill_level(p, r, fill_frac, liquid)
-    elif type_name == "pressurized_tank":
-        r = QRectF(-w / 2, -h / 2, w, h)
-        p.setBrush(QBrush(METAL))
-        p.drawRoundedRect(r, 20, 20)
-        p.setBrush(QBrush(state.get("gas_colour", GAS)))
-        p.drawRoundedRect(r, 20, 20)
-        _fill_level(p, r, fill_frac if fill_frac is not None else 0.8, liquid)
     elif type_name == "boundary":
         # vent / exhaust: the line ends in a cone of dashed rays leaving the open end
         p.setBrush(Qt.NoBrush)
@@ -278,16 +273,45 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         p.drawRoundedRect(QRectF(-w / 2, -h / 2, w, h), 6, 6)
 
 
-def _fill_level(p: QPainter, r: QRectF, frac: float, colour: QColor) -> None:
+TANK_RADIUS = 18.0
+
+
+@lru_cache(maxsize=512)
+def level_height(frac: float, w: float, h: float, radius: float = TANK_RADIUS) -> float:
+    """Height of the liquid surface above the bottom of a ``w`` x ``h`` rounded tank whose
+    drawn area below it is ``frac`` of the whole, so the picture shows the true fill."""
     frac = min(max(frac, 0.0), 1.0)
+    rad = min(radius, w / 2, h / 2)
+
+    def width(y):  # across the tank at height y
+        d = min(y, h - y)
+        if d >= rad:
+            return w
+        return w - 2 * (rad - (rad * rad - (rad - d) ** 2) ** 0.5)
+
+    n = 200
+    ys = [h * k / n for k in range(n + 1)]
+    area = [0.0]
+    for k in range(n):
+        area.append(area[-1] + (width(ys[k]) + width(ys[k + 1])) / 2 * (h / n))
+    target = frac * area[-1]
+    for k in range(n):
+        if area[k + 1] >= target:
+            seg = area[k + 1] - area[k]
+            return ys[k] + (h / n) * ((target - area[k]) / seg if seg > 0 else 0.0)
+    return h
+
+
+def _fill_level(p: QPainter, r: QRectF, frac: float, colour: QColor) -> None:
+    level = level_height(round(min(max(frac, 0.0), 1.0), 3), r.width(), r.height())
     clip = QPainterPath()
-    clip.addRoundedRect(r, 18, 18)
+    clip.addRoundedRect(r, TANK_RADIUS, TANK_RADIUS)
     p.save()
     p.setClipPath(clip)
     p.setPen(Qt.NoPen)
     p.setBrush(QBrush(colour))
-    p.drawRect(QRectF(r.left(), r.bottom() - r.height() * frac, r.width(), r.height() * frac))
+    p.drawRect(QRectF(r.left(), r.bottom() - level, r.width(), level))
     p.restore()
     p.setBrush(Qt.NoBrush)
     p.setPen(QPen(LINE, 1.6))
-    p.drawRoundedRect(r, 18, 18)
+    p.drawRoundedRect(r, TANK_RADIUS, TANK_RADIUS)

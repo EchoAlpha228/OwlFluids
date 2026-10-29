@@ -27,7 +27,7 @@ from ..core import layout as L
 from ..core.network import BuildError
 from ..examples import EXAMPLES
 from ..io.logger import open_logger, read_log
-from ..io.system import System
+from ..io.system import Sensor, System
 from ..sim.realtime import Runner
 from ..sim.simulation import Simulation
 from . import prefs, symbols
@@ -365,6 +365,10 @@ class MainWindow(QMainWindow):
             self.scene.add_component(type_name, self.view.mapToScene(self.view.viewport().rect().center()))
 
     def _selected(self, comp) -> None:
+        if isinstance(comp, Sensor):
+            self.properties.show_sensor(comp, self.scene.system, read_only=self.scene.running)
+            self.side_tabs.setCurrentWidget(self.properties)
+            return
         self.properties.show_component(comp, self.scene.system, read_only=self.scene.running)
         if comp is not None:
             self.side_tabs.setCurrentWidget(self.properties)
@@ -373,6 +377,7 @@ class MainWindow(QMainWindow):
         item = self.scene.items_by_id.get(self.properties.comp.id) if self.properties.comp else None
         if item is not None:
             item.update()
+        self.scene.sync_sensor_labels()
         self.scene.refresh_media()
         self._mark_dirty()
 
@@ -562,6 +567,8 @@ class MainWindow(QMainWindow):
         f = r.frame
         self.valves.show_frame(f)
         self.scene.show_values(self._component_values(r.sim, f))
+        if self.scene.sensor_items:
+            self.scene.show_sensor_values(self._sensor_values(f))
         self._show_wire_colours(f)
         now = time.perf_counter()
         dt, self._last_tick = (0.0 if r.paused else now - self._last_tick), now
@@ -649,6 +656,20 @@ class MainWindow(QMainWindow):
                 out.append((k, terms))
         return out
 
+    def _sensor_values(self, f) -> dict[str, str]:
+        """Readings beside the sensor bubbles on the lines, in each sensor's display units."""
+        out = {}
+        for sid, item in self.scene.sensor_items.items():
+            v = f.sensors.get(sid)
+            if v is None:
+                continue
+            s = item.sensor
+            unit = s.units or units.DEFAULT_UNITS.get(s.type, "")
+            if s.type == "mass_flow" and abs(v) < FLOW_ZERO:
+                v = 0.0
+            out[sid] = f"{units.convert(v, unit):.4g} {unit}".strip()
+        return out
+
     def _component_values(self, sim: Simulation, f) -> dict:
         net = sim.net
         out = {}
@@ -677,7 +698,7 @@ class MainWindow(QMainWindow):
                 text = f"{p:.0f} psi  {f.node_t[i]:.0f} K"
                 if ct.type_name == "volume":
                     state["fill_colour"] = self._fluid_colour(i, f.node_x[i] > 0.5)
-                if ct.type_name == "pressurized_tank" and len(nodes) > 1:
+                if ct.type_name == "tank" and len(nodes) > 1:  # liquid under a pressurant
                     liq = nodes[1]
                     vol = net.NF[nodes[0], L.NF_VOL]
                     state["fill"] = min(max(f.node_m[liq] / max(f.node_rho[liq], 1e-9) / vol, 0.0), 1.0)
@@ -687,8 +708,8 @@ class MainWindow(QMainWindow):
                 elif ct.type_name == "tank":
                     state["liquid_colour"] = self._fluid_colour(i, False)
                     state["gas_colour"] = self._fluid_colour(i, True)
-                    if 0.0 <= f.node_x[i] <= 1.0:
-                        state["fill"] = 1.0 - f.node_x[i]
+                    state["fill"] = sim.liquid_fraction(i, float(f.node_t[i]), float(f.node_x[i]),
+                                                        float(f.node_rho[i]))
             out[c.id] = (text, state)
         return out
 

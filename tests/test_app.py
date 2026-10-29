@@ -151,3 +151,83 @@ def test_wires_route_around_parts(app, example, a, b):
     obstacles = [it.obstacle() for it in sc.items_by_id.values()]
     assert routing.cost(wire.points, obstacles) < routing.HIT_COST
     w.close()
+
+
+@pytest.mark.gui
+def test_sensors_on_lines(app):
+    w = MainWindow()
+    w.show()
+    w.load_example("lox-feed")
+    sc = w.scene
+    wire = next(x for x in sc.wires if {x.a, x.b} == {"V-M.out", "INJ.in"})
+    p = sc.add_line_sensor(wire, "pressure")
+    q = sc.add_line_sensor(wire, "mass_flow")
+    assert (p.id, q.id) == ("PT-1", "FM-1")  # named like the properties panel names them
+    assert q.at in ("V-M.out", "INJ.in")  # a flow element's end
+    assert set(sc.sensor_items) >= {"PT-1", "FM-1", "PT-TK"}  # sensors at a port already show on its line
+    a, b = sc.sensor_items["PT-1"].pos(), sc.sensor_items["FM-1"].pos()
+    assert a != b and a.y() == b.y()  # spread along the line, above it
+    tee_line = sc.line_sensor_end
+    assert tee_line(wire, "temperature") is not None
+    w.run()
+    deadline = time.time() + 60
+    while w.runner is None and time.time() < deadline:
+        pump(app, 0.05)
+    assert w.runner is not None
+    w._toggle_valve("V-M")
+    pump(app, 1.0)
+    assert sc.sensor_labels["FM-1"][1].text().endswith("kg/s")
+    assert float(sc.sensor_labels["FM-1"][1].text().split()[0]) > 0.5
+    assert sc.sensor_labels["PT-1"][1].text().endswith("psi")
+    w.stop()
+    sc.clearSelection()
+    sc.sensor_items["PT-1"].setSelected(True)
+    assert w.properties.findChild(QtWidgets.QLineEdit).text() == "PT-1"  # the sensor's own panel
+    sc.delete_selected()
+    assert "PT-1" not in [s.id for s in sc.system.sensors] and "PT-1" not in sc.sensor_items
+    sc.clearSelection()
+    wire.setSelected(True)
+    sc.delete_selected()  # the line's sensors go with it
+    assert "FM-1" not in [s.id for s in sc.system.sensors]
+    w.dirty = False
+    w.close()
+
+
+@pytest.mark.gui
+def test_middle_button_drags_the_schematic(app):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    w = MainWindow()
+    w.resize(1200, 800)
+    w.show()
+    w.load_example("test-stand")
+    v = w.view
+    pump(app, 0.1)
+    k = v.transform().m11()
+    vp = v.viewport()
+    start = vp.rect().center()
+    before = v.mapToScene(start)
+    QTest.mousePress(vp, Qt.MiddleButton, Qt.NoModifier, start)
+    QTest.mouseMove(vp, start + QPoint(80, 40))
+    QTest.mouseRelease(vp, Qt.MiddleButton, Qt.NoModifier, start + QPoint(80, 40))
+    moved = v.mapToScene(start) - before  # the drawing follows the mouse, even past its edge
+    assert moved.x() == pytest.approx(-80 / k, abs=3 / k) and moved.y() == pytest.approx(-40 / k, abs=3 / k)
+    w.dirty = False
+    w.close()
+
+
+def test_tank_drawing_follows_its_fill():
+    from owlfluids.app import symbols
+    from owlfluids.app.schematic import _tank_state
+
+    w, h = 60, 110
+    assert symbols.level_height(0.5, w, h) == pytest.approx(h / 2, abs=0.1)  # symmetric
+    assert symbols.level_height(0.0, w, h) == 0 and symbols.level_height(1.0, w, h) == pytest.approx(h)
+    # the rounded bottom holds less per unit height, so a low fill stands higher than its share
+    assert symbols.level_height(0.05, w, h) > 0.05 * h
+    st = _tank_state({"fluid": "oxygen", "pressurant": "helium", "fill": 0.3})
+    assert st["fill"] == 0.3 and st["gas_colour"] == symbols.fluid_colour("helium", gas=True)
+    assert _tank_state({"fluid": "nitrous", "fill": "0.6"})["gas_colour"] == symbols.fluid_colour("nitrous", gas=True)
+    assert "fill" not in _tank_state({"fluid": "nitrogen", "pressure": "1000 psi"})  # a gas bottle
+    assert _tank_state({"fluid": "water"})["fill"] == 1.0

@@ -29,6 +29,7 @@ from ..fluids.registry import (
     L_T0,
     L_U0,
     MODEL_LIQUID,
+    MODEL_TABLE,
     P_OFF,
     PURGE_GASES,
     FluidSet,
@@ -79,6 +80,7 @@ class _Link:
     valve: tuple | None = None
     air: tuple | None = None  # pneumatic actuator: (its valve link, volume, normally open)
     reg: tuple = (0.0, 0.0, 0.0, 0.0)  # regulator lockup rise, seat leak, supply effect, droop reset rate
+    nets: tuple = (-1, -1)  # the nets (connected ports) its ends are on; -1 for an end no port reaches
 
 
 @dataclass
@@ -117,6 +119,8 @@ class Network:
     mix_init: np.ndarray = field(repr=False, default=None)
     pumps: dict[str, int] = field(default_factory=dict)  # component id -> its link
     actuators: dict[str, int] = field(default_factory=dict)  # pneumatic valve id -> its actuator link
+    # "COMP.port" -> [(link, sign), ...]: the flow along the line at that port is the sum of sign * mdot
+    port_flows: dict[str, list[tuple[int, float]]] = field(default_factory=dict)
 
     @property
     def n_states(self) -> int:
@@ -216,8 +220,8 @@ class NetworkBuilder:
         self.nodes[g].partner = liq
         self.nodes[liq].partner = g
         self.nodes[liq].area = area
-        self.bind_port(comp, "gas", g, L.DRAW_MIX)
-        self.bind_port(comp, "liquid", liq, L.DRAW_LIQUID)
+        self.bind_port(comp, "top", g, L.DRAW_MIX)
+        self.bind_port(comp, "bottom", liq, L.DRAW_LIQUID)
         return g, liq
 
     def bind_port(self, comp, port, node, draw) -> None:
@@ -275,7 +279,8 @@ class NetworkBuilder:
             raise BuildError(f"both ports of {comp.id} are connected to the same point")
         lk = _Link(comp.id + (f".{suffix}" if suffix else ""), a, b, comp.id, cda=cda, ctrl=ctrl,
                    p1=p1, p2=p2, draw_a=self.port_draw(comp, port_a), draw_b=self.port_draw(comp, port_b),
-                   valve=valve, reg=reg)
+                   valve=valve, reg=reg,
+                   nets=(self.net_of[(comp.id, port_a)], self.net_of[(comp.id, port_b)]))
         self.links.append(lk)
         idx = len(self.links) - 1
         self.comp_links[comp.id].append(idx)
@@ -290,7 +295,7 @@ class NetworkBuilder:
         self.net_volume[self.net_of[(comp.id, port)]] += volume
         rate = 1.0 / max(spin_up, 1e-6)
         lk = _Link(comp.id, a, b, comp.id, cda=mdot, ctrl=L.CTRL_PUMP, p1=p_on, p2=p_off,
-                   valve=(0.0, rate, rate))
+                   valve=(0.0, rate, rate), nets=(-1, self.net_of[(comp.id, port)]))
         self.links.append(lk)
         idx = len(self.links) - 1
         self.comp_links[comp.id].append(idx)
@@ -376,7 +381,7 @@ class NetworkBuilder:
     def _resolve_tank_liquids(self, fs: FluidSet) -> None:
         """Fix each tank liquid's starting temperature, and check it is a liquid there.
 
-        Without a ``liquid_temperature`` the liquid starts at the system's initial
+        Without a ``temperature`` the liquid starts at the system's initial
         temperature, or at its boiling point at the tank pressure if that is colder
         (a cryogen just loaded and pressurized).
         """
@@ -397,7 +402,7 @@ class NetworkBuilder:
                 if t > t_max:
                     t = t_max
                     self.warnings.append(f"{n.owner}: {n.fluid} starts at {t:.1f} K, just below its boiling point "
-                                         "at the tank pressure; set liquid_temperature to choose")
+                                         "at the tank pressure; set its temperature to choose")
             elif t_max < t < tc and (t_boil is None or t <= t_boil):
                 self.warnings.append(f"{n.owner}: {n.fluid} at {t:.1f} K is too close to boiling; "
                                      f"starting it at {t_max:.1f} K")
@@ -406,7 +411,7 @@ class NetworkBuilder:
                 limit = f"boils at {t_boil:.1f} K at this pressure" if t_boil is not None else \
                     f"has no liquid above {tc:.1f} K"
                 raise BuildError(f"{n.owner}: {n.fluid} at {t:.1f} K is not a liquid ({n.fluid} {limit}); "
-                                 "lower liquid_temperature or raise the pressure")
+                                 "lower its temperature or raise the pressure")
             n.init = ("tank_liquid", p, t, fill)
 
     def _assign_fluids(self) -> None:
@@ -614,7 +619,7 @@ class NetworkBuilder:
                 vol = n.volume
                 if n.partner >= 0:  # ullage shares the tank with the liquid
                     vol = n.volume - self.nodes[n.partner].volume
-                    if fs.model[f] != 1 and rho > fs.liquid_density(f, t0) * 0.5:
+                    if fs.model[f] == MODEL_TABLE and rho > fs.liquid_density(f, t0) * 0.5:
                         raise BuildError(
                             f"{n.owner}: the {n.fluid} pressurant would be liquid at its initial pressure and "
                             f"{t0:.1f} K; set a warmer gas_temperature")
@@ -677,9 +682,31 @@ class NetworkBuilder:
                       [n.owner for n in self.nodes], [lk.owner for lk in self.links],
                       port_nodes, dict(self.comp_nodes), dict(self.comp_links), dict(self.valves),
                       warnings=self.warnings, mix_init=mix_init, pumps=dict(self.pumps),
-                      actuators=dict(self.actuators))
+                      actuators=dict(self.actuators), port_flows=self._port_flows())
         _structure(net)
         return net
+
+    def _port_flows(self) -> dict[str, list[tuple[int, float]]]:
+        """How to read the flow along the line at each port, for mass flow sensors on lines.
+
+        At a flow element's port (valve, orifice, regulator, fitting, pump) it is the element's
+        own flow, positive in to out. At a tank's or volume's port it is the flow leaving the
+        part there: every flow element on that port's net, outward positive. A tee's ports
+        are all one point, so no flow belongs to one of them.
+        """
+        on_net: dict[int, list[int]] = defaultdict(list)
+        for k, lk in enumerate(self.links):
+            for net in set(lk.nets) - {-1}:
+                on_net[net].append(k)
+        comps = {c.id: get_type(c.type) for c in self.system.components}
+        out = {}
+        for (cid, port), net in self.net_of.items():
+            own = [k for k in self.comp_links.get(cid, []) if net in self.links[k].nets]
+            if own:
+                out[f"{cid}.{port}"] = [(own[0], 1.0)]
+            elif not comps[cid].merges_ports and on_net.get(net):
+                out[f"{cid}.{port}"] = [(k, 1.0 if self.links[k].nets[0] == net else -1.0) for k in on_net[net]]
+        return out
 
     def _initial_state(self, fs: FluidSet, f: int, n: _Node) -> tuple[float, float, float]:
         init = n.init or ("pt", None, None)

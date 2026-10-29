@@ -154,19 +154,32 @@ class Tank(ComponentType):
     category = "Volumes"
     ports = ("top", "bottom", "port")
     params = (
-        Param("fluid", "text", None, "fluid in the tank"),
+        Param("fluid", "text", None, "fluid in the tank (the liquid, if it has a pressurant)"),
         Param("volume", "volume", None, "internal volume"),
-        Param("pressure", "pressure", None, "initial pressure (gas, or saturated if fill is given)"),
-        Param("temperature", "temperature", None, "initial temperature"),
-        Param("fill", None, None, "liquid volume fraction 0-1 for a saturated liquid/vapor fill"),
+        Param("pressure", "pressure", None, "initial pressure (gas, ullage, or saturated if fill is given)"),
+        Param("temperature", "temperature", None,
+              "initial temperature (of the liquid, with a pressurant: default the system initial temperature, "
+              "or just below the boiling point at the tank pressure if that is colder)"),
+        Param("fill", None, None, "liquid volume fraction 0-1"),
+        Param("pressurant", "text", None,
+              "a separate gas above the liquid, such as nitrogen or helium (blank: the tank holds one fluid)"),
+        Param("gas_temperature", "temperature", None,
+              "initial pressurant temperature (default: system initial temperature)"),
+        Param("diameter", "length", None, "inner diameter, for liquid head at the bottom port (with a pressurant)"),
     ) + WALL_PARAMS + HEAT_PARAMS
-    help = ("Single-fluid tank. With 'fill' it holds saturated liquid and vapor (LOX, LN2, nitrous) in "
-            "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; "
-            "'top' draws vapor, 'bottom' draws liquid, 'port' draws the mixture. A 'wall_mass' gives "
-            "it a shell that feeds heat into the boiling fluid (a nitrous bottle stays warmer as it empties).")
+    help = ("Gas bottle, propellant tank or run tank. With a 'pressurant' it holds liquid under a separate "
+            "gas at one shared pressure, and the bottom port passes ullage gas once the liquid runs out. "
+            "Without one it holds a single fluid: with 'fill' saturated liquid and vapor (LOX, LN2, nitrous) in "
+            "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; otherwise a "
+            "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor, 'bottom' draws "
+            "liquid, 'port' draws the mixture (the ullage gas, with a pressurant). A 'wall_mass' gives a "
+            "single-fluid tank a shell that feeds heat into the boiling fluid.")
 
     @classmethod
     def build(cls, b, comp):
+        if cls.param(comp, "pressurant"):
+            cls._build_pressurized(b, comp)
+            return
         fluid = cls.require(comp, "fluid")
         vol = cls.require(comp, "volume")
         fill = cls.param(comp, "fill")
@@ -185,42 +198,24 @@ class Tank(ComponentType):
         b.bind_port(comp, "bottom", n, DRAW_LIQUID)
         b.bind_port(comp, "port", n, DRAW_MIX)
 
-
-class PressurizedTank(ComponentType):
-    type_name = "pressurized_tank"
-    label = "Pressurized tank"
-    category = "Volumes"
-    ports = ("gas", "liquid")
-    params = (
-        Param("liquid", "text", None, "propellant or liquid fluid"),
-        Param("pressurant", "text", "nitrogen", "ullage gas fluid"),
-        Param("volume", "volume", None, "internal volume"),
-        Param("fill", None, 0.8, "initial liquid volume fraction 0-1"),
-        Param("pressure", "pressure", None, "initial ullage pressure"),
-        Param("liquid_temperature", "temperature", None,
-              "initial liquid temperature (default: system initial temperature, or just below the boiling "
-              "point at the tank pressure if that is colder)"),
-        Param("gas_temperature", "temperature", None,
-              "initial ullage temperature (default: system initial temperature)"),
-        Param("diameter", "length", None, "inner diameter, for liquid head at the outlet (optional)"),
-    ) + HEAT_PARAMS
-    help = ("Liquid with a separate pressurant gas above it at one shared pressure. "
-            "When the liquid runs out, the liquid port starts passing ullage gas.")
-
     @classmethod
-    def build(cls, b, comp):
+    def _build_pressurized(cls, b, comp):
+        """Liquid under a separate pressurant gas: an ullage node over a liquid node."""
         vol = cls.require(comp, "volume")
-        fill = float(cls.param(comp, "fill"))
+        fill = cls.require(comp, "fill")
+        fill = float(fill)
         if not 0.0 <= fill < 1.0:
-            raise ValueError(f"{comp.id}.fill must be between 0 and 1")
-        t_l = cls.param(comp, "liquid_temperature")
-        t_g = cls.param(comp, "gas_temperature") or b.t_init
+            raise ValueError(f"{comp.id}.fill must be at least 0 and below 1 with a pressurant")
         p = cls.require(comp, "pressure")
         d = cls.param(comp, "diameter")
         area = math.pi * d * d / 4.0 if d else 0.0
-        b.new_pressurized_tank(comp, cls.require(comp, "liquid"), cls.param(comp, "pressurant"), vol, fill,
-                               p, t_l, t_g, area,
-                               heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+        if cls.param(comp, "wall_mass"):
+            b.warnings.append(f"{comp.id}: wall_mass is not modelled for a tank with a pressurant; it is ignored")
+        g, _liq = b.new_pressurized_tank(
+            comp, cls.require(comp, "fluid"), cls.param(comp, "pressurant"), vol, fill, p,
+            cls.param(comp, "temperature"), cls.param(comp, "gas_temperature") or b.t_init, area,
+            heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+        b.bind_port(comp, "port", g, DRAW_MIX)
 
 
 class Boundary(ComponentType):
@@ -565,7 +560,7 @@ class AirPump(ComponentType):
 
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
-    for c in (Tank, PressurizedTank, Boundary, Volume, PneumaticSupply, Tee, Fitting, Orifice, Valve, ManualValve,
+    for c in (Tank, Boundary, Volume, PneumaticSupply, Tee, Fitting, Orifice, Valve, ManualValve,
               CheckValve, ReliefValve, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",

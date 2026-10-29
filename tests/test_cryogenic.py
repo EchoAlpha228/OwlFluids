@@ -10,13 +10,13 @@ BUDGET = 200
 
 def lox_feed():
     s = System("lox feed")
-    s.add("TK", "pressurized_tank", liquid="oxygen", pressurant="nitrogen", volume="60 L", fill=0.85,
-          pressure="80 psi", liquid_temperature="90 K")
+    s.add("TK", "tank", fluid="oxygen", pressurant="nitrogen", volume="60 L", fill=0.85,
+          pressure="80 psi", temperature="90 K")
     s.add("F1", "fitting", kind="elbow90", diameter="19 mm")
     s.add("V1", "valve", cv=6)
     s.add("INJ", "orifice", cda="60 mm2")
     s.add("AMB", "boundary", fluid="oxygen")
-    for a, b in [("TK.liquid", "F1.in"), ("F1.out", "V1.in"), ("V1.out", "INJ.in"), ("INJ.out", "AMB.port")]:
+    for a, b in [("TK.bottom", "F1.in"), ("F1.out", "V1.in"), ("V1.out", "INJ.in"), ("INJ.out", "AMB.port")]:
         s.connect(a, b)
     return s
 
@@ -26,7 +26,7 @@ def test_feed_line_starts_full_of_liquid_at_tank_pressure():
     sim = Simulation(lox_feed(), step_budget=BUDGET)
     assert sim.temperature("V1.in") == pytest.approx(90.0, abs=0.5)
     assert sim.quality("V1.in") < 0  # compressed liquid
-    assert sim.pressure("V1.in") == pytest.approx(sim.pressure("TK.liquid"), rel=0.02)
+    assert sim.pressure("V1.in") == pytest.approx(sim.pressure("TK.bottom"), rel=0.02)
     # downstream of the closed valve the line is warm gas at ambient pressure
     assert sim.temperature("V1.out") == pytest.approx(293.15, abs=0.5)
     sim.run(0.5)
