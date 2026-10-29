@@ -126,7 +126,15 @@ class Properties(QScrollArea):
         self._layout.setAlignment(Qt.AlignTop)
         self.show_component(None, None)
 
+    def focus_id(self) -> None:
+        """Put the cursor in the shown part's or sensor's id, all selected, ready to type a new name."""
+        ed = getattr(self, "_ident", None)
+        if ed is not None and not ed.isReadOnly():
+            ed.setFocus(Qt.ShortcutFocusReason)
+            ed.selectAll()
+
     def _clear(self) -> None:
+        self._ident = None
         while self._layout.count():
             w = self._layout.takeAt(0).widget()
             if w is not None:
@@ -156,6 +164,8 @@ class Properties(QScrollArea):
         form = QFormLayout(form_w)
         ident = QLineEdit(comp.id)
         ident.setReadOnly(read_only)
+        ident.setToolTip("Rename: type a new id and press Enter (F2 or double-click the part to jump here)")
+        self._ident = ident
         ident.editingFinished.connect(lambda: self._rename(ident))
         form.addRow("id", ident)
         for p in ct.params:
@@ -199,6 +209,8 @@ class Properties(QScrollArea):
         form = QFormLayout(form_w)
         ident = QLineEdit(s.id)
         ident.setReadOnly(read_only)
+        ident.setToolTip("Rename: type a new id and press Enter (F2 or double-click the sensor to jump here)")
+        self._ident = ident
         T.monospace(ident)
 
         def rename():

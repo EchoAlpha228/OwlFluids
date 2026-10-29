@@ -25,7 +25,7 @@ from ..components import get_type
 from ..fluids.registry import canonical
 from ..io.system import Component, Sensor, System
 from . import media as M
-from . import routing, symbols
+from . import naming, routing, symbols
 from . import theme as T
 
 GRID = 10.0
@@ -39,8 +39,8 @@ FLOW_MARK = T.qc(T.WHITE)
 FLOW_SIZE = 2.5  # px, the side of each square
 FLOW_DASHES = [1.0, 5.0]  # square, gap; in multiples of FLOW_SIZE
 FLOW_SPEED = 2.0  # dash units per second the squares travel (2 x 2.5 = 5 px/s per unit)
-# sensors that can sit on a line, and the letters in their bubble and new ids (as the properties panel
-# names them: pressure transducer, thermocouple, flow meter)
+# sensors that can sit on a line, and the letters in their bubble: pressure transducer, thermocouple,
+# flow meter (new ids add the line's commodity in front, see naming.py)
 LINE_SENSORS = {"pressure": "PT", "temperature": "TC", "mass_flow": "FM"}
 BUBBLE_R = 10.0  # px, sensor bubble radius
 BUBBLE_OFFSET = 26.0  # px from the line to the bubble's centre
@@ -340,6 +340,8 @@ class Scene(QGraphicsScene):
     changed_system = Signal()  # any edit
     valve_clicked = Signal(str)  # run mode
     component_selected = Signal(object)  # Component, Sensor (on a line) or None
+    renamed = Signal()  # a part or sensor took a new default name as the fluid reaching it changed
+    rename_wanted = Signal()  # a part or sensor was double-clicked while editing
 
     def __init__(self):
         super().__init__()
@@ -352,6 +354,9 @@ class Scene(QGraphicsScene):
         self.flow_phase = 0.0
         self.sensor_items: dict[str, SensorItem] = {}
         self.sensor_labels: dict[str, tuple] = {}
+        # parts and sensors placed here that still carry their default name, so it follows their
+        # commodity: python id -> (part or sensor, the name given). Renamed by hand, it is theirs.
+        self._auto: dict[int, tuple[object, str]] = {}
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsLineItem | None = None
         self.setSceneRect(QRectF(-2000, -2000, 6000, 4000))
@@ -365,6 +370,7 @@ class Scene(QGraphicsScene):
         self.labels.clear()
         self.sensor_items.clear()
         self.sensor_labels.clear()
+        self._auto.clear()
         self.system = system
         if any(c.position is None for c in system.components):
             auto_layout(system)
@@ -383,6 +389,7 @@ class Scene(QGraphicsScene):
         if self.running:
             return
         self.media = M.edit_media(self.system)
+        self._follow_commodity()
         for w in self.wires:
             m = self.media.get(w.a) or self.media.get(w.b)
             w.set_colour(symbols.fluid_colour(*m) if m else None)
@@ -663,12 +670,10 @@ class Scene(QGraphicsScene):
         at = self.line_sensor_end(w, stype)
         if at is None or self.running:
             return None
-        prefix = LINE_SENSORS[stype]
-        n = 1
-        while any(s.id == f"{prefix}-{n}" for s in self.system.sensors):
-            n += 1
-        s = Sensor(f"{prefix}-{n}", stype, at, units=units.DEFAULT_UNITS.get(stype, ""))
+        sid = naming.next_name(naming.sensor_prefix(stype, self._line_fluid(at)), self._sensor_ids())
+        s = Sensor(sid, stype, at, units=units.DEFAULT_UNITS.get(stype, ""))
         self.system.sensors.append(s)
+        self._auto[id(s)] = (s, s.id)
         self.refresh_sensors()
         self.clearSelection()
         if s.id in self.sensor_items:
@@ -693,17 +698,14 @@ class Scene(QGraphicsScene):
     # ------------------------------------------------------------------ edits
     def add_component(self, type_name: str, pos: QPointF) -> Component:
         ct = get_type(type_name)
-        prefix = {"valve": "V", "tank": "K", "boundary": "ATM",
-                  "orifice": "O", "fitting": "F", "tee": "T", "check_valve": "CV", "relief_valve": "RV",
-                  "regulator": "REG", "volume": "VOL", "manual_valve": "MV"}.get(type_name, type_name.upper())
-        n = 1
-        while any(c.id == f"{prefix}{n}" for c in self.system.components):
-            n += 1
         params = {p.name: p.default for p in ct.params if p.default is None and p.name in REQUIRED.get(type_name, ())}
         params.update(NEW_DEFAULTS.get(type_name, {}))
         params = {k: v for k, v in params.items() if v is not None}
         p = snap(pos)
-        comp = self.system.add(f"{prefix}{n}", type_name, at=[p.x(), p.y()], **params)
+        comp = Component("", type_name, params)  # named for its fluid, which a tank sets in its params
+        name = naming.next_name(naming.part_prefix(comp, {}), [c.id for c in self.system.components])
+        comp = self.system.add(name, type_name, at=[p.x(), p.y()], **params)
+        self._auto[id(comp)] = (comp, comp.id)
         item = self._add_item(comp)
         self.clearSelection()
         item.setSelected(True)
@@ -787,10 +789,51 @@ class Scene(QGraphicsScene):
         self.items_by_id[new] = item
         self.labels[new] = self.labels.pop(old)
         self.labels[new][0].setText(new)
+        item.setToolTip(f"{new} ({item.ctype.label or item.ctype.type_name})")
         self.place_labels(item)
         for it in self.sensor_items.values():
             it._tip()
         self.changed_system.emit()
+
+    # ------------------------------------------------------------------ default names
+    def _sensor_ids(self) -> list[str]:
+        return [s.id for s in self.system.sensors]
+
+    def _line_fluid(self, ref: str) -> str | None:
+        m = self.media.get(ref)
+        return m[0] if m else None
+
+    def _follow_commodity(self) -> None:
+        """Parts and sensors still on their default name take the commodity now reaching them (XV-1 -> OV-1)."""
+        changed = False
+        for key, (obj, given) in list(self._auto.items()):
+            item = self.items_by_id.get(obj.id)
+            if obj.id != given or isinstance(obj, Component) and (item is None or item.comp is not obj):
+                del self._auto[key]  # renamed by hand, or deleted
+                continue
+            want = naming.part_prefix(obj, self.media) if isinstance(obj, Component) else None
+            if want is None or naming.prefix_of(obj.id) == want:
+                continue
+            self.rename(obj.id, naming.next_name(want, [c.id for c in self.system.components]))
+            self._auto[key] = (obj, obj.id)
+            changed = True
+        if changed:  # port names moved with the parts
+            self.media = M.edit_media(self.system)
+        for key, (obj, given) in list(self._auto.items()):
+            if not isinstance(obj, Sensor):
+                continue
+            if obj.id != given or not any(s is obj for s in self.system.sensors):
+                del self._auto[key]
+                continue
+            want = naming.sensor_prefix(obj.type, self._line_fluid(obj.at))
+            if naming.prefix_of(obj.id) == want:
+                continue
+            obj.id = naming.next_name(want, self._sensor_ids())
+            self._auto[key] = (obj, obj.id)
+            self.sync_sensor_labels()
+            changed = True
+        if changed:
+            self.renamed.emit()
 
     def _on_selection(self) -> None:
         sel = [i for i in self.selectedItems() if isinstance(i, (ComponentItem, SensorItem))]
@@ -854,6 +897,20 @@ class Scene(QGraphicsScene):
                 self.connect_ports(src.ref, target.ref)
             return
         super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        """Double-click a part, a sensor or a name while editing to rename it."""
+        if not self.running:
+            it = next(iter(self.items(e.scenePos())), None)  # the topmost: a line over a part is the line's
+            owner = it if isinstance(it, (ComponentItem, SensorItem)) else (
+                next((self.items_by_id.get(k) for k, labs in self.labels.items() if labs[0] is it), None)
+                or next((self.sensor_items.get(k) for k, labs in self.sensor_labels.items() if labs[0] is it), None))
+            if owner is not None:
+                self.clearSelection()
+                owner.setSelected(True)
+                self.rename_wanted.emit()
+                return
+        super().mouseDoubleClickEvent(e)
 
     def connect_ports(self, a: str, b: str) -> None:
         if a == b or (a, b) in self.system.connections or (b, a) in self.system.connections:

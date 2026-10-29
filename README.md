@@ -107,6 +107,14 @@ to connect, **R** rotates, **Delete** removes, and the middle mouse button drags
 schematic around. Right-click a line to put a pressure, temperature or mass flow sensor on
 it; its reading shows beside it during a run. Select a part to edit its
 parameters; quantities take units (`3000 psi`, `-196 C`, `0.5 in`, `49 L`).
+New parts are named commodity letter, part letter, number: `OV-1` is the first oxidizer
+valve, `FT-1` a fuel tank, `HR-1` a helium regulator, and line sensors add their tag
+(`OPT-1`). Commodities are O oxidizer (LOX, N2O), F fuel (ethanol, methane), H helium,
+N nitrogen, A air, W water, and X while no fluid reaches the part yet. Parts are V valve,
+M manual valve, C check valve, R regulator, T tank, S relief valve, O orifice, F fitting,
+J tee, D volume, B boundary, G pneumatic supply and P air pump. A default name follows the
+fluid wired to the part until you rename it: **F2** or double-click a part or sensor
+to type a new id.
 Press **Run**; valves appear in the **Valves** tab and can also be clicked on the
 schematic. Manual valves there also have a slider to throttle them to any opening, and
 each regulator has a setpoint box (psig) to turn its knob mid-run. **Record** logs to CSV/HDF5, and **File > Overlay a recorded log** draws
