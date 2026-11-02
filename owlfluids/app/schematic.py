@@ -783,6 +783,7 @@ class Scene(QGraphicsScene):
             a, _, b = k.partition(" -- ")
             routes[f"{fix(a)} -- {fix(b)}"] = v
         sysm.routes = routes
+        sysm.renamed(old, new)
         for w in self.wires:
             w.a, w.b = fix(w.a), fix(w.b)
         item = self.items_by_id.pop(old)

@@ -36,3 +36,28 @@ def add_recent(path: str | Path) -> None:
 
 def last_dir() -> str:
     return str(settings().value("last_dir", "") or "")
+
+
+def synnax_connection() -> dict:
+    """The Synnax host and login last used on this machine (kept here, never in a system file)."""
+    s = settings()
+    out = {}
+    for key in ("host", "port", "username", "password", "secure"):
+        v = s.value(f"synnax/{key}")
+        if v is None or v == "":
+            continue
+        if key == "port":
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                continue
+        elif key == "secure":
+            v = v if isinstance(v, bool) else str(v).lower() in ("true", "1", "yes")
+        out[key] = v
+    return out
+
+
+def set_synnax_connection(conn: dict) -> None:
+    s = settings()
+    for key, v in conn.items():
+        s.setValue(f"synnax/{key}", v)

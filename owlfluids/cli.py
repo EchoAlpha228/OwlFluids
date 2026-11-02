@@ -118,13 +118,20 @@ def _report_errors(runner, driver) -> int:
 
 
 def _start_driver(args, runner):
-    if not getattr(args, "synnax", None):
+    if getattr(args, "synnax", None) is None:
         return None
+    import yaml
+
     from .drivers.synnax import SynnaxConfig, SynnaxDriver
 
-    cfg = SynnaxConfig.load(args.synnax)
+    d = dict(getattr(runner.sim.system, "synnax", None) or {})  # set up in the app, saved with the system
+    if args.synnax:
+        with open(args.synnax, encoding="utf-8") as fh:
+            f = yaml.safe_load(fh) or {}
+        d.update(f.get("synnax", f))
     if getattr(args, "synnax_mode", None):
-        cfg = SynnaxConfig.from_dict({**cfg.__dict__, "mode": args.synnax_mode})
+        d["mode"] = args.synnax_mode
+    cfg = SynnaxConfig.from_dict(d)
     driver = SynnaxDriver(runner, cfg)
     what = "faking valve states, reading valve commands" if cfg.mode == "hootl" else "reading valve states"
     print(f"Synnax {cfg.mode.upper()}: writing {len(driver.sensors)} sensors at {cfg.rate:g} Hz to "
@@ -362,14 +369,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--log", help="write a .csv or .h5 log")
     p.add_argument("--log-interval", type=float, default=0.01, help="seconds between log rows (default 0.01)")
     p.add_argument("--print-every", type=float, default=1.0, help="print sensors every N simulated s (0 = never)")
-    p.add_argument("--synnax", help="YAML file with a synnax: section; connects the sim to Synnax")
+    p.add_argument("--synnax", nargs="?", const="", metavar="FILE",
+                   help="connect the sim to Synnax with the system file's synnax: section; FILE (a YAML "
+                        "file with a synnax: section, e.g. the host and login) overrides it")
     p.add_argument("--synnax-mode", choices=["hootl", "hitl"],
                    help="override the file's mode: hootl fakes valve states, hitl reads them from hardware")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("console", help="run in real time with typed valve commands")
     p.add_argument("system", help=SYSTEM_HELP)
-    p.add_argument("--synnax", help="YAML file with a synnax: section; connects the sim to Synnax")
+    p.add_argument("--synnax", nargs="?", const="", metavar="FILE",
+                   help="connect the sim to Synnax with the system file's synnax: section; FILE (a YAML "
+                        "file with a synnax: section, e.g. the host and login) overrides it")
     p.add_argument("--synnax-mode", choices=["hootl", "hitl"],
                    help="override the file's mode: hootl fakes valve states, hitl reads them from hardware")
     p.set_defaults(fn=cmd_console)

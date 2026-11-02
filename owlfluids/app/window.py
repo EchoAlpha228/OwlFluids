@@ -180,6 +180,8 @@ class MainWindow(QMainWindow):
         self.a_log = act("● Record", self.toggle_log, "Ctrl+L", m_run, True, "Record sensors and valves to a file")
         self.a_log.setCheckable(True)
         m_run.addSeparator()
+        act("Synnax setup…", self.synnax_setup, None, m_run, False,
+            "Server, login, HOOTL or HITL, and the channel for each sensor and valve")
         self.a_synnax = act("Connect to Synnax…", self.toggle_synnax, None, m_run, False,
                             "HOOTL or HITL: send sensors to Synnax, take valve channels from it")
         self.a_synnax.setCheckable(True)
@@ -529,18 +531,27 @@ class MainWindow(QMainWindow):
                 log.close()
             self.a_log.setChecked(False)
 
+    def synnax_setup(self) -> None:
+        from .synnax_setup import SynnaxDialog
+
+        dlg = SynnaxDialog(self.scene.system, self)
+        if dlg.exec() and dlg.changed:
+            self._mark_dirty()
+
     def toggle_synnax(self, on: bool) -> None:
         if on and self.runner is not None and self.driver is None:
-            fn, _ = QFileDialog.getOpenFileName(self, "Synnax settings (a YAML file with a synnax: section)",
-                                                self._start_dir(),
-                                                "YAML (*.yaml *.yml)")
-            if not fn:
+            from .synnax_setup import SynnaxDialog
+
+            dlg = SynnaxDialog(self.scene.system, self, connect=True)  # shows what will connect, to change or keep
+            if not dlg.exec() or self.runner is None:
                 self.a_synnax.setChecked(False)
                 return
+            if dlg.changed:
+                self._mark_dirty()
             try:
-                from ..drivers.synnax import SynnaxConfig, SynnaxDriver
+                from ..drivers.synnax import SynnaxDriver
 
-                self.driver = SynnaxDriver(self.runner, SynnaxConfig.load(fn))
+                self.driver = SynnaxDriver(self.runner, dlg.result_config)
                 self.driver.start()
             except Exception as e:  # noqa: BLE001 - connection problems are reported, not fatal
                 self.driver = None

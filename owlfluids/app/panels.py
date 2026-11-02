@@ -221,6 +221,7 @@ class Properties(QScrollArea):
                 _show_error(ident, f"{new} is already used")
                 return
             _set_error(ident, False)
+            system.renamed(s.id, new)
             s.id = new
             self.edited.emit()
 

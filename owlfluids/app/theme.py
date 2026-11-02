@@ -154,6 +154,12 @@ QPushButton:hover {{ background: {GRAY_600}; border-color: {GRAY_500}; }}
 QPushButton:pressed {{ background: {GRAY_500}; }}
 QPushButton:disabled {{ color: {TEXT_OFF}; background: {GRAY_800}; border-color: {GRAY_700}; }}
 QCheckBox::indicator {{ width: 13px; height: 13px; border: 1px solid {GRAY_400}; background: {FIELD}; }}
+QTableWidget {{ background: {PANEL}; border: none; outline: none; }}
+QTableWidget::item {{ padding: 0 4px; }}
+QHeaderView::section {{ background: {GRAY_950}; color: {TEXT_DIM}; border: none; border-bottom: 1px solid {BORDER};
+                       padding: 4px 6px; }}
+QTableWidget::indicator {{ width: 11px; height: 11px; border: 1px solid {GRAY_400}; background: {FIELD}; }}
+QTableWidget::indicator:checked {{ background: {GRAY_100}; border-color: {GRAY_100}; }}
 QListWidget::indicator {{ width: 11px; height: 11px; border: 1px solid {GRAY_400}; background: {FIELD}; }}
 QCheckBox::indicator:checked, QListWidget::indicator:checked {{ background: {GRAY_100}; border-color: {GRAY_100}; }}
 QProgressBar {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 2px; text-align: center;

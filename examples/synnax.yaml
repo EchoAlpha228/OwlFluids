@@ -1,5 +1,5 @@
 # Synnax settings for `owlfluids run ... --synnax examples/synnax.yaml`
-# (or Run > Connect to Synnax… in the app). Channels that don't exist are created.
+# (or Load file… in the app's Run > Synnax setup). Channels that don't exist are created.
 synnax:
   host: localhost
   port: 9090
@@ -36,3 +36,4 @@ synnax:
   valves:
     V-P: {cmd: press_cmd, state: press_state}
     V-M: {cmd: mpv_cmd, state: mpv_state}
+  # exclude: [TC-INJ]       # sensors and valves that get no channels
