@@ -160,9 +160,10 @@ def explain_connect_error(err: BaseException, cfg, client: str) -> str:
     core = core_version(cfg.host, cfg.port, cfg.secure)
     if core is None:
         if "Method Not Allowed" in raw or "404" in raw:
-            return (f"the server at {cfg.host}:{cfg.port} didn't accept the login of the Synnax client {client} in "
-                    "this OwlFluids build. Synnax 0.60 changed how clients log in, so a Core older than 0.60 "
-                    f"does this: upgrade the Core, or install an OwlFluids build made for your Core ({raw})")
+            return (f"the server at {cfg.host}:{cfg.port} didn't accept the login of the Synnax client {client} and "
+                    "didn't say its version, so it may not be a Synnax Core (Synnax Desktop's built-in Core uses "
+                    "its own private port; run a standalone Core for OwlFluids). If it is a Core older than "
+                    f"0.60, upgrade it: Synnax 0.60 changed how clients log in ({raw})")
         return raw
     problem = version_mismatch(client, core)
     if problem is None:

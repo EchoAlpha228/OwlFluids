@@ -380,7 +380,8 @@ def test_connect_error_without_a_core_keeps_the_clients_message():
 
     cfg = SynnaxConfig(host="127.0.0.1", port=1)  # nothing listens there
     assert explain_connect_error(ConnectionError("refused"), cfg, "0.60.1") == "refused"
-    assert "older than 0.60" in explain_connect_error(ValueError("Method Not Allowed"), cfg, "0.60.1")
+    msg = explain_connect_error(ValueError("Method Not Allowed"), cfg, "0.60.1")
+    assert "may not be a Synnax Core" in msg and "older than 0.60" in msg
 
 
 def test_real_client_against_an_old_core_says_why(old_core):
