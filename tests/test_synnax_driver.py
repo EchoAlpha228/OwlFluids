@@ -273,3 +273,63 @@ def test_link_warnings_reach_the_runner():
     runner = Runner(Simulation(lox_feed()))
     SynnaxDriver(runner, SynnaxConfig(), link_factory=WarningLink)
     assert "Synnax: versions differ" in runner.warnings
+
+
+def test_exclude_leaves_sensors_and_valves_out():
+    sim = Simulation(lox_feed())
+    sensors, valves = SynnaxConfig(exclude=["PT-TK", "V-M"]).resolve(sim)
+    assert "PT-TK" not in sensors and "PT-INJ" in sensors
+    assert "V-M" not in valves and "V-P" in valves
+    sensors, _ = SynnaxConfig(sensors={"PT-TK": "a", "PT-INJ": "b"}, exclude=["PT-INJ"]).resolve(sim)
+    assert sensors == {"PT-TK": "a"}
+
+
+def test_split_keeps_the_login_out_of_the_system_section():
+    cfg = SynnaxConfig(host="stand", password="pw", mode="hitl", sensors={"PT-TK": "pt"})
+    conn, rest = cfg.split()
+    assert conn == {"host": "stand", "port": 9090, "username": "synnax", "password": "pw", "secure": False}
+    assert rest == {"mode": "hitl", "sensors": {"PT-TK": "pt"}}
+    assert SynnaxConfig.from_dict({**conn, **rest}) == cfg
+
+
+def test_system_file_keeps_its_synnax_section_and_renames_follow(tmp_path):
+    from owlfluids.io.system import System
+
+    s = lox_feed()
+    s.synnax = {"mode": "hitl", "sensors": {"PT-TK": "pt_tank"}, "valves": {"V-M": {"cmd": "m", "state": "ms"}},
+                "exclude": ["PT-INJ"]}
+    s.renamed("PT-TK", "PT-T1")
+    s.renamed("V-M", "V-MAIN")
+    s.renamed("PT-INJ", "PT-I")
+    assert s.synnax["sensors"] == {"PT-T1": "pt_tank"}
+    assert s.synnax["valves"] == {"V-MAIN": {"cmd": "m", "state": "ms"}}
+    assert s.synnax["exclude"] == ["PT-I"]
+    s.save(tmp_path / "s.yaml")
+    assert System.load(tmp_path / "s.yaml").synnax == s.synnax
+
+
+class ProbeLink:
+    def __init__(self, cfg):
+        self.warnings = ["Synnax: versions differ"]
+        self.closed = False
+        ProbeLink.last = self
+
+    def existing(self, names):
+        return [n for n in names if n.startswith("pt")]
+
+    def core_version(self):
+        return "0.60.1"
+
+    def disconnect(self):
+        self.closed = True
+
+
+def test_probe_reports_channels_and_disconnects():
+    from owlfluids.drivers.synnax import probe
+
+    res = probe(SynnaxConfig(), ["pt_tk", "v_m_cmd", "pt_tk"], ProbeLink)
+    assert res.found == ["pt_tk"] and res.missing == ["v_m_cmd"]
+    assert res.core == "0.60.1" and res.warnings == ["Synnax: versions differ"]
+    assert ProbeLink.last.closed
+    assert "1 of 2 channels exist, the rest will be created" in res.summary(True)
+    assert "missing: v_m_cmd" in res.summary(False)

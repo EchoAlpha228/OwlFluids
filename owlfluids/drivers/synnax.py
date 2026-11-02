@@ -50,6 +50,10 @@ Config (a ``synnax:`` section in the system file, or its own YAML file)::
         PT-OX: pt_ox
       valves:                     # sim valve -> channels, see SynnaxConfig.resolve
         V-OXM: {cmd: ox_mpv_cmd, state: ox_mpv_state}
+      exclude: [TC-OX]            # sensors and valves that get no channels at all
+
+The app keeps the connection (host to secure) in the user's own settings and the
+rest in the system file's ``synnax:`` section (``CONNECTION`` and ``split``).
 """
 
 from __future__ import annotations
@@ -68,6 +72,7 @@ MODES = ("hootl", "hitl")
 VALVE_STATES = ("command", "position")
 VERSION_CHECKS = ("warn", "strict", "off")
 LIMIT_OPEN, LIMIT_CLOSED = 0.99, 0.01  # faked limit switches (valve_state: position)
+CONNECTION = ("host", "port", "username", "password", "secure")  # per machine and user, not per system
 
 
 def version_mismatch(client: str, core: str) -> str | None:
@@ -113,7 +118,8 @@ def check_versions(client, mode: str) -> str | None:
     return problem
 
 
-def _channel_name(name: str) -> str:
+def channel_name(name: str) -> str:
+    """The default channel for a sensor or valve id: PT-TK -> pt_tk."""
     return name.lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
@@ -133,8 +139,10 @@ class SynnaxConfig:
     valves: dict[str, dict[str, str]] = field(default_factory=dict)
     valve_threshold: float = 0.5  # a read value above this opens an on/off valve
     check_version: str = "warn"  # Core and client major.minor differ: warn, strict (refuse) or off
+    exclude: list[str] = field(default_factory=list)  # sensors and valves left out (no channels)
 
     def __post_init__(self):
+        self.exclude = [str(x) for x in (self.exclude or [])]
         self.mode = str(self.mode).strip().lower()
         if self.mode not in MODES:
             raise ValueError(f"synnax mode must be one of {', '.join(MODES)}, not {self.mode!r}")
@@ -161,6 +169,16 @@ class SynnaxConfig:
             raise ValueError(f"unknown synnax settings: {', '.join(d)}")
         return cls(**known)
 
+    def to_dict(self) -> dict:
+        """The settings that differ from the defaults, as a ``synnax:`` section holds them."""
+        base = SynnaxConfig()
+        return {k: v for k, v in self.__dict__.items() if v != getattr(base, k)}
+
+    def split(self) -> tuple[dict, dict]:
+        """(connection, the rest): the user's settings and the system file's section."""
+        d = self.to_dict()
+        return ({k: getattr(self, k) for k in CONNECTION}, {k: v for k, v in d.items() if k not in CONNECTION})
+
     @classmethod
     def load(cls, path: str | Path) -> SynnaxConfig:
         with open(path, encoding="utf-8") as fh:
@@ -175,11 +193,13 @@ class SynnaxConfig:
         reads the state and writes nothing. ``read:``/``write:`` override either side
         (``read: <cmd channel>`` in HITL follows commands instead of the hardware).
         """
-        sensors = dict(self.sensors) or {s.id: _channel_name(s.id) for s in sim.system.sensors}
+        skip = set(self.exclude)
+        sensors = dict(self.sensors) or {s.id: channel_name(s.id) for s in sim.system.sensors}
+        sensors = {k: v for k, v in sensors.items() if k not in skip}
         for sid in sensors:
             sim.read(sid)  # unknown sensor -> KeyError now, not mid-run
         valves = {}
-        names = list(self.valves) or sim.automated_valves()
+        names = [v for v in (list(self.valves) or sim.automated_valves()) if v not in skip]
         manual = set(sim.manual_valves())
         for v in names:
             sim.valve_position(v)
@@ -187,8 +207,8 @@ class SynnaxConfig:
                 raise ValueError(f"{v} is a manual valve: only the operator works it, from the OwlFluids window, "
                                  "so it can't have Synnax channels")
             spec = self.valves.get(v) or {}
-            cmd = spec.get("cmd", f"{_channel_name(v)}_cmd")
-            state = spec.get("state", f"{_channel_name(v)}_state")
+            cmd = spec.get("cmd", f"{channel_name(v)}_cmd")
+            state = spec.get("state", f"{channel_name(v)}_state")
             if self.mode == "hitl":
                 valves[v] = (spec.get("read", state), None)
             else:
@@ -273,6 +293,22 @@ class SynnaxLink:
                 self.client.channels.create(name=n, virtual=True, data_type=sy.DataType.FLOAT32)
         return indexes
 
+    def existing(self, names: list[str]) -> list[str]:
+        """Which of these channels the Core already has."""
+        return [c.name for c in self.client.channels.retrieve(list(names))] if names else []
+
+    def core_version(self) -> str:
+        try:
+            return str(getattr(self.client.connectivity.check(), "node_version", "") or "")
+        except Exception:  # noqa: BLE001 - an old client can't ask
+            return ""
+
+    def disconnect(self) -> None:
+        try:
+            self.client.close()
+        except Exception:  # noqa: BLE001 - closing a client that never opened streams
+            pass
+
     def open(self, write: list[str], read: list[str]) -> None:
         sy = self.sy
         self._t0 = int(sy.TimeStamp.now())
@@ -332,6 +368,37 @@ class SynnaxLink:
                 err = err or e
         if err is not None:
             raise err
+
+
+@dataclass
+class Probe:
+    """What Test connection found: the Core's version, which channels exist, and any warnings."""
+    core: str = ""
+    found: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def summary(self, create: bool) -> str:
+        n = len(self.found) + len(self.missing)
+        text = f"Connected to Synnax Core {self.core}" if self.core else "Connected to Synnax"
+        if not n:
+            return text
+        text += f"; {len(self.found)} of {n} channels exist"
+        if self.missing:
+            text += ", the rest will be created" if create else f"; missing: {', '.join(self.missing)}"
+        return text
+
+
+def probe(cfg: SynnaxConfig, channels: list[str], link_factory: Callable[[SynnaxConfig], object] = SynnaxLink) -> Probe:
+    """Connect, check the versions and which channels exist, and disconnect. Raises if it can't connect."""
+    link = link_factory(cfg)
+    try:
+        names = list(dict.fromkeys(channels))
+        found = set(link.existing(names))
+        return Probe(core=link.core_version(), found=[n for n in names if n in found],
+                     missing=[n for n in names if n not in found], warnings=list(getattr(link, "warnings", [])))
+    finally:
+        link.disconnect()
 
 
 class SynnaxDriver:

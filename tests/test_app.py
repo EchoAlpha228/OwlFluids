@@ -268,3 +268,75 @@ def test_default_names_follow_commodity(app):
     assert w.properties._ident.text() == "FV-1" and w.properties._ident.selectedText() == "FV-1"
     w.dirty = False
     w.close()
+
+
+@pytest.mark.gui
+def test_synnax_setup_saves_mapping_with_system_and_login_with_user(app):
+    from PySide6.QtCore import Qt
+
+    from owlfluids.app import prefs
+    from owlfluids.app.synnax_setup import SynnaxDialog
+    from owlfluids.examples import lox_feed
+
+    s = lox_feed()
+    d = SynnaxDialog(s)
+    ids = [d.sensor_table.item(r, 1).text() for r in range(d.sensor_table.rowCount())]
+    assert ids == [x.id for x in s.sensors]
+    assert d.sensor_table.item(0, 3).text() == ids[0].lower().replace("-", "_")
+    d.host.setText("stand-01")
+    d.password.setText("secret")
+    d.mode.setCurrentIndex(1)  # HITL
+    d.sensor_table.item(1, 0).setCheckState(Qt.Unchecked)
+    d.sensor_table.item(0, 3).setText("pt_tank")
+    d._ok()
+    assert d.result() == QtWidgets.QDialog.Accepted and d.changed
+    assert s.synnax["mode"] == "hitl" and s.synnax["exclude"] == [ids[1]]
+    assert s.synnax["sensors"][ids[0]] == "pt_tank" and ids[1] not in s.synnax["sensors"]
+    assert "password" not in s.synnax and "host" not in s.synnax
+    assert prefs.synnax_connection()["host"] == "stand-01"
+
+    again = SynnaxDialog(s)
+    assert again.host.text() == "stand-01" and again.password.text() == "secret"
+    assert again.sensor_table.item(1, 0).checkState() == Qt.Unchecked
+    assert again.sensor_table.item(0, 3).text() == "pt_tank"
+    cfg = again.config()
+    assert cfg.mode == "hitl" and cfg.exclude == [ids[1]]
+
+    again.sensor_table.item(2, 3).setText("pt_tank")  # the same channel twice is refused
+    again._ok()
+    assert again.result() != QtWidgets.QDialog.Accepted and not again.error.isHidden()
+    assert "pt_tank" in again.error.text()
+
+
+@pytest.mark.gui
+def test_synnax_test_connection_reports_in_the_dialog(app):
+    from owlfluids.app.synnax_setup import SynnaxDialog
+    from owlfluids.examples import lox_feed
+
+    class Link:
+        warnings = []
+
+        def __init__(self, cfg):
+            pass
+
+        def existing(self, names):
+            return names[:1]
+
+        def core_version(self):
+            return "0.60.0"
+
+        def disconnect(self):
+            pass
+
+    class Down:
+        def __init__(self, cfg):
+            raise ConnectionError("connection refused")
+
+    d = SynnaxDialog(lox_feed())
+    for factory, expect in ((Link, "Connected to Synnax Core 0.60.0"), (Down, "connection refused")):
+        d.link_factory = factory
+        d.test_connection()
+        deadline = time.time() + 5
+        while not d.test_button.isEnabled() and time.time() < deadline:
+            pump(app, 0.05)
+        assert expect in d.test_status.text()

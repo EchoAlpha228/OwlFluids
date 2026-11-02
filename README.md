@@ -265,6 +265,18 @@ For real time, wrap it in `owlfluids.sim.realtime.Runner` (`start()`, `open()`,
 
 ## Synnax: HOOTL and HITL
 
+**In the app**, **Run > Synnax setup…** sets it all up: the server, login and TLS
+(with **Test connection**, which reports the Core's version and which channels
+already exist), HOOTL or HITL, and a table of every sensor and valve with its
+channel, prefilled with the defaults below. Untick a row to give it no channels.
+The login is kept in your own app settings on that computer; everything else is
+saved in the system file's `synnax:` section. **Run > Connect to Synnax…** shows
+the same window while running, with **Connect**. **Load file…** and **Save file…**
+read and write the YAML files the command line uses.
+
+On the command line, `--synnax` alone uses the system file's `synnax:` section;
+`--synnax FILE` adds a file's settings over it (the host and login, say).
+
 `examples/synnax.yaml` maps simulated sensors to Synnax channels (written in each
 sensor's display units, e.g. psi) and each valve to a command channel and a state
 channel. Its `mode` picks the test:

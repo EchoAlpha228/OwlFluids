@@ -112,6 +112,9 @@ class System:
     # wires shaped by hand on the schematic, ignored by the solver: "a -- b" ->
     # {"h": leaves a horizontally, "bends": [[x, y], ...]}
     routes: dict = field(default_factory=dict)
+    # Synnax test settings that belong to this system (mode, channel names...); the
+    # connection itself (host, login) is the user's, see drivers/synnax.py
+    synnax: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)  # changes made on load, shown as build warnings
     _old_tanks: set = field(default_factory=set, repr=False, compare=False)  # added as pressurized tanks
 
@@ -132,6 +135,16 @@ class System:
         c = Component(cid, ctype, params, tuple(pos) if pos else None)
         self.components.append(c)
         return c
+
+    def renamed(self, old: str, new: str) -> None:
+        """A part or sensor was renamed: its Synnax channels keep their names under the new id."""
+        sx = self.synnax
+        for key in ("sensors", "valves"):
+            m = sx.get(key)
+            if isinstance(m, dict) and old in m:
+                sx[key] = {new if k == old else k: v for k, v in m.items()}
+        if old in (sx.get("exclude") or []):
+            sx["exclude"] = [new if x == old else x for x in sx["exclude"]]
 
     def _tank_port(self, ref: str) -> str:
         """An old pressurized tank's port (TK.gas, TK.liquid) by its tank name (TK.top, TK.bottom)."""
@@ -176,7 +189,8 @@ class System:
                                   _optional_float(s.pop("lag", None)), _optional_float(s.pop("noise", None)),
                                   float(s.pop("rate", 0) or 0), str(s.pop("units", "") or "")))
         routes = {str(k): dict(v) for k, v in (d.get("routes") or {}).items()}
-        system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings, routes)
+        system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings, routes,
+                     dict(d.get("synnax") or {}))
         system._fold_pipes()
         system._throttles_to_manual()
         system._merge_pressurized_tanks()
@@ -282,6 +296,8 @@ class System:
             d["sensors"] = [s.to_dict() for s in self.sensors]
         if self.routes:
             d["routes"] = self.routes
+        if self.synnax:
+            d["synnax"] = self.synnax
         return d
 
     @classmethod
