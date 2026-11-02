@@ -287,7 +287,8 @@ def test_exclude_leaves_sensors_and_valves_out():
 def test_split_keeps_the_login_out_of_the_system_section():
     cfg = SynnaxConfig(host="stand", password="pw", mode="hitl", sensors={"PT-TK": "pt"})
     conn, rest = cfg.split()
-    assert conn == {"host": "stand", "port": 9090, "username": "synnax", "password": "pw", "secure": False}
+    assert conn == {"host": "stand", "port": 9090, "username": "synnax", "password": "pw", "secure": False,
+                    "desktop": False}
     assert rest == {"mode": "hitl", "sensors": {"PT-TK": "pt"}}
     assert SynnaxConfig.from_dict({**conn, **rest}) == cfg
 
@@ -392,3 +393,36 @@ def test_real_client_against_an_old_core_says_why(old_core):
         pytest.skip("checks the 0.60 client's session login")
     with pytest.raises(RuntimeError, match="Synnax Core 0.59.2"):
         SynnaxLink(SynnaxConfig(host="127.0.0.1", port=old_core))
+
+
+def _desktop_core(port):
+    """Write a core.json like Synnax Desktop's for a Core on this port."""
+    import json
+
+    from owlfluids.drivers.synnax import desktop_dir
+
+    desktop_dir().mkdir(parents=True, exist_ok=True)
+    (desktop_dir() / "core.json").write_text(json.dumps(
+        {"listen": [{"address": f"127.0.0.1:{port}", "loopback": True}], "insecure": True, "username": "synnax"}))
+
+
+def test_desktop_finds_its_core_port_at_each_connect(old_core):
+    from owlfluids.drivers.synnax import desktop_address
+
+    with pytest.raises(RuntimeError, match="has not run on this computer"):
+        desktop_address()
+    _desktop_core(old_core)
+    cfg = SynnaxConfig(desktop=True, host="ignored", port=1, secure=True)
+    assert cfg.address() == ("127.0.0.1", old_core, False)
+    _desktop_core(1)  # Desktop closed: its last port answers nothing
+    with pytest.raises(RuntimeError, match="isn't running"):
+        cfg.address()
+    assert SynnaxConfig(host="h", port=5).address() == ("h", 5, False)
+
+
+def test_desktop_login_refused_says_to_register_a_user(old_core):
+    from owlfluids.drivers.synnax import explain_connect_error
+
+    cfg = SynnaxConfig(desktop=True, username="owl")
+    msg = explain_connect_error(ValueError("AuthError: invalid credentials"), cfg, "0.60.1", "127.0.0.1", old_core)
+    assert "Register user" in msg and "'owl'" in msg

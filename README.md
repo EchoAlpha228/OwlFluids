@@ -274,6 +274,13 @@ saved in the system file's `synnax:` section. **Run > Connect to Synnax…** sho
 the same window while running, with **Connect**. **Load file…** and **Save file…**
 read and write the YAML files the command line uses.
 
+**Synnax Desktop.** Pick *Synnax Desktop on this computer* as the core. Desktop
+runs its own Core on a new loopback port at each launch (it writes the port to
+`core.json` in its data folder, which OwlFluids reads at each connect) with a random
+root password it never stores, so log in as a user made in Desktop: open its command
+palette and run **Register user**. `desktop: true` in a `synnax:` section does the
+same on the command line.
+
 On the command line, `--synnax` alone uses the system file's `synnax:` section;
 `--synnax FILE` adds a file's settings over it (the host and login, say).
 
