@@ -118,6 +118,71 @@ def check_versions(client, mode: str) -> str | None:
     return problem
 
 
+def client_version() -> str:
+    """The version of the synnax client package installed with OwlFluids ('' if there is none)."""
+    try:
+        from importlib.metadata import version
+
+        return version("synnax")
+    except Exception:  # noqa: BLE001 - not installed
+        return ""
+
+
+def core_version(host: str, port: int, secure: bool = False, timeout: float = 3.0) -> str | None:
+    """Ask a Synnax Core its version without logging in; None if it can't be asked.
+
+    Every Core version answers ``connectivity/check`` before login, so this works
+    even when the client and the Core can't log in to each other.
+    """
+    import json
+    import urllib.request
+
+    scheme = "https" if secure else "http"
+    for path in ("/api/v1/connectivity/check/", "/api/v1/connectivity/check"):
+        req = urllib.request.Request(f"{scheme}://{host}:{port}{path}", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json", "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - the user's own Core
+                return str(json.load(r).get("node_version") or "")
+        except Exception:  # noqa: BLE001 - not reachable, or not a Core: try the other path, then give up
+            continue
+    return None
+
+
+def explain_connect_error(err: BaseException, cfg, client: str) -> str:
+    """What to do about a client that could not connect, in place of the client's own message.
+
+    Synnax 0.60 changed how clients log in (sessions, at ``auth/session/create``); a Core
+    older than 0.60 doesn't have that endpoint and answers "Method Not Allowed", which the
+    client reports as a decode error. Asking the Core its version says which side to change.
+    """
+    raw = f"{type(err).__name__}: {err}" if not str(err) else str(err)
+    core = core_version(cfg.host, cfg.port, cfg.secure)
+    if core is None:
+        if "Method Not Allowed" in raw or "404" in raw:
+            return (f"the server at {cfg.host}:{cfg.port} didn't accept the login of the Synnax client {client} in "
+                    "this OwlFluids build. Synnax 0.60 changed how clients log in, so a Core older than 0.60 "
+                    f"does this: upgrade the Core, or install an OwlFluids build made for your Core ({raw})")
+        return raw
+    problem = version_mismatch(client, core)
+    if problem is None:
+        return f"{raw} (Synnax Core {core}, client {client})"
+    cm, nm = (".".join(v.lstrip("v").split(".")[:2]) for v in (client, core))
+    try:
+        core_older = tuple(map(int, nm.split("."))) < tuple(map(int, cm.split(".")))
+    except ValueError:
+        core_older = False
+    if core_older:
+        fix = (f"Upgrade the Core to {cm}, or install an OwlFluids build made for Core {nm}: on GitHub, "
+               f"Actions > Release > Run workflow with synnax_version {nm}.* and install the build it attaches")
+    else:
+        fix = "Update OwlFluids (Help > Check for updates…) to a build with a newer Synnax client"
+    return (f"Synnax Core {core} and the Synnax client {client} in this OwlFluids build can't connect: "
+            f"they differ in major.minor version" + (" and Synnax 0.60 changed how clients log in" if
+                                                       "Method Not Allowed" in raw else "") +
+            f". {fix}. ({raw})")
+
+
 def channel_name(name: str) -> str:
     """The default channel for a sensor or valve id: PT-TK -> pt_tk."""
     return name.lower().replace("-", "_").replace(" ", "_").replace(".", "_")
@@ -226,8 +291,11 @@ class SynnaxLink:
             raise RuntimeError("the Synnax driver needs the synnax package (Python 3.12+): "
                                "pip install owlfluids[synnax]") from e
         self.sy = sy
-        self.client = sy.Synnax(host=cfg.host, port=cfg.port, username=cfg.username, password=cfg.password,
-                                secure=cfg.secure)
+        try:
+            self.client = sy.Synnax(host=cfg.host, port=cfg.port, username=cfg.username, password=cfg.password,
+                                    secure=cfg.secure)
+        except Exception as e:  # the client's own errors are cryptic for a Core of another version
+            raise RuntimeError(explain_connect_error(e, cfg, client_version())) from e
         self.warnings: list[str] = []
         try:
             problem = check_versions(self.client, cfg.check_version)

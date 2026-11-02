@@ -333,3 +333,61 @@ def test_probe_reports_channels_and_disconnects():
     assert ProbeLink.last.closed
     assert "1 of 2 channels exist, the rest will be created" in res.summary(True)
     assert "missing: v_m_cmd" in res.summary(False)
+
+
+@pytest.fixture
+def old_core():
+    """A stand-in for a Synnax Core older than 0.60: no session login, an open connectivity check."""
+    import json
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            if self.path.rstrip("/").endswith("/connectivity/check"):
+                body, code, kind = json.dumps({"node_version": "0.59.2"}).encode(), 200, "application/json"
+            else:
+                body, code, kind = b"Method Not Allowed", 405, "text/plain"
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.server_address[1]
+    server.shutdown()
+
+
+def test_connect_error_names_the_core_version_and_the_fix(old_core):
+    from owlfluids.drivers.synnax import core_version, explain_connect_error
+
+    assert core_version("127.0.0.1", old_core) == "0.59.2"
+    cfg = SynnaxConfig(host="127.0.0.1", port=old_core)
+    msg = explain_connect_error(ValueError("failed to decode error response: b'Method Not Allowed'"), cfg, "0.60.1")
+    assert "Synnax Core 0.59.2" in msg and "client 0.60.1" in msg
+    assert "Upgrade the Core to 0.60" in msg and "synnax_version 0.59.*" in msg
+    newer = explain_connect_error(ValueError("x"), cfg, "0.58.0")
+    assert "Update OwlFluids" in newer
+
+
+def test_connect_error_without_a_core_keeps_the_clients_message():
+    from owlfluids.drivers.synnax import explain_connect_error
+
+    cfg = SynnaxConfig(host="127.0.0.1", port=1)  # nothing listens there
+    assert explain_connect_error(ConnectionError("refused"), cfg, "0.60.1") == "refused"
+    assert "older than 0.60" in explain_connect_error(ValueError("Method Not Allowed"), cfg, "0.60.1")
+
+
+def test_real_client_against_an_old_core_says_why(old_core):
+    pytest.importorskip("synnax")
+    from owlfluids.drivers.synnax import client_version
+
+    if not client_version().startswith("0.60"):
+        pytest.skip("checks the 0.60 client's session login")
+    with pytest.raises(RuntimeError, match="Synnax Core 0.59.2"):
+        SynnaxLink(SynnaxConfig(host="127.0.0.1", port=old_core))
