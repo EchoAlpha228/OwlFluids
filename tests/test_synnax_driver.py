@@ -468,6 +468,10 @@ def desktop_core():
 
 def test_real_client_logs_in_to_synnax_desktop_with_its_api_key(desktop_core):
     pytest.importorskip("synnax")
+    from owlfluids.drivers.synnax import client_version
+
+    if tuple(int(x) for x in client_version().split(".")[:2]) < (0, 60):
+        pytest.skip("API keys and session logins came with the 0.60 client")
     port, seen = desktop_core
     _desktop_file(port)
     link = SynnaxLink(SynnaxConfig(desktop=True))
