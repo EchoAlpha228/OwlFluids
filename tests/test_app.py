@@ -343,33 +343,42 @@ def test_synnax_test_connection_reports_in_the_dialog(app):
 
 
 @pytest.mark.gui
-def test_synnax_setup_starts_from_synnax_desktop_when_it_is_installed(app):
+def test_synnax_setup_starts_from_synnax_desktop_when_it_shares_its_core(app):
     import json
     import socket
 
     from owlfluids.app import prefs
     from owlfluids.app.synnax_setup import SynnaxDialog
-    from owlfluids.drivers.synnax import desktop_dir
+    from owlfluids.drivers.synnax import desktop_file
     from owlfluids.examples import lox_feed
 
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen()
     port = listener.getsockname()[1]
-    desktop_dir().mkdir(parents=True)
-    (desktop_dir() / "core.json").write_text(json.dumps({"listen": [{"address": f"127.0.0.1:{port}"}]}))
+    desktop_file().write_text(json.dumps({"host": "127.0.0.1", "port": port, "secure": False, "api_key": "k"}))
     try:
         d = SynnaxDialog(lox_feed())
-        assert d.core.currentData() is True and not d.host.isEnabled()
-        assert f"127.0.0.1:{port}" in d.desktop_note.text() and "Register user" in d.desktop_note.text()
-        d.username.setText("owlfluids")
+        assert d.core.currentData() is True and not d.password.isVisibleTo(d) and not d.host.isVisibleTo(d)
+        assert f"127.0.0.1:{port}" in d.desktop_note.text() and "API key" in d.desktop_note.text()
         d._ok()
         assert d.result_config.desktop and prefs.synnax_connection()["desktop"] is True
         d = SynnaxDialog(lox_feed())
         d.core.setCurrentIndex(1)  # a Core at an address
-        assert d.host.isEnabled() and d.desktop_note.isHidden()
+        assert d.host.isVisibleTo(d) and d.password.isVisibleTo(d) and d.desktop_note.isHidden()
         d._ok()
         assert prefs.synnax_connection()["desktop"] is False
         assert SynnaxDialog(lox_feed()).core.currentData() is False  # the choice is remembered
     finally:
         listener.close()
+
+
+@pytest.mark.gui
+def test_synnax_setup_says_when_synnax_desktop_shares_nothing(app):
+    from owlfluids.app.synnax_setup import SynnaxDialog
+    from owlfluids.examples import lox_feed
+
+    d = SynnaxDialog(lox_feed())
+    assert d.core.currentData() is False  # no desktop.json: start from an address
+    d.core.setCurrentIndex(0)
+    assert "0.60.1 and older" in d.desktop_note.text()

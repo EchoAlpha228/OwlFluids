@@ -395,34 +395,88 @@ def test_real_client_against_an_old_core_says_why(old_core):
         SynnaxLink(SynnaxConfig(host="127.0.0.1", port=old_core))
 
 
-def _desktop_core(port):
-    """Write a core.json like Synnax Desktop's for a Core on this port."""
+def _desktop_file(port, key="syk_test_key"):
+    """Write a ~/.synnax/desktop.json like Synnax Desktop's for a Core on this port."""
     import json
 
-    from owlfluids.drivers.synnax import desktop_dir
+    from owlfluids.drivers.synnax import desktop_file
 
-    desktop_dir().mkdir(parents=True, exist_ok=True)
-    (desktop_dir() / "core.json").write_text(json.dumps(
-        {"listen": [{"address": f"127.0.0.1:{port}", "loopback": True}], "insecure": True, "username": "synnax"}))
+    desktop_file().write_text(json.dumps({"host": "127.0.0.1", "port": port, "secure": False, "api_key": key}))
 
 
-def test_desktop_finds_its_core_port_at_each_connect(old_core):
-    from owlfluids.drivers.synnax import desktop_address
+def test_desktop_reads_its_connection_file_at_each_connect(old_core):
+    from owlfluids.drivers.synnax import desktop_options
 
-    with pytest.raises(RuntimeError, match="has not run on this computer"):
-        desktop_address()
-    _desktop_core(old_core)
+    with pytest.raises(RuntimeError, match="0.60.1 and older don't"):
+        desktop_options()
+    _desktop_file(old_core)
     cfg = SynnaxConfig(desktop=True, host="ignored", port=1, secure=True)
-    assert cfg.address() == ("127.0.0.1", old_core, False)
-    _desktop_core(1)  # Desktop closed: its last port answers nothing
+    assert cfg.address() == ("127.0.0.1", old_core, False, "syk_test_key")
+    _desktop_file(1)  # Desktop closed: its port answers nothing
     with pytest.raises(RuntimeError, match="isn't running"):
         cfg.address()
-    assert SynnaxConfig(host="h", port=5).address() == ("h", 5, False)
+    assert SynnaxConfig(host="h", port=5).address() == ("h", 5, False, "")
 
 
-def test_desktop_login_refused_says_to_register_a_user(old_core):
+def test_desktop_key_refused_says_to_reopen_desktop(old_core):
     from owlfluids.drivers.synnax import explain_connect_error
 
-    cfg = SynnaxConfig(desktop=True, username="owl")
-    msg = explain_connect_error(ValueError("AuthError: invalid credentials"), cfg, "0.60.1", "127.0.0.1", old_core)
-    assert "Register user" in msg and "'owl'" in msg
+    msg = explain_connect_error(ValueError("AuthError: invalid credentials"), SynnaxConfig(desktop=True), "0.60.1",
+                                "127.0.0.1", old_core)
+    assert "API key" in msg and "Open Synnax Desktop" in msg
+
+
+@pytest.fixture
+def desktop_core():
+    """A stand-in for Synnax Desktop's Core: logs in only with its API key, as Synnax main does."""
+    import json
+    import uuid
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            path = self.path.rstrip("/")
+            seen.append((path, body))
+            code, out = 200, {}
+            if path.endswith("/connectivity/check"):
+                out = {"cluster_key": "k", "node_version": "0.60.1", "node_time": 0}
+            elif path.endswith("/auth/session/create"):
+                if body.get("proof") != {"method": "api_key", "key": "syk_test_key"}:
+                    code, out = 401, {"type": "sy.auth.invalid_credentials", "data": "invalid credentials"}
+                else:
+                    out = {"token": "tok", "session": {"key": str(uuid.uuid4()),
+                                                       "subject": {"type": "user", "key": str(uuid.uuid4())},
+                                                       "credential": str(uuid.uuid4()), "last_active": 0}}
+            data = json.dumps(out).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.server_address[1], seen
+    server.shutdown()
+
+
+def test_real_client_logs_in_to_synnax_desktop_with_its_api_key(desktop_core):
+    pytest.importorskip("synnax")
+    port, seen = desktop_core
+    _desktop_file(port)
+    link = SynnaxLink(SynnaxConfig(desktop=True))
+    try:
+        logins = [b for p, b in seen if p.endswith("/auth/session/create")]
+        assert logins == [{"proof": {"method": "api_key", "key": "syk_test_key"}}]
+        assert link.client.auth.token == "tok"
+    finally:
+        link.disconnect()
+    _desktop_file(port, key="stale")
+    with pytest.raises(RuntimeError, match="API key"):
+        SynnaxLink(SynnaxConfig(desktop=True))

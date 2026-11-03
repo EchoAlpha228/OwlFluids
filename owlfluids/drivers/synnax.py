@@ -73,44 +73,38 @@ VALVE_STATES = ("command", "position")
 VERSION_CHECKS = ("warn", "strict", "off")
 LIMIT_OPEN, LIMIT_CLOSED = 0.99, 0.01  # faked limit switches (valve_state: position)
 CONNECTION = ("host", "port", "username", "password", "secure", "desktop")  # per machine and user, not per system
-DESKTOP_ID = "com.synnaxlabs.desktop"  # Synnax Desktop's app identifier, which names its data folder
 
 
-def desktop_dir() -> Path:
-    """Synnax Desktop's local data folder on this computer (Tauri's app_local_data_dir)."""
+def desktop_file() -> Path:
+    """Where Synnax Desktop shares its Core with scripts on this computer: ``~/.synnax/desktop.json``."""
     import os
-    import sys
 
-    override = os.environ.get("OWLFLUIDS_SYNNAX_DESKTOP_DIR")  # tests, and unusual installs
-    if override:
-        return Path(override)
-    if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / DESKTOP_ID
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / DESKTOP_ID
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / DESKTOP_ID
+    override = os.environ.get("OWLFLUIDS_SYNNAX_DESKTOP_FILE")  # tests, and unusual installs
+    return Path(override) if override else Path.home() / ".synnax" / "desktop.json"
 
 
-def desktop_address() -> tuple[str, int]:
-    """Where Synnax Desktop's built-in Core listens now. Raises RuntimeError if it can't be found.
+def desktop_options() -> dict:
+    """Synnax Desktop's Core as it shares it: host, port, secure and api_key. Raises RuntimeError if it doesn't.
 
-    Synnax Desktop starts its own Core on a new loopback port at each launch and writes
-    that Core's config, port included, to ``core.json`` in its data folder. The root
-    password is random and kept in memory only, so OwlFluids logs in as a user made in
-    Synnax Desktop (Register user), whose login lasts.
+    Synnax Desktop runs its own Core with a random root password it never saves. Versions
+    after 0.60.1 write the Core's address and an API key for scripts on the same computer
+    to ``~/.synnax/desktop.json`` (Synnax docs: Connect to Synnax Desktop), which the
+    synnax client reads too. Desktop 0.60.1 and older write nothing: their Core can't be
+    reached from outside the app.
     """
     import json
 
-    path = desktop_dir() / "core.json"
+    path = desktop_file()
     try:
-        listen = json.loads(path.read_text(encoding="utf-8"))["listen"]
-        address = listen[0]["address"] if isinstance(listen, list) else listen
-        host, _, port = str(address if isinstance(address, str) else address["address"]).rpartition(":")
-        return host or "127.0.0.1", int(port)
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return {"host": str(d.get("host") or "127.0.0.1"), "port": int(d["port"]), "secure": bool(d.get("secure")),
+                "api_key": str(d["api_key"])}
     except FileNotFoundError:
-        raise RuntimeError(f"Synnax Desktop has not run on this computer (no {path}): start it first") from None
-    except (KeyError, IndexError, TypeError, ValueError) as e:
-        raise RuntimeError(f"can't read Synnax Desktop's Core address from {path}: {e}") from None
+        raise RuntimeError(f"Synnax Desktop hasn't shared its Core with programs on this computer (no {path}). "
+                           "Synnax Desktop 0.60.1 and older don't: update Synnax Desktop to a version with the "
+                           "Connect from code command, open it, and try again") from None
+    except (KeyError, TypeError, ValueError) as e:
+        raise RuntimeError(f"can't read Synnax Desktop's connection file {path}: {e}") from None
 
 
 def reachable(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -210,15 +204,14 @@ def explain_connect_error(err: BaseException, cfg, client: str, host: str | None
     refused = any(c.__name__ == "AuthError" for c in type(err).__mro__) or any(
         w in raw.lower() for w in ("credential", "password", "username", "unauthorized", "authenticat"))
     if cfg.desktop and refused:
-        return (f"Synnax Desktop's Core turned down the login {cfg.username!r}. In Synnax Desktop, open the "
-                "command palette and run Register user to make a login for OwlFluids, then enter it here "
-                f"({raw})")
+        return ("Synnax Desktop's Core turned down the API key in its connection file. Open Synnax Desktop "
+                f"(it writes a fresh file) and try again; Reset key in Connect from code also changes it ({raw})")
     core = core_version(host, port, cfg.secure and not cfg.desktop)
     if core is None:
         if "Method Not Allowed" in raw or "404" in raw:
             return (f"the server at {host}:{port} didn't accept the login of the Synnax client {client} and "
-                    "didn't say its version, so it may not be a Synnax Core (Synnax Desktop's built-in Core uses "
-                    "its own private port; run a standalone Core for OwlFluids). If it is a Core older than "
+                    "didn't say its version, so it may not be a Synnax Core (for Synnax Desktop, pick it as the "
+                    "core instead of an address). If it is a Core older than "
                     f"0.60, upgrade it: Synnax 0.60 changed how clients log in ({raw})")
         return raw
     problem = version_mismatch(client, core)
@@ -252,7 +245,7 @@ class SynnaxConfig:
     username: str = "synnax"
     password: str = "seldon"
     secure: bool = False
-    desktop: bool = False  # Synnax Desktop on this computer: find its Core's port at each connect
+    desktop: bool = False  # Synnax Desktop on this computer: its address and API key, read at each connect
     mode: str = "hootl"
     valve_state: str = "command"
     rate: float = 100.0
@@ -292,14 +285,15 @@ class SynnaxConfig:
             raise ValueError(f"unknown synnax settings: {', '.join(d)}")
         return cls(**known)
 
-    def address(self) -> tuple[str, int, bool]:
-        """(host, port, secure) to connect to now; with ``desktop``, Synnax Desktop's Core as it runs."""
+    def address(self) -> tuple[str, int, bool, str]:
+        """(host, port, secure, api_key) to connect to now; with ``desktop``, what Synnax Desktop shares."""
         if not self.desktop:
-            return self.host, int(self.port), self.secure
-        host, port = desktop_address()
-        if not reachable(host, port):
-            raise RuntimeError(f"Synnax Desktop isn't running (its Core last listened on {host}:{port}): start it")
-        return host, port, False
+            return self.host, int(self.port), self.secure, ""
+        d = desktop_options()
+        if not reachable(d["host"], d["port"]):
+            raise RuntimeError(f"Synnax Desktop isn't running (its Core listens on {d['host']}:{d['port']} while it "
+                               "runs): open it and wait for the workspace, then try again")
+        return d["host"], d["port"], d["secure"], d["api_key"]
 
     def to_dict(self) -> dict:
         """The settings that differ from the defaults, as a ``synnax:`` section holds them."""
@@ -348,6 +342,50 @@ class SynnaxConfig:
         return sensors, valves
 
 
+_KEY_LOCK = threading.Lock()
+
+
+def _connect_with_key(sy, host: str, port: int, secure: bool, key: str):
+    """A client logged in with an API key (Synnax Desktop's).
+
+    Clients after 0.60.1 take ``api_key``. 0.60.x clients log in only with a password, so
+    for them the client's auth is given a subclass that presents the key instead, with
+    the same session request newer clients send (a proof with ``method: api_key``).
+    """
+    try:
+        return sy.Synnax(host=host, port=port, secure=secure, api_key=key)
+    except TypeError as e:
+        if "api_key" not in str(e):
+            raise
+    from typing import Literal
+
+    from pydantic import BaseModel
+    from synnax import auth
+    from synnax.auth import client as auth_client
+
+    class KeyProof(BaseModel):
+        method: Literal["api_key"] = "api_key"
+        key: str
+
+    class KeyRequest(BaseModel):
+        proof: KeyProof
+
+    class KeyAuth(auth_client.Client):
+        def authenticate(self) -> None:
+            res = auth_client.send_required(self.client, auth_client._SESSION_CREATE_ENDPOINT,
+                                            KeyRequest(proof=KeyProof(key=key)), auth_client._SessionCreateResponse)
+            self.token, self.session, self.user = res.token, res.session, res.user
+            self.authenticated = True
+
+    with _KEY_LOCK:  # sy.Synnax builds auth.Client; swap the class only while this one is built
+        original = auth.Client
+        auth.Client = KeyAuth
+        try:
+            return sy.Synnax(host=host, port=port, secure=secure, username="", password="")
+        finally:
+            auth.Client = original
+
+
 class SynnaxLink:
     """The only code that uses the ``synnax`` client package."""
 
@@ -358,10 +396,13 @@ class SynnaxLink:
             raise RuntimeError("the Synnax driver needs the synnax package (Python 3.12+): "
                                "pip install owlfluids[synnax]") from e
         self.sy = sy
-        host, port, secure = cfg.address()
+        host, port, secure, key = cfg.address()
         try:
-            self.client = sy.Synnax(host=host, port=port, username=cfg.username, password=cfg.password,
-                                    secure=secure)
+            if key:
+                self.client = _connect_with_key(sy, host, port, secure, key)
+            else:
+                self.client = sy.Synnax(host=host, port=port, username=cfg.username, password=cfg.password,
+                                        secure=secure)
         except Exception as e:  # the client's own errors are cryptic for a Core of another version
             raise RuntimeError(explain_connect_error(e, cfg, client_version(), host, port)) from e
         self.warnings: list[str] = []

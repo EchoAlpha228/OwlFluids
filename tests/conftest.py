@@ -21,4 +21,4 @@ def gas_blowdown():
 def _app_settings(tmp_path, monkeypatch):
     """Keep the desktop app's preferences (layout, recent files) out of the user's own."""
     monkeypatch.setenv("OWLFLUIDS_SETTINGS", str(tmp_path / "owlfluids.ini"))
-    monkeypatch.setenv("OWLFLUIDS_SYNNAX_DESKTOP_DIR", str(tmp_path / "synnax-desktop"))  # never the real one
+    monkeypatch.setenv("OWLFLUIDS_SYNNAX_DESKTOP_FILE", str(tmp_path / "desktop.json"))  # never the real one

@@ -48,8 +48,8 @@ CHECK_TEXT = {"warn": "warn", "strict": "refuse to connect", "off": "don't check
 def load_config(system) -> tuple[sx.SynnaxConfig, str]:
     """This system's Synnax settings with this user's connection, and a problem reading them ('' if none)."""
     conn = prefs.synnax_connection()
-    if "desktop" not in conn and (sx.desktop_dir() / "core.json").is_file():
-        conn["desktop"] = True  # never set up here, and Synnax Desktop is installed: start from it
+    if "desktop" not in conn and sx.desktop_file().is_file():
+        conn["desktop"] = True  # never set up here, and Synnax Desktop shares its Core: start from it
     d = {**dict(system.synnax or {}), **conn}
     try:
         return sx.SynnaxConfig.from_dict(d), ""
@@ -138,6 +138,7 @@ class SynnaxDialog(QDialog):
         self.core.setCurrentIndex(0 if cfg.desktop else 1)
         self.core.setToolTip("Synnax Desktop runs its own Core on a new port each launch; OwlFluids finds it")
         form.addRow("core", self.core)
+        self._conn_form = form
         self.host = QLineEdit(cfg.host)
         self.host.setPlaceholderText("localhost")
         self.port = QLineEdit(str(cfg.port))
@@ -305,23 +306,26 @@ class SynnaxDialog(QDialog):
             self._show_problem(problem)
 
     def _core_changed(self, *_args) -> None:
-        """Synnax Desktop: the address is found, not typed; say where it is and how to log in."""
+        """Synnax Desktop: its address and API key are read from its connection file, not typed."""
         desktop = bool(self.core.currentData())
-        for w in (self.host, self.port, self.secure):
-            w.setEnabled(not desktop)
+        for w in (self._server_row, self.username, self.password, self.secure):
+            self._conn_form.setRowVisible(w, not desktop)  # Desktop's address and API key are read, not typed
         if not desktop:
             self.desktop_note.hide()
             return
         try:
-            host, port = sx.desktop_address()
-            where = (f"Its Core is on {host}:{port} now" if sx.reachable(host, port, 0.3) else
-                     f"Synnax Desktop isn't running (its Core last used {host}:{port}); start it before connecting")
-            self.host.setText(host)
-            self.port.setText(str(port))
+            d = sx.desktop_options()
+            self.host.setText(d["host"])
+            self.port.setText(str(d["port"]))
+            where = f"{d['host']}:{d['port']}"
+            running = sx.reachable(d["host"], d["port"], 0.3)
+            note = (f"Synnax Desktop's Core is on {where}; OwlFluids logs in with the API key Desktop saved in "
+                    f"{sx.desktop_file()}, so no username or password is needed." if running
+                    else f"Synnax Desktop isn't running (its Core uses {where} while it runs). Open it before "
+                    "connecting; OwlFluids logs in with the API key it saved, so no username or password is needed.")
         except RuntimeError as e:
-            where = str(e)[0].upper() + str(e)[1:]
-        self.desktop_note.setText(f"{where}. Its port changes each launch; OwlFluids finds it. Log in with a user "
-                                  "made in Synnax Desktop: open its command palette and run <b>Register user</b>.")
+            note = str(e)[0].upper() + str(e)[1:] + "."
+        self.desktop_note.setText(note)
         self.desktop_note.show()
 
     # ------------------------------------------------------------------ reading the form
