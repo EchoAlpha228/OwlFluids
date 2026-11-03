@@ -279,8 +279,12 @@ runs its own Core with a random root password it never saves; versions after 0.6
 share that Core with programs on the same computer by writing its address and an API
 key to `~/.synnax/desktop.json` (Synnax docs, *Connect to Synnax Desktop*). OwlFluids
 reads that file at each connect and logs in with the key, so there is no username or
-password to enter. Desktop 0.60.1 and older write no such file, and their Core can't
-be reached from outside the app: update Synnax Desktop, or run a standalone Core.
+password to enter. Desktop writes the file each time it opens, so open Desktop before
+connecting; it leaves the file when it quits, and OwlFluids then says Desktop isn't
+running. *Reset key* in Desktop's *Connect from code* window ends OwlFluids' session:
+connect again to pick up the new key. Desktop 0.60.1 and older write no such file, and
+their Core can't be reached from outside the app: update Synnax Desktop, or run a
+standalone Core.
 `desktop: true` in a `synnax:` section does the same on the command line.
 
 On the command line, `--synnax` alone uses the system file's `synnax:` section;
