@@ -47,7 +47,10 @@ CHECK_TEXT = {"warn": "warn", "strict": "refuse to connect", "off": "don't check
 
 def load_config(system) -> tuple[sx.SynnaxConfig, str]:
     """This system's Synnax settings with this user's connection, and a problem reading them ('' if none)."""
-    d = {**dict(system.synnax or {}), **prefs.synnax_connection()}
+    conn = prefs.synnax_connection()
+    if "desktop" not in conn and sx.desktop_file().is_file():
+        conn["desktop"] = True  # never set up here, and Synnax Desktop shares its Core: start from it
+    d = {**dict(system.synnax or {}), **conn}
     try:
         return sx.SynnaxConfig.from_dict(d), ""
     except (TypeError, ValueError) as e:
@@ -129,6 +132,13 @@ class SynnaxDialog(QDialog):
         left.addWidget(_heading("Connection"))
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignLeft)
+        self.core = QComboBox()
+        self.core.addItem("Synnax Desktop on this computer", True)
+        self.core.addItem("a Synnax Core at an address", False)
+        self.core.setCurrentIndex(0 if cfg.desktop else 1)
+        self.core.setToolTip("Synnax Desktop runs its own Core on a new port each launch; OwlFluids finds it")
+        form.addRow("core", self.core)
+        self._conn_form = form
         self.host = QLineEdit(cfg.host)
         self.host.setPlaceholderText("localhost")
         self.port = QLineEdit(str(cfg.port))
@@ -141,6 +151,7 @@ class SynnaxDialog(QDialog):
         sl.addWidget(QLabel(":"))
         sl.addWidget(self.port)
         form.addRow("server", server)
+        self._server_row = server
         self.username = QLineEdit(cfg.username)
         form.addRow("username", self.username)
         self.password = QLineEdit(cfg.password)
@@ -150,10 +161,17 @@ class SynnaxDialog(QDialog):
         self.secure.setChecked(cfg.secure)
         form.addRow("secure", self.secure)
         left.addLayout(form)
+        self.desktop_note = QLabel("")
+        self.desktop_note.setObjectName("hint")
+        self.desktop_note.setWordWrap(True)
+        self.desktop_note.setTextFormat(Qt.RichText)
+        left.addWidget(self.desktop_note)
         note = QLabel("Kept in your own settings on this computer, not in the system file.")
         note.setObjectName("hint")
         note.setWordWrap(True)
         left.addWidget(note)
+        self.core.currentIndexChanged.connect(self._core_changed)
+        self._core_changed()
         trow = QHBoxLayout()
         self.test_button = QPushButton("Test connection")
         self.test_button.clicked.connect(self.test_connection)
@@ -287,6 +305,29 @@ class SynnaxDialog(QDialog):
         if problem:
             self._show_problem(problem)
 
+    def _core_changed(self, *_args) -> None:
+        """Synnax Desktop: its address and API key are read from its connection file, not typed."""
+        desktop = bool(self.core.currentData())
+        for w in (self._server_row, self.username, self.password, self.secure):
+            self._conn_form.setRowVisible(w, not desktop)  # Desktop's address and API key are read, not typed
+        if not desktop:
+            self.desktop_note.hide()
+            return
+        try:
+            d = sx.desktop_options()
+            self.host.setText(d["host"])
+            self.port.setText(str(d["port"]))
+            where = f"{d['host']}:{d['port']}"
+            running = sx.reachable(d["host"], d["port"], 0.3)
+            note = (f"Synnax Desktop's Core is on {where}; OwlFluids logs in with the API key Desktop saved in "
+                    f"{sx.desktop_file()}, so no username or password is needed." if running
+                    else f"Synnax Desktop isn't running (its Core uses {where} while it runs). Open it before "
+                    "connecting; OwlFluids logs in with the API key it saved, so no username or password is needed.")
+        except RuntimeError as e:
+            note = str(e)[0].upper() + str(e)[1:] + "."
+        self.desktop_note.setText(note)
+        self.desktop_note.show()
+
     # ------------------------------------------------------------------ reading the form
     def _rows(self, table: QTableWidget):
         for r in range(table.rowCount()):
@@ -326,7 +367,8 @@ class SynnaxDialog(QDialog):
             sensors, valves = {}, {}
         return sx.SynnaxConfig(
             host=self.host.text().strip() or "localhost", port=port, username=self.username.text(),
-            password=self.password.text(), secure=self.secure.isChecked(), mode=self.mode.currentData(),
+            password=self.password.text(), secure=self.secure.isChecked(), desktop=bool(self.core.currentData()),
+            mode=self.mode.currentData(),
             valve_state=self.valve_state.currentData(), rate=rate, index=self.index.text().strip(),
             create_channels=self.create.isChecked(), check_version=self.check.currentData(), sensors=sensors,
             valves=valves, exclude=exclude)
@@ -450,7 +492,8 @@ class SynnaxDialog(QDialog):
 
         self.test_button.setEnabled(False)
         self.test_button.setText("Testing…")
-        self._set_status(T.GRAY_300, f"Connecting to {cfg.host}:{cfg.port}…")
+        self._set_status(T.GRAY_300, "Connecting to Synnax Desktop…" if cfg.desktop else
+                         f"Connecting to {cfg.host}:{cfg.port}…")
         threading.Thread(target=run, daemon=True, name="synnax-test").start()
         self._timer.start(100)
 
@@ -463,7 +506,8 @@ class SynnaxDialog(QDialog):
         self.test_button.setEnabled(True)
         self.test_button.setText("Test connection")
         if isinstance(res, Exception):
-            self._set_status(T.RED, f"Could not connect to {cfg.host}:{cfg.port}: {res}")
+            where = "Synnax Desktop" if cfg.desktop else f"{cfg.host}:{cfg.port}"
+            self._set_status(T.RED, f"Could not connect to {where}: {res}")
             return
         warn = list(res.warnings)
         if res.missing and not cfg.create_channels:
@@ -497,6 +541,7 @@ class SynnaxDialog(QDialog):
         self.username.setText(cfg.username)
         self.password.setText(cfg.password)
         self.secure.setChecked(cfg.secure)
+        self.core.setCurrentIndex(0 if cfg.desktop else 1)
         self.mode.setCurrentIndex(sx.MODES.index(cfg.mode))
         self.valve_state.setCurrentIndex(sx.VALVE_STATES.index(cfg.valve_state))
         self.rate.setText(f"{cfg.rate:g}")

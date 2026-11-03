@@ -274,6 +274,19 @@ saved in the system file's `synnax:` section. **Run > Connect to Synnax…** sho
 the same window while running, with **Connect**. **Load file…** and **Save file…**
 read and write the YAML files the command line uses.
 
+**Synnax Desktop.** Pick *Synnax Desktop on this computer* as the core. Desktop
+runs its own Core with a random root password it never saves; versions after 0.60.1
+share that Core with programs on the same computer by writing its address and an API
+key to `~/.synnax/desktop.json` (Synnax docs, *Connect to Synnax Desktop*). OwlFluids
+reads that file at each connect and logs in with the key, so there is no username or
+password to enter. Desktop writes the file each time it opens, so open Desktop before
+connecting; it leaves the file when it quits, and OwlFluids then says Desktop isn't
+running. *Reset key* in Desktop's *Connect from code* window ends OwlFluids' session:
+connect again to pick up the new key. Desktop 0.60.1 and older write no such file, and
+their Core can't be reached from outside the app: update Synnax Desktop, or run a
+standalone Core.
+`desktop: true` in a `synnax:` section does the same on the command line.
+
 On the command line, `--synnax` alone uses the system file's `synnax:` section;
 `--synnax FILE` adds a file's settings over it (the host and login, say).
 

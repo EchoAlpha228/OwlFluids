@@ -42,7 +42,7 @@ def synnax_connection() -> dict:
     """The Synnax host and login last used on this machine (kept here, never in a system file)."""
     s = settings()
     out = {}
-    for key in ("host", "port", "username", "password", "secure"):
+    for key in ("host", "port", "username", "password", "secure", "desktop"):
         v = s.value(f"synnax/{key}")
         if v is None or v == "":
             continue
@@ -51,7 +51,7 @@ def synnax_connection() -> dict:
                 v = int(v)
             except (TypeError, ValueError):
                 continue
-        elif key == "secure":
+        elif key in ("secure", "desktop"):
             v = v if isinstance(v, bool) else str(v).lower() in ("true", "1", "yes")
         out[key] = v
     return out

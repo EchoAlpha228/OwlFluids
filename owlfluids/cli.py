@@ -133,9 +133,10 @@ def _start_driver(args, runner):
         d["mode"] = args.synnax_mode
     cfg = SynnaxConfig.from_dict(d)
     driver = SynnaxDriver(runner, cfg)
+    where = "Synnax Desktop" if cfg.desktop else f"{cfg.host}:{cfg.port}"
     what = "faking valve states, reading valve commands" if cfg.mode == "hootl" else "reading valve states"
     print(f"Synnax {cfg.mode.upper()}: writing {len(driver.sensors)} sensors at {cfg.rate:g} Hz to "
-          f"{cfg.host}:{cfg.port}, {what} for {len(driver.valves)} valves")
+          f"{where}, {what} for {len(driver.valves)} valves")
     return driver
 
 
