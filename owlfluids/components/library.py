@@ -162,7 +162,9 @@ class Tank(ComponentType):
               "or just below the boiling point at the tank pressure if that is colder)"),
         Param("fill", None, None, "liquid volume fraction 0-1"),
         Param("pressurant", "text", None,
-              "a separate gas above the liquid, such as nitrogen or helium (blank: the tank holds one fluid)"),
+              "a separate gas above the liquid, such as nitrogen or helium (blank: the tank holds one fluid, "
+              "unless a gas can press it: a liquid tank a gas can be pushed into from a higher pressure, such "
+              "as LOX pressed with GN2, takes that gas as its pressurant)"),
         Param("gas_temperature", "temperature", None,
               "initial pressurant temperature (default: system initial temperature)"),
         Param("diameter", "length", None, "inner diameter, for liquid head at the bottom port (with a pressurant)"),
@@ -173,9 +175,7 @@ class Tank(ComponentType):
             "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; otherwise a "
             "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor, 'bottom' draws "
             "liquid, 'port' draws the mixture (the ullage gas, with a pressurant). A 'wall_mass' gives a "
-            "single-fluid tank a shell that feeds heat into the boiling fluid. A saturated tank that another "
-            "gas (helium, nitrogen, air) can press from a higher pressure, such as LOX pressed with GN2, "
-            "takes that gas as its pressurant, so the gas stays in the ullage and is not counted as liquid.")
+            "single-fluid tank a shell that feeds heat into the boiling fluid.")
 
     @classmethod
     def build(cls, b, comp):

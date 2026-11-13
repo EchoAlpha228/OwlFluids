@@ -115,10 +115,10 @@ def test_a_saturated_tank_gets_an_ullage_only_from_a_gas_that_can_press_it():
     v.add("ATM", "boundary", fluid="air")
     v.connect("TK.top", "V.in"), v.connect("V.out", "ATM.port")
     assert len(build_network(v).comp_nodes["TK"]) == 1
-    # nor is GN2 into an LN2 tank: there the gas is the tank's own fluid, and condenses
+    # GN2 into an LN2 tank is a press too: one well-mixed node would condense it all
     n = System("ln2")
     n.add("TK", "tank", fluid="nitrogen", volume="60 L", fill=0.5, temperature="77 K")
     n.add("V", "valve", cv=0.2)
     n.add("GN2", "boundary", fluid="nitrogen", pressure="100 psi")
     n.connect("GN2.port", "V.in"), n.connect("V.out", "TK.top")
-    assert len(build_network(n).comp_nodes["TK"]) == 1
+    assert len(build_network(n).comp_nodes["TK"]) == 2
