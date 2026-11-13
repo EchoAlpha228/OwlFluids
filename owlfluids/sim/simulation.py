@@ -30,6 +30,7 @@ MIN_BUDGET = 8.0  # smallest work per step: one Jacobian and two Newton iteratio
 
 SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
                 "wall_temperature", "level", "purge_fraction")
+PART_SENSORS = ("level", "mass", "valve_position", "wall_temperature")  # see core/lines.py
 
 
 class Simulation:
@@ -452,6 +453,8 @@ class Simulation:
     def _sensor_source(self, s) -> tuple[str, int]:
         if s.type not in SENSOR_TYPES:
             raise ValueError(f"sensor {s.id}: unknown type {s.type!r}; types: {', '.join(SENSOR_TYPES)}")
+        if s.line or not s.at:
+            return self._line_source(s)
         if s.type == "mass_flow":
             terms = self.net.port_flows.get(s.at)
             if terms:  # on a line, at one of its ports
@@ -468,6 +471,32 @@ class Simulation:
         if s.type == "level":
             return "level", self._level_source(s)
         return "node", self.node(s.at)
+
+    def _line_source(self, s) -> tuple[str, object]:
+        """A sensor placed on a line: the line's node, or the flow along it (see core/lines.py).
+        One on no line, or where nothing can be read, reads nothing (NaN) and says why."""
+        line = self.system.line_of(s)
+        why = None
+        if s.type in PART_SENSORS:
+            why = f"a {s.type.replace('_', ' ')} sensor belongs on a part; give it one"
+        elif line is None:
+            why = "it is on no line; put it on one"
+        elif s.type == "mass_flow":
+            terms = self.net.line_flows.get(line)
+            if terms is not None:
+                sign = 1.0 if line == tuple(s.line) else -1.0
+                return "flow", (np.array([k for k, _ in terms], dtype=np.int64),
+                                np.array([sign * g for _, g in terms], dtype=float))
+            why = (f"the line {line[0]} -- {line[1]} is part of a loop of lines (or joins two volumes), so "
+                   "no flow is its own; move it to a line into or out of a valve, orifice or fitting")
+        elif line[0] in self.net.port_nodes:
+            return "node", self.net.port_nodes[line[0]]
+        else:
+            why = f"nothing on the line {line[0]} -- {line[1]} holds fluid"
+        msg = f"sensor {s.id} reads nothing: {why}"
+        if msg not in self.net.warnings:
+            self.net.warnings.append(msg)
+        return "none", 0
 
     def _level_source(self, s) -> int:
         comp = s.at.split(".")[0]
@@ -513,6 +542,8 @@ class Simulation:
     def _raw(self, st) -> float:
         kind, idx = st.source
         t = st.spec.type
+        if kind == "none":
+            return math.nan
         if kind == "link":
             return float(self.lout[idx, L.LO_MDOT])
         if kind == "flow":

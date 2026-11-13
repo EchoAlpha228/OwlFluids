@@ -13,9 +13,9 @@ def gn2_blowdown() -> System:
     s.add("ATM", "boundary", fluid="nitrogen", at=[300, 0])
     s.connect("K1.top", "V1.in")
     s.connect("V1.out", "ATM.port")
-    s.sense("PT-K1", "pressure", "K1.top", units="psi")
-    s.sense("TC-K1", "temperature", "K1.top", units="F")
-    s.sense("FM-V1", "mass_flow", "V1", units="kg/s")
+    s.sense("PT-K1", "pressure", line=("K1.top", "V1.in"), units="psi")
+    s.sense("TC-K1", "temperature", line=("K1.top", "V1.in"), units="F")
+    s.sense("FM-V1", "mass_flow", line=("V1.out", "ATM.port"), units="kg/s")
     return s
 
 
@@ -33,10 +33,10 @@ def lox_feed() -> System:
     for a, b in [("K-N2.top", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "TK.top"), ("TK.bottom", "F1.in"),
                  ("F1.out", "V-M.in"), ("V-M.out", "INJ.in"), ("INJ.out", "AMB.port")]:
         s.connect(a, b)
-    s.sense("PT-TK", "pressure", "TK.top", units="psi")
-    s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
-    s.sense("TC-INJ", "temperature", "INJ.in", units="F")
-    s.sense("FM-LOX", "mass_flow", "V-M", units="kg/s")
+    s.sense("PT-TK", "pressure", line=("V-P.out", "TK.top"), units="psi")
+    s.sense("PT-INJ", "pressure", line=("V-M.out", "INJ.in"), units="psi")
+    s.sense("TC-INJ", "temperature", line=("V-M.out", "INJ.in"), units="F")
+    s.sense("FM-LOX", "mass_flow", line=("V-M.out", "INJ.in"), units="kg/s")
     s.sense("M-LOX", "mass", "TK", units="kg")
     s.sense("LL-LOX", "level", "TK", units="%")
     return s
@@ -56,9 +56,9 @@ def lox_purge() -> System:
     for a, b in [("K-HE.top", "REG-PG.in"), ("REG-PG.out", "V-PG.in"), ("V-PG.out", "CK-PG.in"),
                  ("CK-PG.out", "INJ.in")]:
         s.connect(a, b)
-    s.sense("PT-PG", "pressure", "V-PG.out", units="psi")
-    s.sense("FM-PG", "mass_flow", "CK-PG", units="kg/s")
-    s.sense("PF-INJ", "purge_fraction", "INJ.in", units="%")
+    s.sense("PT-PG", "pressure", line=("V-PG.out", "CK-PG.in"), units="psi")
+    s.sense("FM-PG", "mass_flow", line=("CK-PG.out", "INJ.in"), units="kg/s")
+    s.sense("PF-INJ", "purge_fraction", line=("V-M.out", "INJ.in"), units="%")
     return s
 
 
@@ -113,15 +113,15 @@ def nitrous_fill() -> System:
                  ("APR.out", "AIV.in"), ("AIV.out", "ACF.in"), ("ACF.out", "OPGS.in"),
                  ("OPGS.out", "OPGCV.in"), ("OPGCV.out", "OFV.out")]:
         s.connect(a, b)
-    s.sense("OFPT", "pressure", "OFV.in", units="psig")
-    s.sense("OFT", "temperature", "OFV.in", units="F")
-    s.sense("OIPT", "pressure", "OFIF.out", units="psig")
-    s.sense("APT", "pressure", "ACF.out", units="psig")
-    s.sense("ART", "pressure", "AR.top", units="psig")
-    s.sense("FM-OF", "mass_flow", "OFV", units="kg/s")
+    s.sense("OFPT", "pressure", line=("OFF.out", "OFV.in"), units="psig")
+    s.sense("OFT", "temperature", line=("OFF.out", "OFV.in"), units="F")
+    s.sense("OIPT", "pressure", line=("OFIF.out", "OQD.in"), units="psig")
+    s.sense("APT", "pressure", line=("ACF.out", "OPGS.in"), units="psig")
+    s.sense("ART", "pressure", line=("AC.out", "AR.top"), units="psig")
+    s.sense("FM-OF", "mass_flow", line=("OFF.out", "OFV.in"), units="kg/s")
     s.sense("M-RT", "mass", "RT", units="kg")
     s.sense("LL-RT", "level", "RT", units="%")
-    s.sense("PF-OF", "purge_fraction", "OFIF.out", units="%")
+    s.sense("PF-OF", "purge_fraction", line=("OFIF.out", "OQD.in"), units="%")
     s.sense("AC-ON", "valve_position", "AC")
     return s
 
@@ -149,11 +149,11 @@ def ln2_wet_dress() -> System:
                  ("L-F.b", "TEE.a"), ("TEE.b", "INJ.in"), ("INJ.out", "ATM.port"), ("TEE.d", "V-B.in"),
                  ("V-B.out", "ATM-B.port")]:
         s.connect(a, b)
-    s.sense("PT-TK", "pressure", "TK.top", units="psi")
-    s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
-    s.sense("TC-INJ", "temperature", "INJ.in", units="F")
+    s.sense("PT-TK", "pressure", line=("V-P.out", "TK.top"), units="psi")
+    s.sense("PT-INJ", "pressure", line=("TEE.b", "INJ.in"), units="psi")
+    s.sense("TC-INJ", "temperature", line=("TEE.b", "INJ.in"), units="F")
     s.sense("TC-LINE", "wall_temperature", "L-F", units="F")
-    s.sense("FM-LN2", "mass_flow", "V-M", units="kg/s")
+    s.sense("FM-LN2", "mass_flow", line=("V-M.out", "L-F.a"), units="kg/s")
     s.sense("M-LN2", "mass", "TK", units="kg")
     s.sense("LL-LN2", "level", "TK", units="%")
     return s
@@ -169,10 +169,10 @@ def n2o_blowdown() -> System:
     s.connect("K.bottom", "V.in")
     s.connect("V.out", "INJ.in")
     s.connect("INJ.out", "ATM.port")
-    s.sense("PT-K", "pressure", "K.bottom", units="psi")
-    s.sense("TC-K", "temperature", "K.bottom", units="F")
-    s.sense("PT-INJ", "pressure", "INJ.in", units="psi")
-    s.sense("FM-N2O", "mass_flow", "INJ", units="kg/s")
+    s.sense("PT-K", "pressure", line=("K.bottom", "V.in"), units="psi")
+    s.sense("TC-K", "temperature", line=("K.bottom", "V.in"), units="F")
+    s.sense("PT-INJ", "pressure", line=("V.out", "INJ.in"), units="psi")
+    s.sense("FM-N2O", "mass_flow", line=("INJ.out", "ATM.port"), units="kg/s")
     s.sense("M-N2O", "mass", "K", units="kg")
     s.sense("LL-N2O", "level", "K", units="%")
     return s
@@ -192,8 +192,8 @@ def pneumatic_valves() -> System:
     for a, b in [("C.out", "A.a"), ("K.top", "V-FILL.in"), ("V-FILL.out", "TK.a"), ("TK.b", "V-VENT.in"),
                  ("V-VENT.out", "ATM.port")]:
         s.connect(a, b)
-    s.sense("PT-A", "pressure", "A.a", units="psig")
-    s.sense("PT-TK", "pressure", "TK.a", units="psi")
+    s.sense("PT-A", "pressure", line=("C.out", "A.a"), units="psig")
+    s.sense("PT-TK", "pressure", line=("V-FILL.out", "TK.a"), units="psi")
     s.sense("ZS-FILL", "valve_position", "V-FILL")
     s.sense("ZS-VENT", "valve_position", "V-VENT")
     return s

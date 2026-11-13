@@ -164,6 +164,8 @@ class PlotPanel(QWidget):
         if value is None:
             return name
         unit = "%" if self.groups.get(n) == "valve" else self.unit_of.get(n, "")
+        if value != value:  # NaN: a sensor on no line reads nothing
+            return f"{name:<9} {'—':>9}"
         return f"{name:<9} {value:>9.4g} {unit}"
 
     def _set_live(self, live: bool) -> None:

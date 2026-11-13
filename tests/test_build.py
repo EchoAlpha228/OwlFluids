@@ -7,7 +7,7 @@ from owlfluids.sim.simulation import Simulation
 
 def test_yaml_round_trip(tmp_path, gas_blowdown):
     s = gas_blowdown()
-    s.sense("PT-1", "pressure", "TK.top", units="psi")
+    s.sense("PT-1", "pressure", line=("TK.top", "O1.in"), units="psi")
     p = tmp_path / "sys.yaml"
     s.save(p)
     s2 = System.load(p)
@@ -35,7 +35,7 @@ def test_old_pipes_fold_into_direct_connections():
     assert {c.id for c in s.components} == {"K", "V", "R", "A", "A2"}
     assert sorted(s.connections) == sorted([("K.top", "V.in"), ("K.top", "R.in"), ("V.out", "A.port"),
                                             ("R.out", "A2.port")])
-    assert s.sensors[0].at == s.sensors[1].at == "K.top"
+    assert "K.top" in s.sensors[0].line and "K.top" in s.sensors[1].line  # on the tank's line now
     sim = Simulation(s)
     assert any("L1, L2" in w for w in sim.net.warnings)
     assert sim.read("PT") == pytest.approx(10e5, rel=1e-2)
@@ -57,7 +57,7 @@ def test_old_pipe_segments_and_settings_fold_with_notes():
                     {"id": "PT", "type": "pressure", "at": "L-X.in"},
                     {"id": "FM", "type": "mass_flow", "at": "L-F"}],
     })
-    assert s.sensors[0].at == "V.out"
+    assert "V.out" in s.sensors[0].line
     assert s.sensors[1].at == "L-X.in"  # joins nothing: left for the user to move
     notes = " ".join(s.notes)
     assert "TC was on line L-F" in notes and "PT is on line L-X, which joins nothing" in notes

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from .. import units
 from ..components import get_type
+from ..core.lines import LINE_TYPES, Lines, taps_parts
 from ..fluids.registry import canonical
 from ..io.system import Component, Sensor, System
 from . import media as M
@@ -39,12 +40,15 @@ FLOW_MARK = T.qc(T.WHITE)
 FLOW_SIZE = 2.5  # px, the side of each square
 FLOW_DASHES = [1.0, 5.0]  # square, gap; in multiples of FLOW_SIZE
 FLOW_SPEED = 2.0  # dash units per second the squares travel (2 x 2.5 = 5 px/s per unit)
-# sensors that can sit on a line, and the letters in their bubble: pressure transducer, thermocouple,
-# flow meter (new ids add the line's commodity in front, see naming.py)
-LINE_SENSORS = {"pressure": "PT", "temperature": "TC", "mass_flow": "FM"}
+# sensors that are parts of their own, put anywhere on a line, and the letters in their bubble
+# (new ids add the line's commodity in front, see naming.py)
+LINE_SENSORS = LINE_TYPES
 BUBBLE_R = 10.0  # px, sensor bubble radius
 BUBBLE_OFFSET = 26.0  # px from the line to the bubble's centre
-SENSOR_SPACING = 90.0  # px along a line between sensors, room for a bubble and its readout
+SENSOR_SPACING = 90.0  # px along a line between sensors spread out on it, room for a bubble and its readout
+SENSOR_SNAP = 24.0  # px: a sensor dropped this close to a line goes on it
+SENSOR_END = 14.0  # px: how close to a part a sensor can sit on a line
+SENSOR_MIME = "sensor:"  # the palette's drag text for a sensor: "sensor:pressure"
 
 
 def _fluid(name) -> str | None:
@@ -75,6 +79,43 @@ def _tank_state(prm: dict) -> dict:
 
 def snap(p: QPointF) -> QPointF:
     return QPointF(round(p.x() / GRID) * GRID, round(p.y() / GRID) * GRID)
+
+
+def _length(points) -> float:
+    return sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in routing.segments(points))
+
+
+def _point_at(points, d: float) -> tuple[QPointF, bool]:
+    """The point ``d`` px along a square route, and whether the route runs level there."""
+    left = max(d, 0.0)
+    seg = None
+    for a, b in routing.segments(points):
+        seg = (a, b)
+        n = abs(b[0] - a[0]) + abs(b[1] - a[1])
+        if left <= n or n == 0 and left == 0:
+            break
+        left -= n
+    if seg is None:
+        return QPointF(*points[0]), True
+    (x0, y0), (x1, y1) = seg
+    n = abs(x1 - x0) + abs(y1 - y0) or 1.0
+    t = min(left / n, 1.0)
+    return QPointF(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t), abs(x1 - x0) >= abs(y1 - y0)
+
+
+def _nearest(points, p: QPointF) -> tuple[float, float]:
+    """How far ``p`` is from a square route, and how far along the route the nearest point is."""
+    best, at, run = None, 0.0, 0.0
+    for (x0, y0), (x1, y1) in routing.segments(points):
+        n = abs(x1 - x0) + abs(y1 - y0)
+        t = 0.0 if n == 0 else min(max(((p.x() - x0) * (x1 - x0) + (p.y() - y0) * (y1 - y0))
+                                        / ((x1 - x0) ** 2 + (y1 - y0) ** 2), 0.0), 1.0)
+        qx, qy = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+        dist = ((p.x() - qx) ** 2 + (p.y() - qy) ** 2) ** 0.5
+        if best is None or dist < best:
+            best, at = dist, run + t * n
+        run += n
+    return (best if best is not None else float("inf")), at
 
 
 class PortItem(QGraphicsEllipseItem):
@@ -186,6 +227,7 @@ class ComponentItem(QGraphicsObject):
             if sc is not None:
                 sc.update_wires(self.comp.id)
                 sc.settle_labels([self])
+                sc._place_loose_sensors()  # sensors on its ports follow it
         if change == QGraphicsItem.ItemSelectedHasChanged:
             sc = self.scene()
             if sc is not None:
@@ -288,13 +330,16 @@ class WireItem(QGraphicsPathItem):
 
 
 class SensorItem(QGraphicsObject):
-    """A pressure, temperature or mass flow sensor on a line: an instrument bubble on a leader."""
+    """A sensor, a part of its own: an instrument bubble on a leader from a tap dot on a line (or on a
+    tank's or volume's port). Drag it along its line, onto another, or off every line."""
 
     def __init__(self, sensor):
         super().__init__()
         self.sensor = sensor
         self.label_side = "top"  # where its id and reading go: top, right or left of the bubble
         self.anchor = QPointF()  # where the leader meets the line, relative to the bubble's centre
+        self.attached = True  # on a line or a port; off every one it is drawn dashed and reads nothing
+        self._press = None  # where a drag started
         self.setFlags(QGraphicsItem.ItemIsSelectable)
         self.setZValue(2)
         self.setAcceptHoverEvents(True)
@@ -302,12 +347,20 @@ class SensorItem(QGraphicsObject):
 
     def _tip(self) -> None:
         s = self.sensor
-        self.setToolTip(f"{s.id}: {s.type.replace('_', ' ')} at {s.at}")
+        what = s.type.replace("_", " ")
+        if s.line:
+            where = f"on the line {s.line[0]} -- {s.line[1]}"
+        elif s.at:
+            where = f"at {s.at}"
+        else:
+            where = "on no line: drag it onto one"
+        self.setToolTip(f"{s.id}: {what} {where}")
 
-    def place(self, centre: QPointF, anchor: QPointF) -> None:
+    def place(self, centre: QPointF, anchor: QPointF, attached: bool = True) -> None:
         self.prepareGeometryChange()
         self.setPos(centre)
         self.anchor = anchor - centre
+        self.attached = attached
 
     def boundingRect(self) -> QRectF:
         r = QRectF(-BUBBLE_R - 2, -BUBBLE_R - 2, 2 * BUBBLE_R + 4, 2 * BUBBLE_R + 4)
@@ -320,18 +373,46 @@ class SensorItem(QGraphicsObject):
 
     def paint(self, p: QPainter, option, widget=None) -> None:
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(symbols.LINE, 1.2))
         a = self.anchor
-        n = (a.x() ** 2 + a.y() ** 2) ** 0.5 or 1.0
-        p.drawLine(QPointF(a.x() * BUBBLE_R / n, a.y() * BUBBLE_R / n), a)  # leader, from the bubble's rim
+        n = (a.x() ** 2 + a.y() ** 2) ** 0.5
+        if self.attached and n > BUBBLE_R:
+            p.setPen(QPen(symbols.LINE, 1.2))
+            p.drawLine(QPointF(a.x() * BUBBLE_R / n, a.y() * BUBBLE_R / n), a)  # leader, from the bubble's rim
+            p.setBrush(QBrush(T.qc(T.GRAY_950)))
+            p.drawEllipse(a, 1.8, 1.8)  # the tap on the line
         p.setBrush(QBrush(T.qc(T.GRAY_950)))
-        p.drawEllipse(a, 1.8, 1.8)  # the tap on the line
-        p.setPen(QPen(WIRE_SELECTED if self.isSelected() else symbols.LINE, 2 if self.isSelected() else 1.2))
+        if self.isSelected():
+            pen = QPen(WIRE_SELECTED, 2)
+        elif self.attached:
+            pen = QPen(symbols.LINE, 1.2)
+        else:  # on no line: dashed, like a line no fluid fills
+            pen = QPen(WIRE, 1.2, Qt.DashLine)
+        p.setPen(pen)
         p.drawEllipse(QPointF(0, 0), BUBBLE_R, BUBBLE_R)
         p.setPen(QPen(T.qc(T.TEXT)))
         p.setFont(T.mono_font(6.5))
         p.drawText(QRectF(-BUBBLE_R, -BUBBLE_R, 2 * BUBBLE_R, 2 * BUBBLE_R), Qt.AlignCenter,
                    LINE_SENSORS.get(self.sensor.type, "?"))
+
+    # dragging moves it along its line, onto another line or a tank, or off every line
+    def mousePressEvent(self, e):
+        sc = self.scene()
+        if sc is not None and not sc.running and e.button() == Qt.LeftButton:
+            self._press = e.scenePos()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._press is None:
+            return super().mouseMoveEvent(e)
+        if (e.scenePos() - self._press).manhattanLength() > 3:
+            self.scene().drag_sensor(self, e.scenePos())
+
+    def mouseReleaseEvent(self, e):
+        start, self._press = self._press, None
+        if start is not None and (e.scenePos() - start).manhattanLength() > 3:
+            self.scene().drag_sensor(self, e.scenePos(), drop=True)
+            return
+        super().mouseReleaseEvent(e)
 
 
 class Scene(QGraphicsScene):
@@ -372,6 +453,7 @@ class Scene(QGraphicsScene):
         self.sensor_labels.clear()
         self._auto.clear()
         self.system = system
+        system.sensors_onto_lines()  # a script's sensors at a part's port go on the line there
         if any(c.position is None for c in system.components):
             auto_layout(system)
         for c in system.components:
@@ -566,21 +648,32 @@ class Scene(QGraphicsScene):
         item = self.items_by_id.get(cid)
         return item.port_scene_pos(port) if item else None
 
-    # ------------------------------------------------------------------ sensors on lines
+    # ------------------------------------------------------------------ sensors
+    @staticmethod
+    def drawn(s: Sensor) -> bool:
+        """Sensors that are parts of their own (on lines) get a bubble; a part's own sensors don't."""
+        return s.type in LINE_SENSORS and not (s.at and "." not in s.at)
+
     def _sensor_wire(self, s: Sensor) -> WireItem | None:
-        """The line a sensor is drawn on: the first one with an end at the sensor's port."""
-        if s.type not in LINE_SENSORS:
+        """The line a sensor sits on (or, in a script from before sensors had lines, the first
+        line out of the port it reads)."""
+        if not self.drawn(s):
             return None
-        return next((w for w in self.wires if s.at in (w.a, w.b)), None)
+        if s.line:
+            ends = set(s.line)
+            return next((w for w in self.wires if {w.a, w.b} == ends), None)
+        if s.at:
+            return next((w for w in self.wires if s.at in (w.a, w.b)), None)
+        return None
 
     def refresh_sensors(self) -> None:
-        """One bubble per pressure, temperature or mass flow sensor at a port a line comes out of."""
+        """One bubble for each sensor that is a part of its own, on a line or not."""
         for sid in list(self.sensor_items):
             self.removeItem(self.sensor_items.pop(sid))
             for lab in self.sensor_labels.pop(sid):
                 self.removeItem(lab)
         for s in self.system.sensors:
-            if self._sensor_wire(s) is None:
+            if not self.drawn(s):
                 continue
             item = SensorItem(s)
             self.addItem(item)
@@ -594,39 +687,113 @@ class Scene(QGraphicsScene):
             value.setZValue(3)
             self.sensor_items[s.id] = item
             self.sensor_labels[s.id] = (name, value)
+        self.place_all_sensors()
+
+    def place_all_sensors(self) -> None:
         for w in self.wires:
             self.place_sensors(w)
+        self._place_loose_sensors()
+
+    def _on_wire(self, w: WireItem, s: Sensor, length: float) -> float | None:
+        """How far along ``w`` (from its end a) a placed sensor sits; None if not placed by hand."""
+        if not s.line or s.along is None:
+            return None
+        d = s.along * length
+        return d if s.line[0] == w.a else length - d
 
     def place_sensors(self, w: WireItem) -> None:
-        """Spread a line's sensors along its longest segment, bubbles above it (or right of it)."""
+        """A line's sensors where they were put on it, or spread along its longest segment;
+        bubbles above a level line (or right of an upright one), kept clear of each other."""
         if not self.sensor_items or len(w.points) < 2:
             return
         mine = [self.sensor_items[s.id] for s in self.system.sensors
                 if s.id in self.sensor_items and self._sensor_wire(s) is w]
         if not mine:
             return
-        (x0, y0), (x1, y1) = max(routing.segments(w.points),
-                                 key=lambda seg: abs(seg[1][0] - seg[0][0]) + abs(seg[1][1] - seg[0][1]))
-        horizontal = abs(x1 - x0) >= abs(y1 - y0)
-        length = abs(x1 - x0) + abs(y1 - y0)
-        ux, uy = (x1 - x0) / (length or 1.0), (y1 - y0) / (length or 1.0)
-        step = max(length / (len(mine) + 1), SENSOR_SPACING)  # spread out, centred on the segment
-        parts = []
+        length = _length(w.points)
+        placed = {id(it): self._on_wire(w, it.sensor, length) for it in mine}
+        loose = [it for it in mine if placed[id(it)] is None]
+        if loose:  # never placed by hand: spread out, centred on the longest segment
+            run, best = 0.0, (0.0, 0.0)
+            for a, b in routing.segments(w.points):
+                n = abs(b[0] - a[0]) + abs(b[1] - a[1])
+                if n > best[1]:
+                    best = (run, n)
+                run += n
+            start, n = best
+            step = max(n / (len(loose) + 1), SENSOR_SPACING)
+            for k, it in enumerate(loose):
+                placed[id(it)] = start + n / 2 + (k - (len(loose) - 1) / 2) * step
+        order = sorted(mine, key=lambda it: placed[id(it)])
+        lo, hi = min(SENSOR_END, length / 2), max(length - SENSOR_END, length / 2)
+        parts = self._part_boxes()
+        last = None
+        for it in order:  # each clear of the one before, its readout included: pushed on along the line
+            d = min(max(placed[id(it)], lo), hi)
+            while True:
+                anchor, level = _point_at(w.points, d)
+                self._place_bubble(it, anchor, level, parts)
+                box = self._sensor_box(it)
+                if last is None or not _overlap(box, last) or d >= hi:
+                    break
+                d = min(d + GRID, hi)
+            last = box
+
+    def _sensor_box(self, item: SensorItem) -> routing.Rect:
+        """The scene box a sensor's bubble and labels cover (a readout at least LABEL_WIDTH wide)."""
+        name, value = self.sensor_labels[item.sensor.id]
+        c = item.pos()
+        tw = max(name.boundingRect().width(), value.boundingRect().width(), LABEL_WIDTH)
+        if item.label_side == "top":
+            return (c.x() - tw / 2, c.y() - BUBBLE_R - 26, c.x() + tw / 2, c.y() + BUBBLE_R)
+        if item.label_side == "left":
+            return (c.x() - BUBBLE_R - 4 - tw, c.y() - 14, c.x() + BUBBLE_R, c.y() + 14)
+        return (c.x() - BUBBLE_R, c.y() - 14, c.x() + BUBBLE_R + 4 + tw, c.y() + 14)
+
+    def _part_boxes(self) -> list:
+        boxes = []
         for it in self.items_by_id.values():
             w_, h_ = it.size
             r = it.mapRectToScene(QRectF(-w_ / 2, -h_ / 2, w_, h_))
-            parts.append((r.left(), r.top(), r.right(), r.bottom()))
-        for k, item in enumerate(mine):
-            along = length / 2 + (k - (len(mine) - 1) / 2) * step
-            anchor = QPointF(x0 + ux * along, y0 + uy * along)
-            centre = anchor + (QPointF(0, -BUBBLE_OFFSET) if horizontal else QPointF(BUBBLE_OFFSET, 0))
-            item.place(centre, anchor)
-            # on a level line the readout sits over the bubble, so sensors in a row keep clear of each
-            # other; on an upright line beside it, right of the bubble or left when a part is in the way
-            x = centre.x() + BUBBLE_R + 4
-            item.label_side = "top" if horizontal else (
-                "left" if any(_overlap((x, centre.y() - 12, x + LABEL_WIDTH, centre.y() + 12), r) for r in parts)
-                else "right")
+            boxes.append((r.left(), r.top(), r.right(), r.bottom()))
+        return boxes
+
+    def _place_bubble(self, item: SensorItem, anchor: QPointF, level: bool, parts=None) -> None:
+        """Bubble above a level line, its readout over it; beside an upright one, the readout right
+        of it (left when a part is in the way)."""
+        centre = anchor + (QPointF(0, -BUBBLE_OFFSET) if level else QPointF(BUBBLE_OFFSET, 0))
+        item.place(centre, anchor)
+        x = centre.x() + BUBBLE_R + 4
+        parts = self._part_boxes() if parts is None else parts
+        item.label_side = "top" if level else (
+            "left" if any(_overlap((x, centre.y() - 12, x + LABEL_WIDTH, centre.y() + 12), r) for r in parts)
+            else "right")
+        self._place_sensor_labels(item)
+
+    def _port_tap(self, ref: str) -> tuple[QPointF, bool] | None:
+        """A part's port as a sensor tap: where it is, and whether the bubble goes above it (else beside)."""
+        cid, _, port = ref.partition(".")
+        item = self.items_by_id.get(cid)
+        if item is None or port not in item.ports:
+            return None
+        pt, c = item.port_scene_pos(port), item.scenePos()
+        dx, dy = routing.port_direction((c.x(), c.y()), (pt.x(), pt.y()))
+        return pt, dy != 0
+
+    def _place_loose_sensors(self) -> None:
+        """Sensors on no line: at a tank's or volume's port with nothing wired to it, or where they were left."""
+        for s in self.system.sensors:
+            item = self.sensor_items.get(s.id)
+            if item is None or self._sensor_wire(s) is not None:
+                continue
+            tap = self._port_tap(s.at) if s.at else None
+            if tap is not None:
+                pt, upright = tap
+                self._place_bubble(item, pt, upright)
+                continue
+            centre = QPointF(*(s.pos or (0.0, 0.0)))
+            item.place(centre, centre, attached=False)
+            item.label_side = "top"
             self._place_sensor_labels(item)
 
     def _place_sensor_labels(self, item: SensorItem) -> None:
@@ -643,35 +810,78 @@ class Scene(QGraphicsScene):
             else:
                 lab.setPos(c.x() + BUBBLE_R + 4, c.y() + dy)
 
-    def line_sensor_end(self, w: WireItem, stype: str) -> str | None:
-        """The end of a line a new sensor reads at, or None if this kind can't be read there.
+    def sensor_target(self, p: QPointF, stype: str) -> dict | None:
+        """Where a sensor dropped at ``p`` goes: {"wire", "d"} on a line (``d`` px from its end a), or
+        {"at"} on a tank's or volume's port with nothing wired to it; None off every line."""
+        for it in self.items_by_id.values():
+            if not taps_parts(it.comp.type) or not it.ports:
+                continue
+            w_, h_ = it.size
+            if not it.mapRectToScene(QRectF(-w_ / 2, -h_ / 2, w_, h_)).contains(p):
+                continue
+            port = min(it.ports, key=lambda q: (it.port_scene_pos(q) - p).manhattanLength())  # the nearer end
+            ref = f"{it.comp.id}.{port}"
+            w = next((w for w in self.wires if ref in (w.a, w.b)), None)
+            if w is not None:  # on the line there, next to the part
+                n = _length(w.points)
+                d = min(SENSOR_SPACING / 2, n / 2)
+                return {"wire": w, "d": d if w.a == ref else n - d}
+            return None if stype == "mass_flow" else {"at": ref}
+        best = None
+        for w in self.wires:
+            if len(w.points) < 2:
+                continue
+            dist, d = _nearest(w.points, p)
+            if dist <= SENSOR_SNAP and (best is None or dist < best[0]):
+                best = (dist, w, d)
+        return None if best is None else {"wire": best[1], "d": best[2]}
 
-        Both ends are one point, so pressure and temperature read the same at either. Mass flow
-        is read at a flow element's end (valve, orifice, fitting: its flow, in to out), else at a
-        tank's or volume's end (the flow leaving it); between two tees there is no flow to read.
-        """
-        def rank(ref: str) -> int:
-            item = self.items_by_id.get(ref.split(".")[0])
-            if item is None or item.ctype.merges_ports:
-                return 3
-            if item.ctype.category != "Volumes":
-                return 0
-            return 2 if item.ctype.type_name == "boundary" else 1
+    def _put_sensor(self, s: Sensor, target: dict | None, p: QPointF) -> None:
+        if target is None:
+            s.line, s.along, s.at, s.pos = None, None, "", (round(p.x(), 1), round(p.y(), 1))
+        elif "at" in target:
+            s.line, s.along, s.at, s.pos = None, None, target["at"], None
+        else:
+            w, n = target["wire"], _length(target["wire"].points) or 1.0
+            if not (s.line and set(s.line) == {w.a, w.b}):  # a new line: a flow meter reads the usual way
+                s.line = Lines(self.system).flow_order(w.a, w.b) if s.type == "mass_flow" else (w.a, w.b)
+            f = min(max(target["d"] / n, 0.0), 1.0)
+            s.along = round(f if s.line[0] == w.a else 1.0 - f, 3)
+            s.at, s.pos = "", None
 
-        def wires_at(ref: str) -> int:
-            return sum(ref in (x.a, x.b) for x in self.wires)
+    def drag_sensor(self, item: SensorItem, p: QPointF, drop: bool = False) -> None:
+        """Follow the mouse: snapped onto the line (or tank) under it, loose elsewhere; dropped, it stays."""
+        if self.running:
+            return
+        target = self.sensor_target(p, item.sensor.type)
+        if drop:
+            self._put_sensor(item.sensor, target, p)
+            item._tip()
+            self.place_all_sensors()
+            self.refresh_media()  # a default name follows the commodity of its new line
+            self._on_selection()
+            self.changed_system.emit()
+            return
+        if target is None:
+            item.place(p, p, attached=False)
+            item.label_side = "top"
+            self._place_sensor_labels(item)
+        elif "at" in target:
+            pt, upright = self._port_tap(target["at"])
+            self._place_bubble(item, pt, upright)
+        else:
+            anchor, level = _point_at(target["wire"].points, target["d"])
+            self._place_bubble(item, anchor, level)
 
-        ends = sorted((w.a, w.b), key=lambda r: (rank(r), wires_at(r) > 1))
-        if stype == "mass_flow" and rank(ends[0]) == 3:
+    def add_sensor(self, stype: str, pos: QPointF) -> Sensor | None:
+        """A new sensor from the palette, on the line (or tank) it was dropped on, or loose."""
+        if self.running or stype not in LINE_SENSORS:
             return None
-        return ends[0]
-
-    def add_line_sensor(self, w: WireItem, stype: str) -> Sensor | None:
-        at = self.line_sensor_end(w, stype)
-        if at is None or self.running:
-            return None
-        sid = naming.next_name(naming.sensor_prefix(stype, self._line_fluid(at)), self._sensor_ids())
-        s = Sensor(sid, stype, at, units=units.DEFAULT_UNITS.get(stype, ""))
+        target = self.sensor_target(pos, stype)
+        s = Sensor("", stype, units=units.DEFAULT_UNITS.get(stype, ""))
+        self._put_sensor(s, target, snap(pos) if target is None else pos)
+        s.id = naming.next_name(naming.sensor_prefix(stype, self._line_fluid(self._sensor_ref(s))),
+                                self._sensor_ids())
         self.system.sensors.append(s)
         self._auto[id(s)] = (s, s.id)
         self.refresh_sensors()
@@ -681,11 +891,37 @@ class Scene(QGraphicsScene):
         self.changed_system.emit()
         return s
 
+    def add_line_sensor(self, w: WireItem, stype: str, at: QPointF | None = None) -> Sensor | None:
+        """A new sensor on line ``w``: at ``at`` (where it was right-clicked), or spread out with the others."""
+        if self.running or w not in self.wires:
+            return None
+        if at is None:
+            pt, _ = _point_at(w.points, _length(w.points) / 2)
+            at = pt
+        s = self.add_sensor(stype, at)
+        if s is not None and set(s.line or ()) != {w.a, w.b}:  # right-clicked beside it: still on this line
+            self._put_sensor(s, {"wire": w, "d": _nearest(w.points, at)[1]}, at)
+            self.refresh_sensors()
+            self.sensor_items[s.id].setSelected(True)
+        return s
+
+    def line_flow_readable(self, w: WireItem) -> bool:
+        """A flow meter on ``w`` reads a flow of its own (the line is not in a loop of lines)."""
+        return Lines(self.system).flow_side(w.a, w.b) is not None
+
     def remove_sensor(self, s: Sensor) -> None:
         if s in self.system.sensors:
             self.system.sensors.remove(s)
         self.refresh_sensors()
         self.changed_system.emit()
+
+    def _detach_sensors(self, w: WireItem) -> None:
+        """A line is going: its sensors stay where they are, on no line, until moved onto another."""
+        for s in self.system.sensors:
+            if self._sensor_wire(s) is w:
+                item = self.sensor_items.get(s.id)
+                pos = item.pos() if item is not None else _point_at(w.points, _length(w.points) / 2)[0]
+                s.line, s.along, s.at, s.pos = None, None, "", (round(pos.x(), 1), round(pos.y(), 1))
 
     def show_sensor_values(self, values: dict[str, str]) -> None:
         """``values[sensor id]`` = reading text beside its bubble."""
@@ -728,6 +964,12 @@ class Scene(QGraphicsScene):
                 for w in [w for w in self.wires if w.a.split(".")[0] == cid or w.b.split(".")[0] == cid]:
                     self._remove_wire(w)
                 self.system.components.remove(it.comp)
+                for s in self.system.sensors:  # a sensor reading a port of the part stays, on no line
+                    if s.at.split(".")[0] == cid and self.drawn(s):
+                        item = self.sensor_items.get(s.id)
+                        pos = item.pos() if item is not None else it.scenePos()
+                        s.at, s.pos = "", (round(pos.x(), 1), round(pos.y(), 1))
+                # the part's own sensors (level, mass, valve position) go with it
                 self.system.sensors[:] = [s for s in self.system.sensors if s.at.split(".")[0] != cid]
                 for lab in self.labels.pop(cid, ()):
                     self.removeItem(lab)
@@ -742,8 +984,7 @@ class Scene(QGraphicsScene):
 
     def _remove_wire(self, w: WireItem) -> None:
         self.system.routes.pop(w.key, None)
-        drawn = [s for s in self.system.sensors if self._sensor_wire(s) is w]  # the line's own sensors go with it
-        self.system.sensors[:] = [s for s in self.system.sensors if s not in drawn]
+        self._detach_sensors(w)
         if (w.a, w.b) in self.system.connections:
             self.system.connections.remove((w.a, w.b))
         elif (w.b, w.a) in self.system.connections:
@@ -778,6 +1019,8 @@ class Scene(QGraphicsScene):
         sysm.connections[:] = [(fix(a), fix(b)) for a, b in sysm.connections]
         for s in sysm.sensors:
             s.at = fix(s.at)
+            if s.line:
+                s.line = (fix(s.line[0]), fix(s.line[1]))
         routes = {}
         for k, v in sysm.routes.items():
             a, _, b = k.partition(" -- ")
@@ -799,6 +1042,11 @@ class Scene(QGraphicsScene):
     # ------------------------------------------------------------------ default names
     def _sensor_ids(self) -> list[str]:
         return [s.id for s in self.system.sensors]
+
+    @staticmethod
+    def _sensor_ref(s: Sensor) -> str:
+        """A port whose medium a sensor sees, for its default name."""
+        return s.line[0] if s.line else s.at
 
     def _line_fluid(self, ref: str) -> str | None:
         m = self.media.get(ref)
@@ -826,7 +1074,9 @@ class Scene(QGraphicsScene):
             if obj.id != given or not any(s is obj for s in self.system.sensors):
                 del self._auto[key]
                 continue
-            want = naming.sensor_prefix(obj.type, self._line_fluid(obj.at))
+            if not self._sensor_ref(obj):  # on no line: it keeps its name until it is on one again
+                continue
+            want = naming.sensor_prefix(obj.type, self._line_fluid(self._sensor_ref(obj)))
             if naming.prefix_of(obj.id) == want:
                 continue
             obj.id = naming.next_name(want, self._sensor_ids())
@@ -923,7 +1173,8 @@ class Scene(QGraphicsScene):
                                                 self.items_by_id.get(b.split(".")[0])) if it is not None])
         self.route_wire(w)
         self.settle_labels()
-        self.refresh_sensors()  # a sensor at one of its ends may now be drawn on it
+        self.system.sensors_onto_lines()  # a sensor at a tank's port goes on the new line there
+        self.refresh_sensors()
         self.refresh_media()
         self.changed_system.emit()
 
@@ -1052,12 +1303,13 @@ class View(QGraphicsView):
             menu.addSeparator()
             menu.addAction("Delete\tDel", sc.delete_selected)
         elif isinstance(item, WireItem):
+            here = self.mapToScene(e.pos())
             for stype, label in (("pressure", "pressure"), ("temperature", "temperature"),
                                  ("mass_flow", "mass flow")):
-                a = menu.addAction(f"Add {label} sensor", lambda t=stype: sc.add_line_sensor(item, t))
-                if sc.line_sensor_end(item, stype) is None:
+                a = menu.addAction(f"Add {label} sensor here", lambda t=stype: sc.add_line_sensor(item, t, here))
+                if stype == "mass_flow" and not sc.line_flow_readable(item):
                     a.setEnabled(False)
-                    a.setToolTip("a line between two tees has no flow of its own")
+                    a.setToolTip("this line is part of a loop of lines, so no flow is its own")
             menu.addSeparator()
             a = menu.addAction("Reset route", lambda: sc.set_route(item, None))
             a.setEnabled(item.key in sc.system.routes)
@@ -1101,7 +1353,11 @@ class View(QGraphicsView):
         sc = self.scene()
         if sc.running:
             return
-        sc.add_component(e.mimeData().text(), self.mapToScene(e.position().toPoint()))
+        name, p = e.mimeData().text(), self.mapToScene(e.position().toPoint())
+        if name.startswith(SENSOR_MIME):
+            sc.add_sensor(name[len(SENSOR_MIME):], p)
+        else:
+            sc.add_component(name, p)
         e.acceptProposedAction()
 
 

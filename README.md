@@ -108,8 +108,10 @@ under `settings:` in the system file).
 
 In the app: drag parts from **Parts**, drag from one port (small circle) to another
 to connect, **R** rotates, **Delete** removes, and the middle mouse button drags the
-schematic around. Right-click a line to put a pressure, temperature or mass flow sensor on
-it; its reading shows beside it during a run. Select a part to edit its
+schematic around. Sensors are parts of their own: drag a pressure transducer, thermocouple,
+flow meter (or density, quality or purge gas sensor) from **Parts > Sensors** onto any point of
+any line, or right-click a line, and it reads what the fluid does there; drag it along the line or
+onto another to move it. Its reading shows beside it during a run. Select a part to edit its
 parameters; quantities take units (`3000 psi`, `-196 C`, `0.5 in`, `49 L`).
 New parts are named commodity letter, part letter, number: `OV-1` is the first oxidizer
 valve, `FT-1` a fuel tank, `HR-1` a helium regulator, and line sensors add their tag
@@ -137,7 +139,8 @@ connections:
 - [K1.top, V1.in]
 - [V1.out, ATM.port]
 sensors:
-- {id: PT-K1, type: pressure, at: K1.top, units: psi}
+- {id: PT-K1, type: pressure, line: [K1.top, V1.in], along: 0.3, units: psi}
+- {id: FM-V1, type: mass_flow, line: [V1.out, ATM.port], units: kg/s}
 ```
 
 Component types: `tank` (gas, saturated liquid/vapor with `fill`, optionally with a
@@ -185,6 +188,20 @@ sized by the parameter of the same name:
 During a run they can be switched from a script (`sim.set_regulator_behavior("REG", "creep", True)`,
 `sim.regulator_behaviors("REG")`) or the console (`reg REG creep on`), for example to
 fail a regulator seat partway through a test. Synnax never switches them.
+
+A sensor sits on a line: `line` names the two ports the line joins, and `along` (0 to 1, from
+the first) is where on it the sensor is drawn (left out, sensors spread along the line). A line
+has no friction or volume of its own, so every point on the lines joining a set of ports reads
+the same pressure, temperature, density, quality and purge gas: that point's. A `mass_flow`
+sensor reads the flow along its own line, positive from the first port toward the second, found
+by mass balance: what the parts beyond it take in (a line between two tees has a flow of its
+own; a line in a loop of lines has none and reads nothing, with a warning). A sensor can also
+read a tank's or volume's port with no line on it (`at: TK.top`), and one on no line keeps its
+place (`pos: [x, y]`) and reads nothing until it is put on one. `level`, `mass`,
+`valve_position` and `wall_temperature` belong to a part (`at: TK`) and are added from its
+properties. Files from before November 2026 had every sensor `at` a part's port; they load
+with each one on the line drawn there, reading the same (a flow meter on a valve goes on its
+outlet line, positive the way the valve passes fluid).
 
 Sensor types: `pressure`, `temperature`, `wall_temperature`, `mass_flow`,
 `valve_position`, `mass`, `level` (a tank's liquid fill, shown in %),

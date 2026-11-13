@@ -37,7 +37,7 @@ def test_old_pressurized_tank_files_load_as_tanks_with_a_pressurant():
     assert tk.params == {"fluid": "oxygen", "volume": "60 L", "pressure": "300 psi", "temperature": "90 K",
                          "diameter": "0.3 m", "pressurant": "nitrogen", "fill": 0.8}
     assert ("V-P.out", "TK.top") in s.connections and ("TK.bottom", "V-M.in") in s.connections
-    assert [x.at for x in s.sensors] == ["TK.top", "TK.bottom"]
+    assert [x.line for x in s.sensors] == [("V-P.out", "TK.top"), ("TK.bottom", "V-M.in")]
     assert list(s.routes) == ["V-P.out -- TK.top"]
     assert any("pressurized tanks are now tanks" in n for n in s.notes)
     sim = Simulation(s)
@@ -138,7 +138,7 @@ def test_old_side_ports_move_to_the_top_or_the_bottom():
     s = System.from_dict(yaml.safe_load(SIDE_PORTS))
     # a gas bottle and an ullage go on top; a liquid and a saturated tank at the bottom
     assert s.connections == [("K.top", "V1.in"), ("W.bottom", "V2.in"), ("N.bottom", "V3.in"), ("TK.top", "V4.in")]
-    assert [x.at for x in s.sensors] == ["K.top", "TK.top"]
+    assert [x.line for x in s.sensors] == [("K.top", "V1.in"), ("TK.top", "V4.in")]
     assert list(s.routes) == ["K.top -- V1.in"]
     assert any("only a top and a bottom port" in n and "K.port is K.top" in n for n in s.notes)
     sim = Simulation(s)

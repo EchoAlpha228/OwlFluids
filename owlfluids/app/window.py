@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import traceback
@@ -34,7 +35,7 @@ from . import prefs, symbols
 from . import theme as T
 from .panels import Palette, Properties, ValvePanel
 from .plots import FLOW_ZERO, PlotPanel
-from .schematic import Scene, View
+from .schematic import SENSOR_MIME, Scene, View
 
 RATES = [("0.25x", 0.25), ("0.5x", 0.5), ("1x real time", 1.0), ("2x", 2.0), ("5x", 5.0), ("As fast as possible", 0.0)]
 
@@ -385,7 +386,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ editing
     def _add_at_centre(self, type_name: str) -> None:
         if not self.scene.running:
-            self.scene.add_component(type_name, self.view.mapToScene(self.view.viewport().rect().center()))
+            centre = self.view.mapToScene(self.view.viewport().rect().center())
+            if type_name.startswith(SENSOR_MIME):
+                self.scene.add_sensor(type_name[len(SENSOR_MIME):], centre)
+            else:
+                self.scene.add_component(type_name, centre)
 
     def _selected(self, comp) -> None:
         if isinstance(comp, Sensor):
@@ -701,6 +706,9 @@ class MainWindow(QMainWindow):
                 continue
             s = item.sensor
             unit = s.units or units.DEFAULT_UNITS.get(s.type, "")
+            if not math.isfinite(v):  # on no line: it reads nothing
+                out[sid] = "—"
+                continue
             if s.type == "mass_flow" and abs(v) < FLOW_ZERO:
                 v = 0.0
             out[sid] = f"{units.convert(v, unit):.4g} {unit}".strip()
