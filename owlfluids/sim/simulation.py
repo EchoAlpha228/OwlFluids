@@ -67,13 +67,13 @@ class Simulation:
         self.lout = np.zeros((nl, L.N_LO))
         self.FN = np.full((nl, 4), -1, dtype=np.int64)
         self.FV = np.zeros((nl, kernel.N_FV))
-        self.NS = np.zeros((nn, 2))
+        self.NS = np.zeros((nn, 3))
         self.jvals = np.zeros(len(net.col_rows))
         self.f0 = np.zeros(n)
         self.st = (net.col_ptr, net.col_rows, net.color_ptr, net.color_cols, net.sowner, net.nl_ptr, net.nl_idx)
         self.sc = (np.zeros(n), np.zeros(n), np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64),
                    np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64), np.zeros((nn, kernel.N_W)),
-                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(2), np.zeros(1, dtype=np.int64))
+                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(3), np.zeros(1, dtype=np.int64))
         self.ab = np.zeros((n, 2 * net.kl + net.ku + 1))
         self.piv = np.zeros(n, dtype=np.int64)
         self.bvec = np.zeros(n)

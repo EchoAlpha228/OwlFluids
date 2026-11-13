@@ -12,8 +12,12 @@ NODE_TANK_LIQUID = 2  # liquid region of a pressurized tank; pressure comes from
 
 # ---- node float columns
 (NF_VOL, NF_RHOREF, NF_AREA, NF_HA, NF_WALLMC, NF_HAAMB, NF_TAMB,
- NF_BP, NF_BT, NF_BRHO, NF_BU, NF_MREF) = range(12)
-N_NF = 12
+ NF_BP, NF_BT, NF_BRHO, NF_BU, NF_MREF, NF_IFC, NF_IFB, NF_IFS) = range(15)
+N_NF = 15
+# On a tank's liquid node, the liquid surface's conductances (W/K, coefficient times
+# area): NF_IFC for condensation onto it, NF_IFB for boiling off it, NF_IFS for heat
+# between the ullage and the liquid. A tank's wall and ambient heat (NF_HA, NF_WALLMC,
+# NF_HAAMB, NF_TAMB) sit on its liquid node too, shared by wetted area with the ullage.
 
 # ---- node outputs
 (O_P, O_T, O_X, O_RHO, O_H, O_M, O_TW, O_GAS) = range(8)

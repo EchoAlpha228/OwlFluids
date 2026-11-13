@@ -71,7 +71,8 @@ def test_one_tank_type_builds_each_kind():
         return build_network(s)
 
     assert len(tank(fluid="nitrogen", pressure="1000 psi", temperature="20 C").comp_nodes["TK"]) == 1
-    assert len(tank(fluid="nitrous", fill=0.8, temperature="20 C").comp_nodes["TK"]) == 1
+    sat = tank(fluid="nitrous", fill=0.8, temperature="20 C")  # its vapor over its liquid
+    assert [sat.node_names[i] for i in sat.comp_nodes["TK"]] == ["TK.ullage", "TK.liquid"]
     two = tank(fluid="ethanol", pressurant="helium", fill=0.7, pressure="300 psi")
     assert [two.node_names[i] for i in two.comp_nodes["TK"]] == ["TK.ullage", "TK.liquid"]
     assert two.port_nodes["TK.top"] == two.port_nodes["TK.port"] == two.comp_nodes["TK"][0]

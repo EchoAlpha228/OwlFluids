@@ -47,6 +47,7 @@ from ..fluids.registry import (
     L_U0,
     MODEL_IDEAL,
     MODEL_LIQUID,
+    MODEL_TABLE,
     P_CPA,
     P_OFF,
 )
@@ -89,6 +90,9 @@ from .layout import (
     NF_BU,
     NF_HA,
     NF_HAAMB,
+    NF_IFB,
+    NF_IFC,
+    NF_IFS,
     NF_MREF,
     NF_RHOREF,
     NF_TAMB,
@@ -720,20 +724,100 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
 
 
 @inl
-def _node_source(i, x, NI, NF, W, ns):
-    """Heat flows of node i: ns[0] into the fluid, ns[1] d(Tw)/dt of its wall."""
+def _interface(liq, NI, NF, W, fl):
+    """What crosses a tank's liquid surface: (mass rate liquid to ullage, energy rate into the ullage).
+
+    The liquid boils when its vapor pressure is above the ullage's vapor pressure
+    (fast: nucleate boiling, NF_IFB) and vapor condenses onto it when below (slow: the
+    heat must conduct into a stratified liquid, NF_IFC). Either way the rate is the
+    heat the surface passes over the latent heat, with the surface's temperature
+    difference taken from the vapor pressures: dT = dp / (dpsat/dT). Mist in the
+    ullage (vapor below its dew point) rains out. Sensible heat (NF_IFS) passes
+    between ullage and liquid whatever the gases.
+    """
+    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
+    ull = NI[liq, N_PARTNER]
+    f = NI[liq, N_FLUID]
+    t_l = W[liq, W_T]
+    t_u = W[ull, W_T]
+    q_s = NF[liq, NF_IFS] * (t_u - t_l)
+    e_u = -q_s
+    m = 0.0
+    if model[f] != MODEL_TABLE or NI[ull, N_FLUID] != f or t_l >= satg[f, 2] - 0.5:
+        return 0.0, e_u
+    p_u = W[ull, W_P]
+    p_v = p_u
+    if NI[ull, N_GX] >= 0:
+        p_v = p_u * (1.0 - W[ull, W_GF])  # the vapor's own share of the ullage pressure
+    ps, rl, rv, hl, hv, mul, muv, gv, sub = saturation(f, t_l, model, par, sat, satg)
+    dpdt = (_psat(f, t_l + 0.25, model, par, sat, satg) - _psat(f, t_l - 0.25, model, par, sat, satg)) / 0.5
+    hfg = max(hv - hl, 1e3)
+    dp = ps - p_v
+    b = _smooth01(0.5 + dp / 4000.0)  # boiling above, condensing below, blended over 2 kPa
+    g = NF[liq, NF_IFC] + b * (NF[liq, NF_IFB] - NF[liq, NF_IFC])
+    m = g * dp / (max(dpdt, 1.0) * hfg)
+    if m > 0.0:
+        m *= W[liq, W_S]  # no boiling off an empty tank
+        h = hv
+    else:
+        m *= W[ull, W_S] if NI[ull, N_GX] < 0 else 1.0
+        h = W[ull, W_H]
+    e_u += m * h
+    # vapor below its dew point in the ullage rains out within about a second
+    xq = W[ull, W_X]
+    if 0.0 <= xq < 1.0 and NI[ull, N_GX] < 0:
+        rain = (1.0 - xq) * W[ull, W_RHO] * W[ull, W_V]
+        hlu = saturation(f, t_u, model, par, sat, satg)[3]
+        m -= rain
+        e_u -= rain * hlu
+    # the ullage gives way to the liquid it gains, and fills the space of what it boils off
+    e_u -= m * p_u / NF[liq, NF_RHOREF]
+    return m, e_u
+
+
+@inl
+def _node_source(i, x, NI, NF, W, ns, fl):
+    """Heat and mass sources of node i: ns[0] energy into the fluid, ns[1] d(Tw)/dt of
+    its wall, ns[2] own-fluid mass.
+
+    A tank's ullage and liquid share the tank's wall and ambient heat by wetted area,
+    and trade mass and heat across the liquid surface (``_interface``).
+    """
     ns[0] = 0.0
     ns[1] = 0.0
-    if NI[i, N_KIND] == NODE_BOUNDARY:
+    ns[2] = 0.0
+    kind = NI[i, N_KIND]
+    if kind == NODE_BOUNDARY:
         return
     t = W[i, W_T]
-    if NI[i, N_WALL]:
-        tw = x[NI[i, N_SX] + 2]
-        q_in = NF[i, NF_HA] * (tw - t)
+    pt = NI[i, N_PARTNER]
+    tank = pt >= 0
+    liq = i if kind == NODE_TANK_LIQUID else pt
+    wet = 1.0
+    if tank:
+        ull = NI[liq, N_PARTNER]
+        wet = min(max(W[liq, W_V] / NF[ull, NF_VOL], 0.0), 1.0)
+    share = wet if kind == NODE_TANK_LIQUID else 1.0 - wet
+    src = liq if tank else i
+    if NI[src, N_WALL]:
+        tw = x[NI[src, N_SX] + 2]
+        q_in = NF[src, NF_HA] * share * (tw - t) if tank else NF[i, NF_HA] * (tw - t)
         ns[0] = q_in
-        ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / NF[i, NF_WALLMC]
-    elif NF[i, NF_HA] > 0.0:
-        ns[0] = NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
+        if i == src:
+            q_wall = q_in
+            if tank:
+                q_wall += NF[src, NF_HA] * (1.0 - wet) * (tw - W[pt, W_T])
+            ns[1] = (-q_wall + NF[src, NF_HAAMB] * (NF[src, NF_TAMB] - tw)) / NF[src, NF_WALLMC]
+    elif NF[src, NF_HA] > 0.0:
+        ns[0] = NF[src, NF_HA] * (share if tank else 1.0) * (NF[src, NF_TAMB] - t)
+    if tank:
+        m, e_u = _interface(liq, NI, NF, W, fl)
+        if kind == NODE_TANK_LIQUID:
+            ns[0] -= e_u
+            ns[2] = -m
+        else:
+            ns[0] += e_u
+            ns[2] = m
 
 
 @inl
@@ -754,6 +838,7 @@ def _scatter_node(i, NI, ns, out, sign):
     if NI[i, N_KIND] == NODE_BOUNDARY:
         return
     sx = NI[i, N_SX]
+    out[sx] += sign * ns[2]
     out[sx + 1] += sign * ns[0]
     if NI[i, N_WALL]:
         out[sx + 2] += sign * ns[1]
@@ -775,7 +860,7 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
         _scatter_link(NI, FN[k], FV[k], xdot, 1.0)
     n = NI.shape[0]
     for i in range(n):
-        _node_source(i, x, NI, NF, W, NS[i])
+        _node_source(i, x, NI, NF, W, NS[i], fl)
         _scatter_node(i, NI, NS[i], xdot, 1.0)
     for i in range(n):
         nout[i, O_P] = W[i, W_P]
@@ -862,7 +947,7 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
         for d in range(nd):
             i = dl[d]
             _scatter_node(i, NI, NS[i], dfp, -1.0)
-            _node_source(i, xp, NI, NF, W, nst)
+            _node_source(i, xp, NI, NF, W, nst, fl)
             _scatter_node(i, NI, nst, dfp, 1.0)
         for q in range(color_ptr[c], color_ptr[c + 1]):
             j = color_cols[q]

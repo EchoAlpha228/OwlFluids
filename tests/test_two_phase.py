@@ -25,9 +25,9 @@ def test_closed_ln2_dewar_self_pressurizes_along_saturation():
     p_prev = sim.pressure("D")
     for _ in range(3):
         sim.run(60.0)
-        p, t = sim.pressure("D"), sim.temperature("D")
+        p, t = sim.pressure("D"), sim.temperature("D.bottom")
         assert p > p_prev
-        assert 0.0 < sim.quality("D") < 0.05
+        assert sim._level("D") == pytest.approx(0.8, abs=0.01)
         assert p == pytest.approx(CP.PropsSI("P", "T", t, "Q", 0, "Nitrogen"), rel=0.02)
         p_prev = p
     assert sim.mass("D") == pytest.approx(m0, rel=1e-9)
@@ -65,12 +65,12 @@ def test_tank_wall_keeps_a_draining_nitrous_bottle_warmer():
         s.connect("K.bottom", "V.in")
         s.connect("V.out", "A.port")
         sim = Simulation(s, step_budget=BUDGET)
-        if wall:
-            assert sim.x[sim.net.NI[0, 3] + 2] == pytest.approx(293.15)
+        if wall:  # on the liquid, which wets most of it
+            assert sim.x[sim.net.NI[sim.node("K.liquid"), 3] + 2] == pytest.approx(293.15)
         m0 = sim.mass("K")
         sim.open("V")
         sim.run(20.0)
-        t = sim.temperature("K")
+        t = sim.temperature("K.bottom")
         assert sim.pressure("K") == pytest.approx(CP.PropsSI("P", "T", t, "Q", 0, "NitrousOxide"), rel=0.02)
         out[wall] = (t, m0 - sim.mass("K"))
         assert sim.solver_stats()["forced_steps"] == 0
@@ -102,7 +102,7 @@ def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
     assert all(b < a for a, b in zip(walls, walls[1:], strict=False))  # the wall only cools
     assert walls[-1] < 130.0
     assert sim.quality("O1.in") < 0.1  # liquid (or nearly) at the outlet by the end
-    assert sim.mass_flow("O1") > 0.2
+    assert sim.mass_flow("O1") > 0.15  # the unpressed tank's warm GN2 ullage cools on the LN2 as it blows down
     assert sim.solver_stats()["forced_steps"] < 60  # violent boiling in the first seconds
 
 

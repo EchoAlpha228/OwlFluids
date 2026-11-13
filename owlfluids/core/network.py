@@ -63,6 +63,8 @@ class _Node:
     bt: float = 0.0
     primed: bool = False  # initial state copied from the volume it is open to
     gas: str | None = None  # purge gas that can mix into this node's fluid
+    sat: bool = False  # a tank liquid that starts saturated, under its own vapor
+    iface: tuple = (0.0, 0.0, 0.0)  # tank liquid surface conductances (see layout.NF_IFC)
     gas_fill: bool = False  # a mixed node that starts full of its purge gas
 
 
@@ -217,13 +219,24 @@ class NetworkBuilder:
         self.nodes[idx].bt = t
         return idx
 
-    def new_pressurized_tank(self, comp, liquid, pressurant, vol, fill, p, t_l, t_g, area, heat):
-        g = self.new_node(comp, "ullage", fluid=pressurant, volume=vol, init=("pt", p, t_g), heat=heat)
+    def new_pressurized_tank(self, comp, liquid, pressurant, vol, fill, p, t_l, t_g, area, heat, wall=None,
+                             iface=(0.0, 0.0, 0.0), saturated=False):
+        """An ullage node over a liquid node. ``saturated``: the ullage is the liquid's own
+        vapor, and the liquid starts saturated at t_l (or at the saturation temperature
+        for p); its pressure is fixed when the fluids are known (``_resolve_saturated``).
+
+        The tank's wall and ambient heat sit on the liquid node and are shared with the
+        ullage by wetted area.
+        """
+        g = self.new_node(comp, "ullage", fluid=pressurant, volume=vol,
+                          init=("satvap", t_l) if saturated else ("pt", p, t_g))
         liq = self.new_node(comp, "liquid", fluid=liquid, volume=vol * fill, init=("tank_liquid", p, t_l, fill),
-                            kind=L.NODE_TANK_LIQUID)
+                            kind=L.NODE_TANK_LIQUID, heat=heat, wall=wall)
         self.nodes[g].partner = liq
         self.nodes[liq].partner = g
         self.nodes[liq].area = area
+        self.nodes[liq].sat = saturated
+        self.nodes[liq].iface = iface
         self.bind_port(comp, "top", g, L.DRAW_MIX)
         self.bind_port(comp, "bottom", liq, L.DRAW_LIQUID)
         return g, liq
@@ -354,9 +367,14 @@ class NetworkBuilder:
                 n.volume = max(self.net_volume.get(net, 0.0), self.junction_volume)
         self._assign_fluids()
         fs = self._fluid_set()
+        self._resolve_saturated(fs)
         self._find_pressed(fs, *self._spread)
         if self.pressed:
             return self._rebuild_pressed(fs)
+        for n in self.nodes:
+            if n.sat and fs.models[fs.names.index(n.fluid)] != "table":
+                raise BuildError(f"{n.owner}: {n.fluid} is modelled with no vapor of its own, so a fill needs a gas "
+                                 "above it: set a pressurant (such as air or nitrogen) and a pressure")
         self._resolve_tank_liquids(fs)
         if self.system.setting("prime_lines"):
             self._prime_lines()
@@ -374,66 +392,45 @@ class NetworkBuilder:
         return self._compile(fs)
 
     def _rebuild_pressed(self, fs: FluidSet) -> Network:
-        """Build again with each pressed liquid tank given its gas as a pressurant.
+        """Build again with each pressed or filled single-fluid tank given an ullage.
 
-        A tank without a pressurant holds one fluid, so gas pushed into it was counted
-        as that fluid: GN2 pressing a LOX tank condensed into the liquid and raised its
-        level instead of its pressure, and even GN2 into LN2, where the gas is the
-        tank's own fluid, condensed far faster than a stratified ullage lets it. Given
-        the gas as a pressurant, it stays a separate ullage over the liquid.
-
-        A saturated tank keeps its temperature and fill, and its ullage starts at the
-        liquid's temperature just above its vapor pressure, as the vapor it replaces
-        was (a little warmer than the liquid if the gas is the liquid's own vapor). A
-        tank of liquid with no fill keeps its pressure and temperature with a 1 %
-        ullage.
+        A tank without a pressurant holds one fluid, so another fluid pushed into it
+        would be counted as that fluid. A tank of liquid (no fill) that a gas can press
+        gets the gas as its pressurant over a 1 % ullage, at its pressure and
+        temperature. An "empty" tank of air or nitrogen that a liquid can be filled
+        into becomes that liquid, none of it yet, under the gas.
         """
         sysm = copy.deepcopy(self.system)
         notes = []
         for c in sysm.components:
             if c.id not in self.pressed:
                 continue
-            gas, kind, t_liq = self.pressed[c.id]
+            other, kind, t_liq = self.pressed[c.id]
             ct = get_type(c.type)
+            own = canonical(ct.param(c, "fluid"))
             if kind == "empty":
-                # gas becomes the pressurant over no liquid yet; gas is the liquid's name here
-                own = canonical(ct.param(c, "fluid"))
                 t_g = ct.param(c, "temperature")
-                for k in ("wall_mass", "wall_material", "film_coefficient", "outer_coefficient"):
-                    c.params.pop(k, None)
-                c.params.update(fluid=gas, pressurant=own, fill=0.0, gas_temperature=t_g)
+                c.params.update(fluid=other, pressurant=own, fill=0.0, gas_temperature=t_g)
                 c.params.pop("temperature", None)
                 if t_liq is not None and not math.isnan(t_liq):
                     c.params["temperature"] = float(t_liq)
-                notes.append(f"{c.id}: {gas} can be filled into its {own}, so it is modelled as {gas} collecting "
+                notes.append(f"{c.id}: {other} can be filled into its {own}, so it is modelled as {other} collecting "
                              f"under the {own}, which it compresses unless the tank is vented")
                 continue
-            f = fs.names.index(canonical(ct.param(c, "fluid")))
-            t = ct.param(c, "temperature")
-            if kind == "saturated":
-                if t is None:
-                    t = fs.saturation_temperature(f, ct.param(c, "pressure"))
-                # just above the vapor pressure, so the liquid is not held at its boiling point
-                p = fs.saturation_pressure(f, min(t + 0.6, fs.critical_temperature(f) - 0.5))
-                fill = float(ct.param(c, "fill"))
-                start = "its fill and temperature"
-            else:
-                p = ct.param(c, "pressure")
-                fill = 0.99
-                start = "a 1 % ullage"
+            if kind == "fill":
+                c.params.update(pressurant=other, pressure=float(t_liq))
+                notes.append(f"{c.id}: {other} can be pushed into it, so its {own} is under a {other} ullage "
+                             f"(set 'pressurant: {other}' to choose its starting state)")
+                continue
+            f = fs.names.index(own)
+            t, p = ct.param(c, "temperature"), ct.param(c, "pressure")
             t_g = t
-            if gas == fs.names[f]:
-                # its own vapor, a little above boiling so it starts as gas
-                t_g = max(t, fs.saturation_temperature(f, p)) + 3.0
-            dropped = [k for k in ("wall_mass", "wall_material", "film_coefficient", "outer_coefficient")
-                       if k in c.params]
-            for k in dropped:
-                del c.params[k]
-            c.params.update(pressurant=gas, pressure=float(p), temperature=float(t), gas_temperature=float(t_g),
-                            fill=fill)
-            notes.append(f"{c.id}: {gas} can be pushed into its {fs.names[f]}, so it is modelled with a {gas} "
-                         f"ullage over the liquid, from {start} (set 'pressurant: {gas}' to choose the ullage's "
-                         "starting state)" + ("; its wall is not modelled with a pressurant" if dropped else ""))
+            if other == own:
+                t_g = max(t, fs.saturation_temperature(f, p)) + 3.0  # its own vapor, just above boiling
+            c.params.update(pressurant=other, pressure=float(p), temperature=float(t), gas_temperature=float(t_g),
+                            fill=0.99)
+            notes.append(f"{c.id}: {other} can be pushed into its {own}, so it is modelled with a {other} ullage "
+                         f"over the liquid, from a 1 % ullage (set 'pressurant: {other}' and a fill to choose)")
         b = NetworkBuilder(sysm, pressed={**self._already_pressed, **self.pressed})
         b.warnings[:0] = notes
         return b.build()
@@ -450,6 +447,25 @@ class NetworkBuilder:
             models.append(m)
         return FluidSet(used, models, backend=sysm.setting("backend"))
 
+    def _resolve_saturated(self, fs: FluidSet) -> None:
+        """Each saturated tank's starting temperature and pressure, on its saturation line."""
+        for n in self.nodes:
+            if not n.sat:
+                continue
+            _, p, t, fill = n.init
+            f = fs.names.index(n.fluid)
+            if fs.models[f] != "table":
+                continue  # no vapor of its own: it needs a gas to press it (``_find_pressed``)
+            if t is None:
+                if p is None:
+                    raise BuildError(f"{n.owner} needs temperature or pressure with its fill")
+                t = fs.saturation_temperature(f, p)
+            tc = fs.critical_temperature(f)
+            if t >= tc - 0.5:
+                raise BuildError(f"{n.owner}: {n.fluid} has no liquid above {tc:.1f} K; lower its temperature")
+            n.init = ("tank_liquid", fs.saturation_pressure(f, t), t, fill)
+            self.nodes[n.partner].init = ("satvap", t)
+
     def _resolve_tank_liquids(self, fs: FluidSet) -> None:
         """Fix each tank liquid's starting temperature, and check it is a liquid there.
 
@@ -458,7 +474,7 @@ class NetworkBuilder:
         (a cryogen just loaded and pressurized).
         """
         for n in self.nodes:
-            if not n.init or n.init[0] != "tank_liquid":
+            if not n.init or n.init[0] != "tank_liquid" or n.sat:
                 continue
             _, p, t, fill = n.init
             f = fs.names.index(n.fluid)
@@ -634,17 +650,20 @@ class NetworkBuilder:
             for i in outs:
                 into[i].append(j)
         for i, n in enumerate(self.nodes):
-            if (n.kind != L.NODE_VOLUME or not n.init or n.init[0] not in ("saturated", "pt") or n.gas
+            if (n.kind != L.NODE_VOLUME or not n.init or n.init[0] not in ("satvap", "pt") or n.gas
                     or types.get(n.owner) != "tank"):
                 continue
             if n.owner in self._already_pressed and n.partner < 0:
                 continue
             f = fs.names.index(n.fluid)
-            if n.init[0] == "saturated":
-                _, t, p, _fill = n.init
-                kind = "saturated"
-                if p is None:
-                    p = fs.saturation_pressure(f, t) if t < fs.critical_temperature(f) else math.inf
+            if n.init[0] == "satvap" and fs.models[f] != "table":
+                # a fill of water or ethanol with no gas over it: a gas that can press it becomes its pressurant
+                p = self.nodes[n.partner].init[1]
+                p = units.ATM if p is None else p
+                kind = "fill"
+            elif n.init[0] == "satvap":  # a saturated tank's vapor
+                p = fs.saturation_pressure(f, n.init[1])
+                kind = "gas"
             else:
                 p = self.p_init if n.init[1] is None else n.init[1]
                 t = self.t_init if n.init[2] is None else n.init[2]
@@ -671,7 +690,9 @@ class NetworkBuilder:
             if not gases:
                 continue
             gas = sorted(gases, key=PURGE_GASES.index)[0]
-            if kind != "gas":
+            if kind == "fill":
+                self.pressed[n.owner] = (gas, kind, p)
+            elif kind != "gas":
                 if n.partner < 0:
                     self.pressed[n.owner] = (gas, kind, None)
             elif gas != n.fluid:
@@ -702,6 +723,8 @@ class NetworkBuilder:
             if n.kind == L.NODE_BOUNDARY:
                 return ("pt", n.bp, n.bt)
             if n.init[0] == "tank_liquid":
+                if n.sat:  # saturated liquid: a line on it starts full of that liquid
+                    return ("saturated", n.init[2], None, 1.0)
                 return ("pt", n.init[1], n.init[2])
             if n.init[0] == "saturated" and draw != L.DRAW_MIX:
                 return ("saturated", n.init[1], n.init[2], 1.0 if draw == L.DRAW_LIQUID else 0.0)
@@ -788,6 +811,7 @@ class NetworkBuilder:
                 rhoref = fs.liquid_density(f, t0)
                 NF[i, L.NF_RHOREF] = rhoref
                 NF[i, L.NF_AREA] = n.area
+                NF[i, L.NF_IFC], NF[i, L.NF_IFB], NF[i, L.NF_IFS] = n.iface
                 tank_vol = self.nodes[n.partner].volume
                 NF[i, L.NF_MREF] = rhoref * 0.002 * tank_vol
                 m = rhoref * n.volume
@@ -898,6 +922,9 @@ class NetworkBuilder:
                                  "above it: set a pressurant (such as air or nitrogen) and a pressure")
             rho, u = fs.rho_u_saturated(f, t, fill)
             return rho, u, t
+        if init[0] == "satvap":
+            rho, u = fs.rho_u_saturated(f, init[1], 0.0)
+            return rho, u, init[1]
         if init[0] == "tank_liquid":
             _, p, t, _fill = init
             rho, u = fs.rho_u_from_pt(f, p, t)

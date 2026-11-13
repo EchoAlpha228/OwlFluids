@@ -148,6 +148,11 @@ def _wall(cls, comp, vol):
             True)
 
 
+# boiling off a liquid surface (W/m2K): nucleate boiling, fast enough that a vented or
+# drained tank stays close to its saturation line
+BOILING_COEFFICIENT = 5.0e5
+
+
 class Tank(ComponentType):
     type_name = "tank"
     label = "Tank"
@@ -167,15 +172,33 @@ class Tank(ComponentType):
               "as LOX pressed with GN2, takes that gas as its pressurant)"),
         Param("gas_temperature", "temperature", None,
               "initial pressurant temperature (default: system initial temperature)"),
-        Param("diameter", "length", None, "inner diameter, for liquid head at the bottom port (with a pressurant)"),
+        Param("diameter", "length", None,
+              "inner diameter, for liquid head at the bottom port and the liquid surface's area "
+              "(default: a cylinder four diameters long)"),
+        Param("condensation_coefficient", None, 100.0,
+              "heat transfer coefficient, W/m2K, at which vapor condenses onto the liquid surface. It sets how fast "
+              "an unvented fill or a press of a tank's own vapor recondenses: about 50-300 for a calm, stratified "
+              "liquid (heat conducting into it), thousands with sprays or a stirred fill; tune to test data"),
+        Param("ullage_heat_coefficient", None, 5.0,
+              "heat transfer coefficient, W/m2K, between ullage gas and the liquid surface (warm pressurant "
+              "over a cryogen cools: about 2-20)"),
     ) + WALL_PARAMS + HEAT_PARAMS
     help = ("Gas bottle, propellant tank or run tank. With a 'pressurant' it holds liquid under a separate "
             "gas at one shared pressure, and the bottom port passes ullage gas once the liquid runs out. "
-            "Without one it holds a single fluid: with 'fill' saturated liquid and vapor (LOX, LN2, nitrous) in "
-            "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; otherwise a "
+            "Without one it holds a single fluid: with 'fill' saturated liquid (LOX, LN2, nitrous) under its own "
+            "vapor, which boils off the liquid as it vents or drains and condenses back onto it, slowly, as an "
+            "unvented fill or a press squeezes it (see condensation_coefficient); otherwise a "
             "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor, 'bottom' draws "
             "liquid, 'port' draws the mixture (the ullage gas, with a pressurant). A 'wall_mass' gives a "
             "single-fluid tank a shell that feeds heat into the boiling fluid.")
+
+    @classmethod
+    def _surface(cls, comp, vol):
+        """(liquid surface area, its conductances for condensing, boiling and ullage heat)."""
+        d = cls.param(comp, "diameter") or (vol / math.pi) ** (1.0 / 3.0)
+        a = math.pi * d * d / 4.0
+        return a, (a * float(cls.param(comp, "condensation_coefficient")), a * BOILING_COEFFICIENT,
+                   a * float(cls.param(comp, "ullage_heat_coefficient")))
 
     @classmethod
     def build(cls, b, comp):
@@ -188,7 +211,19 @@ class Tank(ComponentType):
         p = cls.param(comp, "pressure")
         t = cls.param(comp, "temperature")
         if fill is not None:
-            init = ("saturated", t, p, float(fill))
+            # saturated liquid under its own vapor: two regions that trade mass and heat
+            # across the liquid surface
+            fill = float(fill)
+            if not 0.0 <= fill <= 1.0:
+                raise ValueError(f"{comp.id}.fill must be from 0 to 1")
+            d = cls.param(comp, "diameter")
+            _a, iface = cls._surface(comp, vol)
+            _g, liq = b.new_pressurized_tank(
+                comp, fluid, fluid, vol, min(fill, 0.999), p, t, None, math.pi * d * d / 4.0 if d else 0.0,
+                heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")),
+                wall=_wall(cls, comp, vol), iface=iface, saturated=True)
+            b.bind_port(comp, "port", liq, DRAW_LIQUID)  # nearly all of its mass is liquid
+            return
         else:
             if p is None or t is None:
                 raise ValueError(f"{comp.id} needs pressure and temperature (or temperature and fill)")
@@ -211,12 +246,12 @@ class Tank(ComponentType):
         p = cls.require(comp, "pressure")
         d = cls.param(comp, "diameter")
         area = math.pi * d * d / 4.0 if d else 0.0
-        if cls.param(comp, "wall_mass"):
-            b.warnings.append(f"{comp.id}: wall_mass is not modelled for a tank with a pressurant; it is ignored")
+        _a, iface = cls._surface(comp, vol)
         g, _liq = b.new_pressurized_tank(
             comp, cls.require(comp, "fluid"), cls.param(comp, "pressurant"), vol, fill, p,
             cls.param(comp, "temperature"), cls.param(comp, "gas_temperature") or b.t_init, area,
-            heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
+            heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")),
+            wall=_wall(cls, comp, vol), iface=iface)
         b.bind_port(comp, "port", g, DRAW_MIX)
 
 
