@@ -247,6 +247,9 @@ def _mixed_one(i, x, NI, NF, fl, W):
     g = NI[i, N_GAS]
     sx = NI[i, N_SX]
     vol = NF[i, NF_VOL]
+    pt = NI[i, N_PARTNER]
+    if pt >= 0:  # a tank ullage: the space the liquid leaves
+        vol = max(vol - max(x[NI[pt, N_SX]], 0.0) / NF[pt, NF_RHOREF], 1e-4 * NF[i, NF_VOL])
     # a trace driven slightly negative by Newton counts as none
     m_f = max(x[sx], 0.0)
     m_g = max(x[NI[i, N_GX]], 0.0)
