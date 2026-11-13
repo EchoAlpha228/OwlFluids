@@ -86,10 +86,10 @@ def desktop_file() -> Path:
 def desktop_options() -> dict:
     """Synnax Desktop's Core as it shares it: host, port, secure and api_key. Raises RuntimeError if it doesn't.
 
-    Synnax Desktop runs its own Core with a random root password it never saves. Versions
-    after 0.60.1 write the Core's address and an API key for scripts on the same computer
+    Synnax Desktop runs its own Core with a random root password it never saves. Desktop 1.1
+    and newer write the Core's address and an API key for scripts on the same computer
     to ``~/.synnax/desktop.json`` (Synnax docs: Connect to Synnax Desktop), which the
-    synnax client reads too. Desktop 0.60.1 and older write nothing: their Core can't be
+    synnax client reads too. Desktop 1.0.x and older write nothing: their Core can't be
     reached from outside the app.
     """
     import json
@@ -101,8 +101,8 @@ def desktop_options() -> dict:
                 "api_key": str(d["api_key"])}
     except FileNotFoundError:
         raise RuntimeError(f"Synnax Desktop hasn't shared its Core with programs on this computer (no {path}). "
-                           "Synnax Desktop 0.60.1 and older don't: update Synnax Desktop to a version with the "
-                           "Connect from code command, open it, and try again") from None
+                           "Synnax Desktop 1.0 and older don't: update to Synnax Desktop 1.1 or newer, "
+                           "open it, and try again") from None
     except (KeyError, TypeError, ValueError) as e:
         raise RuntimeError(f"can't read Synnax Desktop's connection file {path}: {e}") from None
 
@@ -500,7 +500,7 @@ class SynnaxLink:
         out = {}
         for n in names:
             try:
-                series = self.client.read_latest(n, 1)
+                series = self.client.read_latest(n, n=1)  # n is keyword-only from client 0.61
                 if len(series):
                     out[n] = float(series[-1])
             except Exception:  # no data yet, or a virtual channel

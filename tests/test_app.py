@@ -381,4 +381,4 @@ def test_synnax_setup_says_when_synnax_desktop_shares_nothing(app):
     d = SynnaxDialog(lox_feed())
     assert d.core.currentData() is False  # no desktop.json: start from an address
     d.core.setCurrentIndex(0)
-    assert "0.60.1 and older" in d.desktop_note.text()
+    assert "1.0 and older" in d.desktop_note.text()

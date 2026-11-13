@@ -407,7 +407,7 @@ def _desktop_file(port, key="syk_test_key"):
 def test_desktop_reads_its_connection_file_at_each_connect(old_core):
     from owlfluids.drivers.synnax import desktop_options
 
-    with pytest.raises(RuntimeError, match="0.60.1 and older don't"):
+    with pytest.raises(RuntimeError, match="1.0 and older don't"):
         desktop_options()
     _desktop_file(old_core)
     cfg = SynnaxConfig(desktop=True, host="ignored", port=1, secure=True)
@@ -484,3 +484,16 @@ def test_real_client_logs_in_to_synnax_desktop_with_its_api_key(desktop_core):
     _desktop_file(port, key="stale")
     with pytest.raises(RuntimeError, match="API key"):
         SynnaxLink(SynnaxConfig(desktop=True))
+
+
+def test_latest_passes_n_by_keyword():
+    """Client 0.61 made ``read_latest``'s ``n`` keyword-only; passing it by position failed silently."""
+    class Client:
+        def read_latest(self, channel, *, n=1):
+            if channel == "virtual":
+                raise RuntimeError("no data")
+            return [1.0, 2.0][-n:]
+
+    link = SynnaxLink.__new__(SynnaxLink)
+    link.client = Client()
+    assert link.latest(["a", "virtual"]) == {"a": 2.0}
