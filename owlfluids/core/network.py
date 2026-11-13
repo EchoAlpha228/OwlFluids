@@ -8,6 +8,7 @@ a band-narrowing order of the unknowns.
 
 from __future__ import annotations
 
+import copy
 import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -132,8 +133,11 @@ class Network:
 
 
 class NetworkBuilder:
-    def __init__(self, system: System):
+    def __init__(self, system: System, pressed: dict[str, str] | None = None):
         self.system = system
+        # saturated tanks that a separate gas can be pushed into: tank id -> that gas
+        self.pressed: dict[str, str] = {}
+        self._already_pressed = dict(pressed or {})
         self.nodes: list[_Node] = []
         self.links: list[_Link] = []
         self.net_of: dict[tuple[str, str], int] = {}
@@ -350,6 +354,9 @@ class NetworkBuilder:
                 n.volume = max(self.net_volume.get(net, 0.0), self.junction_volume)
         self._assign_fluids()
         fs = self._fluid_set()
+        self._find_pressed(fs, *self._spread)
+        if self.pressed:
+            return self._rebuild_pressed(fs)
         self._resolve_tank_liquids(fs)
         if self.system.setting("prime_lines"):
             self._prime_lines()
@@ -365,6 +372,42 @@ class NetworkBuilder:
                     f"{units.to_psi(p_start):.0f} psig its valves need to move: none of them will stroke until "
                     "it is charged (give it a pressure, or feed it from a compressor or regulator)")
         return self._compile(fs)
+
+    def _rebuild_pressed(self, fs: FluidSet) -> Network:
+        """Build again with each pressed saturated tank given its gas as a pressurant.
+
+        A saturated tank holds one fluid, so a different gas pushed into it would be
+        counted as that fluid: GN2 pressing a LOX tank would condense into the liquid
+        and raise its level instead of its pressure. Given the gas as a pressurant, it
+        stays a separate ullage over the liquid. The liquid keeps its temperature and
+        fill, and the ullage starts as that gas at the liquid's temperature and just
+        above its vapor pressure, as the vapor it replaces was.
+        """
+        sysm = copy.deepcopy(self.system)
+        notes = []
+        for c in sysm.components:
+            gas = self.pressed.get(c.id)
+            if gas is None:
+                continue
+            ct = get_type(c.type)
+            f = fs.names.index(canonical(ct.param(c, "fluid")))
+            t = ct.param(c, "temperature")
+            if t is None:
+                t = fs.saturation_temperature(f, ct.param(c, "pressure"))
+            # just above the vapor pressure, so the liquid is not held at its boiling point
+            p = fs.saturation_pressure(f, min(t + 0.6, fs.critical_temperature(f) - 0.5))
+            dropped = [k for k in ("wall_mass", "wall_material", "film_coefficient", "outer_coefficient")
+                       if k in c.params]
+            for k in dropped:
+                del c.params[k]
+            c.params.update(pressurant=gas, pressure=float(p), temperature=float(t),
+                            gas_temperature=float(t))
+            notes.append(f"{c.id}: {gas} can be pushed into its {fs.names[f]}, so it is modelled with a {gas} "
+                         f"ullage over the liquid (set 'pressurant: {gas}' to choose the ullage's starting state)"
+                         + ("; its wall is not modelled with a pressurant" if dropped else ""))
+        b = NetworkBuilder(sysm, pressed={**self._already_pressed, **self.pressed})
+        b.warnings[:0] = notes
+        return b.build()
 
     def _fluid_set(self) -> FluidSet:
         sysm = self.system
@@ -481,6 +524,7 @@ class NetworkBuilder:
             n.gas = gas
             # it starts holding whichever can flow there from nearer (the gas on a tie)
             n.gas_fill = fls[gas][0] <= fls[n.fluid][0]
+        self._spread = (src, fwd, flows)
         warned = set()
         for k, lk in enumerate(self.links):
             na, nb = self.nodes[lk.a], self.nodes[lk.b]
@@ -504,6 +548,43 @@ class NetworkBuilder:
                     else:
                         self.warnings.append(f"{n.owner} holds only {n.fluid}: any {what} flowing into it "
                                              f"is counted as {n.fluid}")
+
+    def _find_pressed(self, fs: FluidSet, src, fwd, flows) -> None:
+        """Saturated tanks that a different purge gas can be pushed into (see ``_rebuild_pressed``).
+
+        The gas must come from a source at a higher pressure than the tank starts at:
+        shop air purging a fill line cannot get into a nitrous bottle at 750 psi, and
+        air that could back into a LOX tank through its vent is no reason to give it an
+        ullage.
+        """
+        types = {c.id: c.type for c in self.system.components}
+
+        def source_p(j):
+            n = self.nodes[j]
+            if n.kind == L.NODE_BOUNDARY:
+                return n.bp
+            if n.init and n.init[0] == "pt":
+                return self.p_init if n.init[1] is None else n.init[1]
+            return 0.0  # a saturated source of a purge gas, such as an LN2 dewar: leave it
+
+        into = defaultdict(list)
+        for j, outs in fwd.items():
+            for i in outs:
+                into[i].append(j)
+        for i, n in enumerate(self.nodes):
+            if (n.kind != L.NODE_VOLUME or not n.init or n.init[0] != "saturated"
+                    or types.get(n.owner) != "tank" or n.owner in self._already_pressed):
+                continue
+            _, t, p, _fill = n.init
+            f = fs.names.index(n.fluid)
+            if p is None:
+                p = fs.saturation_pressure(f, t) if t < fs.critical_temperature(f) else math.inf
+            gases = set()
+            for j in into[i]:
+                came = [(src[j], j)] if j in src else [(g, s) for g, (_d, s) in flows.get(j, {}).items()]
+                gases |= {g for g, s in came if g in PURGE_GASES and g != n.fluid and source_p(s) > p + 0.5 * units.ATM}
+            if gases:
+                self.pressed[n.owner] = sorted(gases)[0]
 
     def _prime_lines(self) -> None:
         """Start lines in equilibrium with the tank or volume they are open to.

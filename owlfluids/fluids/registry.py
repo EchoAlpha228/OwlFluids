@@ -222,6 +222,13 @@ class FluidSet:
         st.update(CP.PQ_INPUTS, p, 0.0)
         return st.T()
 
+    def saturation_pressure(self, f: int, t: float) -> float:
+        import CoolProp.CoolProp as CP
+
+        st = self._backend_state(FLUIDS[self.names[f]][0])
+        st.update(CP.QT_INPUTS, 0.0, t)
+        return st.p()
+
     def liquid_density(self, f: int, t: float) -> float:
         """Reference liquid density used for the liquid region of pressurized tanks."""
         mdl = self.model[f]

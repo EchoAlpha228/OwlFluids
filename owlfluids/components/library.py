@@ -173,7 +173,9 @@ class Tank(ComponentType):
             "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; otherwise a "
             "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor, 'bottom' draws "
             "liquid, 'port' draws the mixture (the ullage gas, with a pressurant). A 'wall_mass' gives a "
-            "single-fluid tank a shell that feeds heat into the boiling fluid.")
+            "single-fluid tank a shell that feeds heat into the boiling fluid. A saturated tank that another "
+            "gas (helium, nitrogen, air) can press from a higher pressure, such as LOX pressed with GN2, "
+            "takes that gas as its pressurant, so the gas stays in the ullage and is not counted as liquid.")
 
     @classmethod
     def build(cls, b, comp):
