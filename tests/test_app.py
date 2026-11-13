@@ -34,9 +34,9 @@ def test_edit_save_and_run(app, tmp_path):
     sc.add_component("tank", QPointF(0, 0))
     sc.add_component("valve", QPointF(150, 0))
     sc.add_component("boundary", QPointF(300, 0))
-    sc.connect_ports("NT-1.port", "XV-1.in")  # the valve takes the tank's nitrogen once wired to it
+    sc.connect_ports("NT-1.top", "XV-1.in")  # the valve takes the tank's nitrogen once wired to it
     sc.connect_ports("NV-1.out", "BND-1.port")
-    sc.system.sense("PT-K1", "pressure", "NT-1.port", units="psi")
+    sc.system.sense("PT-K1", "pressure", "NT-1.top", units="psi")
     assert w.dirty
     w.path = tmp_path / "s.yaml"
     assert w.save()
@@ -249,13 +249,13 @@ def test_default_names_follow_commodity(app):
     tee = sc.add_component("tee", QPointF(0, 150))
     assert [c.id for c in sc.system.components] == ["NT-1", "XV-1", "XV-2", "XC-1", "XRV-1", "TEE-1"]
     assert sc.labels["TEE-1"][0].text() == "" and sc.labels["XRV-1"][0].text() == "XRV-1"  # plumbing goes unnamed
-    sc.connect_ports("NT-1.port", "XV-1.in")
+    sc.connect_ports("NT-1.top", "XV-1.in")
     sc.connect_ports("NV-1.out", "XV-2.in")
     assert (v1.id, v2.id) == ("NV-1", "NV-2")
     tank.params["fluid"] = "LOX"
     sc.refresh_media()
     assert (tank.id, v1.id, v2.id, cv.id, rv.id, tee.id) == ("OT-1", "OV-1", "OV-2", "XC-1", "XRV-1", "TEE-1")
-    assert ("OT-1.port", "OV-1.in") in sc.system.connections
+    assert ("OT-1.top", "OV-1.in") in sc.system.connections
     wire = next(x for x in sc.wires if "OV-1.out" in (x.a, x.b))
     s = sc.add_line_sensor(wire, "pressure")
     assert s.id == "OPT-1"

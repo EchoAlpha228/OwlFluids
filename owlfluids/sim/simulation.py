@@ -23,7 +23,7 @@ from ..core import kernel
 from ..core import layout as L
 from ..core.network import Network, build_network
 from ..fluids import props
-from ..io.system import TANK_PORTS, System
+from ..io.system import OLD_TANK_PORT, TANK_PORTS, System, tank_side_port
 from . import sensors as sensor_model
 
 MIN_BUDGET = 8.0  # smallest work per step: one Jacobian and two Newton iterations
@@ -379,6 +379,13 @@ class Simulation:
         cid, _, port = ref.rpartition(".")
         if port in TANK_PORTS and f"{cid}.{TANK_PORTS[port]}" in net.port_nodes:  # an old pressurized tank's port
             return net.port_nodes[f"{cid}.{TANK_PORTS[port]}"]
+        if port == OLD_TANK_PORT:  # an old tank side port
+            try:
+                c = self.system.component(cid)
+            except KeyError:
+                c = None
+            if c is not None and c.type == "tank":
+                return net.port_nodes[f"{cid}.{tank_side_port(c.params)}"]
         raise KeyError(f"no node {ref!r}")
 
     def link(self, ref: str) -> int:

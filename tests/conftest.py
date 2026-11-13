@@ -11,7 +11,7 @@ def gas_blowdown():
         s.add("TK", "tank", fluid="nitrogen", volume=volume, pressure=p, temperature=t)
         s.add("O1", "orifice", cda=cda)
         s.add("AMB", "boundary", fluid="nitrogen", pressure="1 bar")
-        s.connect("TK.port", "O1.in")
+        s.connect("TK.top", "O1.in")
         s.connect("O1.out", "AMB.port")
         return s
     return make

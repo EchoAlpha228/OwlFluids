@@ -29,7 +29,7 @@ def fluid_colour(fluid: str | None, gas: bool = False) -> QColor:
 
 # (width, height) and port positions relative to the centre, before rotation
 SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = {
-    "tank": ((60, 110), {"top": (0, -55), "bottom": (0, 55), "port": (30, 0)}),
+    "tank": ((60, 110), {"top": (0, -55), "bottom": (0, 55)}),
     "boundary": ((44, 40), {"port": (-22, 0)}),
     "volume": ((50, 50), {"a": (-25, 0), "b": (25, 0), "c": (0, -25), "d": (0, 25)}),
     "tee": ((20, 20), {"a": (-10, 0), "b": (10, 0), "c": (0, -10), "d": (0, 10)}),

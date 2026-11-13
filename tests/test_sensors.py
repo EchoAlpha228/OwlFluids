@@ -80,9 +80,9 @@ def test_level_sensors():
 
 def test_sensor_noise_settings_round_trip():
     s = System.from_dict({"name": "x", "components": [], "sensors": [
-        {"id": "A", "type": "pressure", "at": "K.port"},
-        {"id": "B", "type": "pressure", "at": "K.port", "noise": "off"},
-        {"id": "C", "type": "temperature", "at": "K.port", "lag": 0.1, "noise": 0.5}]})
+        {"id": "A", "type": "pressure", "at": "K.top"},
+        {"id": "B", "type": "pressure", "at": "K.top", "noise": "off"},
+        {"id": "C", "type": "temperature", "at": "K.top", "lag": 0.1, "noise": 0.5}]})
     a, b, c = s.sensors
     assert (a.noise, a.lag) == (None, None) and b.noise == 0.0 and (c.lag, c.noise) == (0.1, 0.5)
     d = System.from_dict(s.to_dict())

@@ -7,7 +7,7 @@ from owlfluids.sim.simulation import Simulation
 
 def test_yaml_round_trip(tmp_path, gas_blowdown):
     s = gas_blowdown()
-    s.sense("PT-1", "pressure", "TK.port", units="psi")
+    s.sense("PT-1", "pressure", "TK.top", units="psi")
     p = tmp_path / "sys.yaml"
     s.save(p)
     s2 = System.load(p)
@@ -33,9 +33,9 @@ def test_old_pipes_fold_into_direct_connections():
         "sensors": [{"id": "PT", "type": "pressure", "at": "L2.out"}, {"id": "PT2", "type": "pressure", "at": "L1"}],
     })
     assert {c.id for c in s.components} == {"K", "V", "R", "A", "A2"}
-    assert sorted(s.connections) == sorted([("K.port", "V.in"), ("K.port", "R.in"), ("V.out", "A.port"),
+    assert sorted(s.connections) == sorted([("K.top", "V.in"), ("K.top", "R.in"), ("V.out", "A.port"),
                                             ("R.out", "A2.port")])
-    assert s.sensors[0].at == s.sensors[1].at == "K.port"
+    assert s.sensors[0].at == s.sensors[1].at == "K.top"
     sim = Simulation(s)
     assert any("L1, L2" in w for w in sim.net.warnings)
     assert sim.read("PT") == pytest.approx(10e5, rel=1e-2)
@@ -52,7 +52,7 @@ def test_old_pipe_segments_and_settings_fold_with_notes():
             {"id": "L-X", "type": "pipe"},
             {"id": "A", "type": "boundary", "fluid": "nitrogen"},
         ],
-        "connections": [["K.port", "V.in"], ["V.out", "L-F.in"], ["L-F.out", "A.port"]],
+        "connections": [["K.top", "V.in"], ["V.out", "L-F.in"], ["L-F.out", "A.port"]],
         "sensors": [{"id": "TC", "type": "temperature", "at": "L-F.s2"},
                     {"id": "PT", "type": "pressure", "at": "L-X.in"},
                     {"id": "FM", "type": "mass_flow", "at": "L-F"}],
@@ -78,8 +78,8 @@ def test_two_fluids_on_one_line_is_an_error():
     s.add("A", "tank", fluid="methane", volume="1 L", pressure="10 bar", temperature="300 K")
     s.add("B", "tank", fluid="oxygen", volume="1 L", pressure="10 bar", temperature="300 K")
     s.add("V", "valve", cv=0.1)
-    s.connect("A.port", "V.in")
-    s.connect("V.out", "B.port")
+    s.connect("A.top", "V.in")
+    s.connect("V.out", "B.top")
     with pytest.raises(BuildError, match="one fluid"):
         build_network(s)
 
@@ -113,7 +113,7 @@ def test_lines_prime_through_open_paths_only():
 def test_valve_commands_and_stroke_time(gas_blowdown):
     s = gas_blowdown()
     s.add("V", "valve", cv=0.2, open_time="100 ms")
-    s.connect("TK.port", "V.in")
+    s.connect("TK.top", "V.in")
     s.add("AMB2", "boundary", fluid="nitrogen")
     s.connect("V.out", "AMB2.port")
     sim = Simulation(s)

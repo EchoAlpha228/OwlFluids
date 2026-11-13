@@ -74,7 +74,7 @@ def test_one_tank_type_builds_each_kind():
     assert len(tank(fluid="nitrous", fill=0.8, temperature="20 C").comp_nodes["TK"]) == 1
     two = tank(fluid="ethanol", pressurant="helium", fill=0.7, pressure="300 psi")
     assert [two.node_names[i] for i in two.comp_nodes["TK"]] == ["TK.ullage", "TK.liquid"]
-    assert two.port_nodes["TK.top"] == two.port_nodes["TK.port"] == two.comp_nodes["TK"][0]
+    assert two.port_nodes["TK.top"] == two.comp_nodes["TK"][0] and "TK.port" not in two.port_nodes
     assert two.port_nodes["TK.bottom"] == two.comp_nodes["TK"][1]
     with pytest.raises(BuildError, match="fill"):
         tank(fluid="ethanol", pressurant="helium", pressure="300 psi")
@@ -102,8 +102,55 @@ def test_mass_flow_needs_something_that_passes_flow():
     s.add("T", "tee")
     s.add("O", "orifice", cda="1 mm2")
     s.add("A", "boundary", fluid="nitrogen")
-    for a, b in [("K.port", "V.in"), ("V.out", "T.a"), ("T.b", "O.in"), ("O.out", "A.port")]:
+    for a, b in [("K.top", "V.in"), ("V.out", "T.a"), ("T.b", "O.in"), ("O.out", "A.port")]:
         s.connect(a, b)
     s.sense("F", "mass_flow", "T.a")
     with pytest.raises(ValueError, match="tee"):
         Simulation(s)
+
+
+SIDE_PORTS = """
+name: old side ports
+components:
+- {id: K, type: tank, fluid: nitrogen, volume: 10 L, pressure: 1000 psi, temperature: 20 C}
+- {id: W, type: tank, fluid: water, volume: 10 L, pressure: 100 psi, temperature: 20 C}
+- {id: N, type: tank, fluid: nitrous, volume: 10 L, fill: 0.8, temperature: 20 C}
+- {id: TK, type: tank, fluid: oxygen, pressurant: nitrogen, volume: 60 L, fill: 0.8, pressure: 300 psi}
+- {id: V1, type: valve, cv: 0.1}
+- {id: V2, type: valve, cv: 0.1}
+- {id: V3, type: valve, cv: 0.1}
+- {id: V4, type: valve, cv: 0.1}
+connections:
+- [K.port, V1.in]
+- [W.port, V2.in]
+- [N.port, V3.in]
+- [TK.port, V4.in]
+- [TK.port, TK.top]
+sensors:
+- {id: PT-K, type: pressure, at: K.port}
+- {id: PT-TK, type: pressure, at: TK.port}
+routes:
+  'K.port -- V1.in': {h: true, bends: [[60, 0]]}
+"""
+
+
+def test_old_side_ports_move_to_the_top_or_the_bottom():
+    s = System.from_dict(yaml.safe_load(SIDE_PORTS))
+    # a gas bottle and an ullage go on top; a liquid and a saturated tank at the bottom
+    assert s.connections == [("K.top", "V1.in"), ("W.bottom", "V2.in"), ("N.bottom", "V3.in"), ("TK.top", "V4.in")]
+    assert [x.at for x in s.sensors] == ["K.top", "TK.top"]
+    assert list(s.routes) == ["K.top -- V1.in"]
+    assert any("only a top and a bottom port" in n and "K.port is K.top" in n for n in s.notes)
+    sim = Simulation(s)
+    assert sim.pressure("K.port") == sim.pressure("K.top")  # scripts may still read the old port
+    again = System.from_dict(s.to_dict())
+    assert not again.notes
+
+
+def test_scripts_may_still_wire_a_tank_side_port():
+    s = System("script")
+    s.add("K", "tank", fluid="nitrogen", volume="10 L", pressure="1000 psi", temperature="20 C")
+    s.add("V", "valve", cv=0.1)
+    s.connect("K.port", "V.in")
+    s.sense("PT", "pressure", "K.port")
+    assert s.connections == [("K.top", "V.in")] and s.sensors[0].at == "K.top"
