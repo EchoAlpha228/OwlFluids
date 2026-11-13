@@ -9,10 +9,10 @@ Systems are stored as YAML so they can be written by hand, diffed and kept in gi
       - {id: V-1, type: valve, cv: 0.5}
       - {id: AMB, type: boundary, fluid: nitrogen}
     connections:
-      - [TK-1.port, V-1.in]
+      - [TK-1.top, V-1.in]
       - [V-1.out, AMB.port]
     sensors:
-      - {id: PT-1, type: pressure, at: TK-1.port}
+      - {id: PT-1, type: pressure, at: TK-1.top}
 """
 
 from __future__ import annotations
@@ -42,6 +42,24 @@ THROTTLE_TYPES = ("throttle_valve", "needle_valve")
 # Pressurized tanks from before they became tanks with a pressurant, and their old port names.
 PRESSURIZED_TANK = "pressurized_tank"
 TANK_PORTS = {"gas": "top", "liquid": "bottom"}
+# Tanks had a third, side port ("port") before they had only a top and a bottom.
+OLD_TANK_PORT = "port"
+
+
+def tank_side_port(params: dict) -> str:
+    """Where an old tank's side port goes: the bottom if the tank holds liquid there, else the top.
+
+    A tank with a pressurant drew its ullage gas from the side port, so that is the top. A saturated
+    tank (with a fill) drew its bulk mixture, which is mostly liquid by mass, so that is the bottom;
+    so is a tank of a fluid that is only ever liquid. A gas bottle's two ports are alike: the top.
+    """
+    from ..fluids.registry import is_liquid_name
+
+    if params.get("pressurant"):
+        return "top"
+    if params.get("fill") is not None or is_liquid_name(params.get("fluid")):
+        return "bottom"
+    return "top"
 
 
 def _tank_params(params: dict) -> dict:
@@ -146,16 +164,29 @@ class System:
         if old in (sx.get("exclude") or []):
             sx["exclude"] = [new if x == old else x for x in sx["exclude"]]
 
-    def _tank_port(self, ref: str) -> str:
+    def _pressurized_port(self, ref: str) -> str:
         """An old pressurized tank's port (TK.gas, TK.liquid) by its tank name (TK.top, TK.bottom)."""
         cid, dot, port = ref.rpartition(".")
         return f"{cid}.{TANK_PORTS[port]}" if cid in self._old_tanks and port in TANK_PORTS else ref
 
+    def _side_port(self, ref: str) -> str:
+        """An old tank side port (TK.port) by the port it is now: TK.top or TK.bottom."""
+        cid, dot, port = ref.rpartition(".")
+        if dot and port == OLD_TANK_PORT:
+            c = next((c for c in self.components if c.id == cid), None)
+            if c is not None and c.type == "tank":
+                return f"{cid}.{tank_side_port(c.params)}"
+        return ref
+
+    def current_port(self, ref: str) -> str:
+        """An old tank port by its name now (scripts written before tanks changed)."""
+        return self._side_port(self._pressurized_port(ref))
+
     def connect(self, a: str, b: str) -> None:
-        self.connections.append((self._tank_port(a), self._tank_port(b)))
+        self.connections.append((self.current_port(a), self.current_port(b)))
 
     def sense(self, sid: str, stype: str, at: str, **kw) -> Sensor:
-        s = Sensor(sid, stype, self._tank_port(at), **kw)
+        s = Sensor(sid, stype, self.current_port(at), **kw)
         self.sensors.append(s)
         return s
 
@@ -194,7 +225,41 @@ class System:
         system._fold_pipes()
         system._throttles_to_manual()
         system._merge_pressurized_tanks()
+        system._tank_side_ports()
         return system
+
+    def _fix_refs(self, fix) -> None:
+        """Rename port references everywhere they appear: connections, sensors and hand-shaped wires."""
+        self.connections = [(fix(a), fix(b)) for a, b in self.connections]
+        for s in self.sensors:
+            s.at = fix(s.at)
+        routes = {}
+        for k, v in self.routes.items():
+            a, _, b = k.partition(" -- ")
+            routes[f"{fix(a)} -- {fix(b)}" if b else k] = v
+        self.routes = routes
+
+    def _tank_side_ports(self) -> None:
+        """Move what was on an old tank's side port to its top or bottom (see ``tank_side_port``)."""
+        moved = {}
+        tanks = {c.id: c for c in self.components if c.type == "tank"}
+        refs = [r for ab in self.connections for r in ab] + [s.at for s in self.sensors]
+        for ref in refs:
+            cid, _, port = ref.rpartition(".")
+            if port == OLD_TANK_PORT and cid in tanks:
+                moved[cid] = tank_side_port(tanks[cid].params)
+        if not moved:
+            return
+        self._fix_refs(self._side_port)
+        # a wire can now join a tank's port to itself or repeat another; keep one of each
+        kept = []
+        for a, b in self.connections:
+            if a != b and (a, b) not in kept and (b, a) not in kept:
+                kept.append((a, b))
+        self.connections = kept
+        self.notes.append("tanks have only a top and a bottom port now: "
+                          + ", ".join(f"{cid}.port is {cid}.{p}" for cid, p in sorted(moved.items()))
+                          + " (save the file to keep it that way)")
 
     def _merge_pressurized_tanks(self) -> None:
         """Turn old pressurized tanks into tanks with a pressurant: gas port on top, liquid at the bottom."""
@@ -204,15 +269,7 @@ class System:
                 self._old_tanks.add(c.id)
         if not self._old_tanks:
             return
-        fix = self._tank_port
-        self.connections = [(fix(a), fix(b)) for a, b in self.connections]
-        for s in self.sensors:
-            s.at = fix(s.at)
-        routes = {}
-        for k, v in self.routes.items():
-            a, _, b = k.partition(" -- ")
-            routes[f"{fix(a)} -- {fix(b)}" if b else k] = v
-        self.routes = routes
+        self._fix_refs(self._pressurized_port)
         self.notes.append(f"pressurized tanks are now tanks with a pressurant: {', '.join(sorted(self._old_tanks))} "
                           "(their gas port is 'top' and their liquid port 'bottom'; save the file to keep it that way)")
 

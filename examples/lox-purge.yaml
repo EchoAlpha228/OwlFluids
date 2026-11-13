@@ -13,14 +13,14 @@ components:
 - {id: V-PG, type: valve, cv: 0.2, open_time: 50 ms, at: [600, 300]}
 - {id: CK-PG, type: check_valve, cv: 0.2, at: [600, 230]}
 connections:
-- [K-N2.port, REG.in]
+- [K-N2.top, REG.in]
 - [REG.out, V-P.in]
 - [V-P.out, TK.top]
 - [TK.bottom, F1.in]
 - [F1.out, V-M.in]
 - [V-M.out, INJ.in]
 - [INJ.out, AMB.port]
-- [K-HE.port, REG-PG.in]
+- [K-HE.top, REG-PG.in]
 - [REG-PG.out, V-PG.in]
 - [V-PG.out, CK-PG.in]
 - [CK-PG.out, INJ.in]

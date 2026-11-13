@@ -67,7 +67,7 @@ def _tank_state(prm: dict) -> dict:
     pressurant = _fluid(prm.get("pressurant"))
     gas = symbols.fluid_colour(pressurant or fluid, gas=True)
     if pressurant is None and fill is None:
-        if M._liquid_name(prm.get("fluid")):
+        if M.is_liquid_name(prm.get("fluid")):
             return {"fill": 1.0, "liquid_colour": symbols.fluid_colour(fluid)}
         return {"gas_colour": gas}
     return {"fill": fill or 0.0, "liquid_colour": symbols.fluid_colour(fluid), "gas_colour": gas}
@@ -914,6 +914,7 @@ class Scene(QGraphicsScene):
         super().mouseDoubleClickEvent(e)
 
     def connect_ports(self, a: str, b: str) -> None:
+        a, b = self.system.current_port(a), self.system.current_port(b)  # old tank port names, from scripts
         if a == b or (a, b) in self.system.connections or (b, a) in self.system.connections:
             return
         self.system.connect(a, b)

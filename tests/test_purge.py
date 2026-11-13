@@ -23,7 +23,7 @@ def _rig(liquid="water", gas="nitrogen", vent=True):
     s.add("REG", "regulator", setpoint="300 psi", cv=0.5)
     s.add("PV", "valve", cv=0.3, open_time="50 ms")
     s.add("CK", "check_valve", cv=0.3)
-    for a, b in [("TK.bottom", "MV.in"), ("B.port", "REG.in"), ("REG.out", "PV.in"), ("PV.out", "CK.in"),
+    for a, b in [("TK.bottom", "MV.in"), ("B.top", "REG.in"), ("REG.out", "PV.in"), ("PV.out", "CK.in"),
                  ("CK.out", "MV.out")]:
         s.connect(a, b)
     if vent:

@@ -9,7 +9,7 @@ components:
 - {id: ATM, type: boundary, fluid: nitrogen, at: [600, 0]}
 connections:
 - [C.out, A.a]
-- [K.port, V-FILL.in]
+- [K.top, V-FILL.in]
 - [V-FILL.out, TK.a]
 - [TK.b, V-VENT.in]
 - [V-VENT.out, ATM.port]

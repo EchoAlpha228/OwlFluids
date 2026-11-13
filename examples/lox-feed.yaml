@@ -9,7 +9,7 @@ components:
 - {id: INJ, type: orifice, cda: 60 mm2, at: [600, 150]}
 - {id: AMB, type: boundary, fluid: oxygen, at: [750, 150]}
 connections:
-- [K-N2.port, REG.in]
+- [K-N2.top, REG.in]
 - [REG.out, V-P.in]
 - [V-P.out, TK.top]
 - [TK.bottom, F1.in]

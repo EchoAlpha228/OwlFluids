@@ -14,7 +14,7 @@ components:
 - {id: INJ, type: orifice, cda: 25 mm2, at: [600, 160]}
 - {id: ATM, type: boundary, fluid: nitrogen, at: [750, 160]}
 connections:
-- [K-N2.port, REG.in]
+- [K-N2.top, REG.in]
 - [REG.out, V-P.in]
 - [V-P.out, TK.top]
 - [TK.top, V-V.in]

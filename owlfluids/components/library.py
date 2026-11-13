@@ -152,7 +152,7 @@ class Tank(ComponentType):
     type_name = "tank"
     label = "Tank"
     category = "Volumes"
-    ports = ("top", "bottom", "port")
+    ports = ("top", "bottom")
     params = (
         Param("fluid", "text", None, "fluid in the tank (the liquid, if it has a pressurant)"),
         Param("volume", "volume", None, "internal volume"),
@@ -171,8 +171,8 @@ class Tank(ComponentType):
             "gas at one shared pressure, and the bottom port passes ullage gas once the liquid runs out. "
             "Without one it holds a single fluid: with 'fill' saturated liquid and vapor (LOX, LN2, nitrous) in "
             "equilibrium, so its pressure follows its temperature as it fills, vents or boils off; otherwise a "
-            "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor, 'bottom' draws "
-            "liquid, 'port' draws the mixture (the ullage gas, with a pressurant). A 'wall_mass' gives a "
+            "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor (the ullage gas, "
+            "with a pressurant), 'bottom' draws liquid while there is any. A 'wall_mass' gives a "
             "single-fluid tank a shell that feeds heat into the boiling fluid.")
 
     @classmethod
@@ -196,7 +196,6 @@ class Tank(ComponentType):
                        heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")), wall=wall)
         b.bind_port(comp, "top", n, DRAW_VAPOR)
         b.bind_port(comp, "bottom", n, DRAW_LIQUID)
-        b.bind_port(comp, "port", n, DRAW_MIX)
 
     @classmethod
     def _build_pressurized(cls, b, comp):
@@ -215,7 +214,6 @@ class Tank(ComponentType):
             comp, cls.require(comp, "fluid"), cls.param(comp, "pressurant"), vol, fill, p,
             cls.param(comp, "temperature"), cls.param(comp, "gas_temperature") or b.t_init, area,
             heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")))
-        b.bind_port(comp, "port", g, DRAW_MIX)
 
 
 class Boundary(ComponentType):

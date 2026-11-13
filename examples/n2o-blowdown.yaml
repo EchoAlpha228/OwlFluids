@@ -9,8 +9,8 @@ connections:
 - [V.out, INJ.in]
 - [INJ.out, ATM.port]
 sensors:
-- {id: PT-K, type: pressure, at: K.port, units: psi}
-- {id: TC-K, type: temperature, at: K.port, units: F}
+- {id: PT-K, type: pressure, at: K.bottom, units: psi}
+- {id: TC-K, type: temperature, at: K.bottom, units: F}
 - {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
 - {id: FM-N2O, type: mass_flow, at: INJ, units: kg/s}
 - {id: M-N2O, type: mass, at: K, units: kg}

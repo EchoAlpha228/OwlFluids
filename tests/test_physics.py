@@ -35,8 +35,8 @@ def test_closed_system_equalizes_and_conserves_mass_and_energy():
     s.add("A", "tank", fluid="nitrogen", volume="10 L", pressure="100 bar", temperature="300 K")
     s.add("B", "tank", fluid="nitrogen", volume="20 L", pressure="1 bar", temperature="300 K")
     s.add("V", "valve", cv=0.3, open_time="20 ms")
-    s.connect("A.port", "V.in")
-    s.connect("V.out", "B.port")
+    s.connect("A.top", "V.in")
+    s.connect("V.out", "B.top")
     sim = Simulation(s)
     nodes = [i for i in range(sim.net.NI.shape[0]) if sim.net.NI[i, 0] != 1]
     sx = sim.net.NI[nodes, 3]

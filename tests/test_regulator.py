@@ -15,12 +15,12 @@ def regulated(tank="50 L", **reg):
     s.add("VOL", "volume", volume="1 L")
     s.add("MV", "manual_valve", cv=0.3, open_time="0.1 s")
     s.add("AMB", "boundary", fluid="nitrogen", pressure="1 bar")
-    s.connect("TK.port", "REG.in")
+    s.connect("TK.top", "REG.in")
     s.connect("REG.out", "VOL.a")
     s.connect("VOL.b", "MV.in")
     s.connect("MV.out", "AMB.port")
     s.sense("PT-OUT", "pressure", "VOL.a", noise=0.0, lag=0.0)
-    s.sense("PT-IN", "pressure", "TK.port", noise=0.0, lag=0.0)
+    s.sense("PT-IN", "pressure", "TK.top", noise=0.0, lag=0.0)
     return s
 
 
@@ -125,7 +125,7 @@ def test_switches_read_from_yaml_and_text():
         {"id": "REG", "type": "regulator", "cv": 0.1, "setpoint": "200 psig", "droop_on": False,
          "lockup_on": True, "creep_on": "yes", "supply_effect_on": "off"},
         {"id": "VOL", "type": "volume", "volume": "1 L"},
-    ], "connections": [["TK.port", "REG.in"], ["REG.out", "VOL.a"]]})
+    ], "connections": [["TK.top", "REG.in"], ["REG.out", "VOL.a"]]})
     sim = Simulation(s)
     assert sim.regulator_behaviors("REG") == {"droop": False, "lockup": True, "creep": True,
                                               "supply_effect": False}

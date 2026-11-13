@@ -130,15 +130,16 @@ components:
 - {id: V1, type: valve, cv: 0.3, open_time: 50 ms}
 - {id: ATM, type: boundary, fluid: nitrogen}
 connections:
-- [K1.port, V1.in]
+- [K1.top, V1.in]
 - [V1.out, ATM.port]
 sensors:
-- {id: PT-K1, type: pressure, at: K1.port, units: psi}
+- {id: PT-K1, type: pressure, at: K1.top, units: psi}
 ```
 
 Component types: `tank` (gas, saturated liquid/vapor with `fill`, optionally with a
 `wall_mass` shell that stores heat, or liquid under a separate gas with `pressurant` and
-`fill`; ports `top` (gas), `bottom` (liquid) and `port`; old `pressurized_tank` parts load
+`fill`; ports `top` (gas) and `bottom` (liquid); a tank's old side `port` loads on the bottom
+if the tank holds liquid and on the top otherwise, and old `pressurized_tank` parts load
 as one, their `gas` and `liquid` ports becoming `top` and `bottom`), `boundary`, `volume`
 (also takes `wall_mass`, for example to chill down a cryogenic line), `tee`, `fitting`,
 `orifice`, `valve`, `manual_valve` (a hand valve the operator opens, closes or throttles from the
