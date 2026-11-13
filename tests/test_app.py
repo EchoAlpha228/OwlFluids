@@ -340,3 +340,45 @@ def test_synnax_test_connection_reports_in_the_dialog(app):
         while not d.test_button.isEnabled() and time.time() < deadline:
             pump(app, 0.05)
         assert expect in d.test_status.text()
+
+
+@pytest.mark.gui
+def test_synnax_setup_starts_from_synnax_desktop_when_it_shares_its_core(app):
+    import json
+    import socket
+
+    from owlfluids.app import prefs
+    from owlfluids.app.synnax_setup import SynnaxDialog
+    from owlfluids.drivers.synnax import desktop_file
+    from owlfluids.examples import lox_feed
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    desktop_file().write_text(json.dumps({"host": "127.0.0.1", "port": port, "secure": False, "api_key": "k"}))
+    try:
+        d = SynnaxDialog(lox_feed())
+        assert d.core.currentData() is True and not d.password.isVisibleTo(d) and not d.host.isVisibleTo(d)
+        assert f"127.0.0.1:{port}" in d.desktop_note.text() and "API key" in d.desktop_note.text()
+        d._ok()
+        assert d.result_config.desktop and prefs.synnax_connection()["desktop"] is True
+        d = SynnaxDialog(lox_feed())
+        d.core.setCurrentIndex(1)  # a Core at an address
+        assert d.host.isVisibleTo(d) and d.password.isVisibleTo(d) and d.desktop_note.isHidden()
+        d._ok()
+        assert prefs.synnax_connection()["desktop"] is False
+        assert SynnaxDialog(lox_feed()).core.currentData() is False  # the choice is remembered
+    finally:
+        listener.close()
+
+
+@pytest.mark.gui
+def test_synnax_setup_says_when_synnax_desktop_shares_nothing(app):
+    from owlfluids.app.synnax_setup import SynnaxDialog
+    from owlfluids.examples import lox_feed
+
+    d = SynnaxDialog(lox_feed())
+    assert d.core.currentData() is False  # no desktop.json: start from an address
+    d.core.setCurrentIndex(0)
+    assert "1.0 and older" in d.desktop_note.text()
