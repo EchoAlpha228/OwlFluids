@@ -217,3 +217,36 @@ def test_a_purge_clears_the_line_and_leaves_the_tank_alone(liquid, gas, t):
     sim.run(3.0)
     assert sim.read("PF") > 0.9
     assert sim.mass("TK.bottom") == m_liq
+
+
+def test_filling_an_unvented_air_tank_compresses_the_air_adiabatically():
+    """Liquid filled into a closed tank of air squeezes the air: p V^k and T V^(k-1) hold (k = 1.4)."""
+    s = System("closed fill")
+    s.add("SUP", "boundary", fluid="ethanol", pressure="100 psi")
+    s.add("RT", "tank", fluid="air", volume="20 L", pressure="1 atm", temperature="293.15 K")
+    s.add("V", "valve", cv=0.5)
+    s.connect("SUP.port", "V.in"), s.connect("V.out", "RT.bottom")
+    sim = Simulation(s)
+    assert any("ethanol collecting under the air" in w for w in sim.net.warnings)
+    sim.open("V")
+    sim.run(90.0)
+    ratio = 100 * PSI / 101325.0
+    assert sim.pressure("RT.top") == pytest.approx(100 * PSI, rel=1e-3)
+    assert sim._level("RT") == pytest.approx(1.0 - ratio ** (-1 / 1.4), abs=0.002)  # 74.6 %, then it stops
+    assert sim.temperature("RT.top") == pytest.approx(293.15 * ratio ** (0.4 / 1.4), rel=0.005)
+
+
+def test_lox_filled_into_a_gn2_tank_collects_as_liquid():
+    s = System("lox fill")
+    s.add("SUP", "tank", fluid="oxygen", pressurant="nitrogen", volume="100 L", fill=0.8, pressure="100 psi",
+          temperature="90 K")
+    s.add("RT", "tank", fluid="nitrogen", volume="20 L", pressure="1 atm", temperature="293.15 K")
+    s.add("V", "valve", cv=0.5)
+    s.connect("SUP.bottom", "V.in"), s.connect("V.out", "RT.bottom")
+    sim = Simulation(s)
+    m0 = sim.mass("SUP.bottom")
+    sim.open("V")
+    sim.run(16.0)
+    assert sim.mass("RT.bottom") == pytest.approx(m0 - sim.mass("SUP.bottom"), rel=1e-6)  # all of it is LOX
+    assert sim._level("RT") > 0.15
+    assert sim.pressure("RT.top") > 1.3 * 101325.0  # with no vent, the GN2 above it is squeezed
