@@ -12,15 +12,20 @@ PSI = 6894.757
 BUDGET = 200
 
 
-@pytest.mark.slow
-def test_closed_ln2_dewar_self_pressurizes_along_saturation():
+def _dewar(**kw):
     s = System("dewar")
-    s.add("D", "tank", fluid="nitrogen", volume="180 L", fill=0.8, pressure="22 psi", heat_transfer=5.0)
+    s.add("D", "tank", fluid="nitrogen", volume="180 L", fill=0.8, pressure="22 psi", heat_transfer=5.0, **kw)
     s.add("V", "valve", cv=1.0)
     s.add("A", "boundary", fluid="nitrogen")
     s.connect("D.top", "V.in")
     s.connect("V.out", "A.port")
-    sim = Simulation(s, step_budget=BUDGET)
+    return Simulation(s, step_budget=BUDGET)
+
+
+@pytest.mark.slow
+def test_closed_ln2_dewar_self_pressurizes_along_saturation():
+    """With fast condensation at the surface it is the homogeneous (equilibrium) limit."""
+    sim = _dewar(condensation_coefficient=1e5)
     m0 = sim.mass("D")
     p_prev = sim.pressure("D")
     for _ in range(3):
@@ -36,6 +41,18 @@ def test_closed_ln2_dewar_self_pressurizes_along_saturation():
     sim.run(10.0)
     assert sim.pressure("D") < p_prev
     assert sim.solver_stats()["forced_steps"] == 0
+
+
+@pytest.mark.slow
+def test_a_stratified_dewar_self_pressurizes_faster_than_the_equilibrium_limit():
+    """Heat into the vapor through the dry wall only slowly condenses on a calm liquid."""
+    fast, calm = _dewar(condensation_coefficient=1e5), _dewar()
+    fast.run(120.0)
+    calm.run(120.0)
+    t = calm.temperature("D.bottom")
+    assert calm.pressure("D") > fast.pressure("D") > 22 * PSI
+    assert calm.pressure("D") > CP.PropsSI("P", "T", t, "Q", 0, "Nitrogen")
+    assert calm.solver_stats()["forced_steps"] == 0
 
 
 @pytest.mark.slow

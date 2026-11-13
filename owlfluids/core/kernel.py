@@ -753,7 +753,7 @@ def _interface(liq, NI, NF, W, fl):
     dpdt = (_psat(f, t_l + 0.25, model, par, sat, satg) - _psat(f, t_l - 0.25, model, par, sat, satg)) / 0.5
     hfg = max(hv - hl, 1e3)
     dp = ps - p_v
-    b = _smooth01(0.5 + dp / 4000.0)  # boiling above, condensing below, blended over 2 kPa
+    b = _smooth01(dp / 1000.0)  # condensing below its vapor pressure, boiling once 1 kPa above it
     g = NF[liq, NF_IFC] + b * (NF[liq, NF_IFB] - NF[liq, NF_IFC])
     m = g * dp / (max(dpdt, 1.0) * hfg)
     if m > 0.0:
