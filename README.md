@@ -28,6 +28,10 @@ or Synnax) open and close valves.
   Synnax and either takes valve commands and fakes the valve states (HOOTL) or
   takes the real hardware's valve states (HITL).
 
+**New here?** The [quick start guide](owlfluids/app/docs/quick-start.md) covers installing, a first run,
+building a system and connecting to Synnax (Synnax Desktop included). It is also in the app:
+**Help > Quick start guide** (F1).
+
 ## Install (Windows)
 
 ### Installer
@@ -63,7 +67,7 @@ publishes it as a new GitHub release, which installed copies then offer to updat
 `__version__` in `owlfluids/__init__.py` is the major.minor line: the first merge after
 it changes is released as that version, and each later merge takes the next patch
 (0.2.0, 0.2.1, ...). Bump it only to start a new line. Merges that change only Markdown
-or tests are not released.
+or tests are not released, except edits to the in-app quick start guide (`owlfluids/app/docs`).
 `packaging\build.ps1` builds the same installer locally (needs Inno Setup 6).
 
 ### From source
