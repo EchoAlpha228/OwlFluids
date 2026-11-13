@@ -1,6 +1,7 @@
 """Desktop app smoke tests (offscreen)."""
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -382,3 +383,43 @@ def test_synnax_setup_says_when_synnax_desktop_shares_nothing(app):
     assert d.core.currentData() is False  # no desktop.json: start from an address
     d.core.setCurrentIndex(0)
     assert "1.0 and older" in d.desktop_note.text()
+
+
+@pytest.mark.gui
+def test_quick_start_guide_opens_from_help(app):
+    from owlfluids.app.guide import GUIDE, GuideWindow
+
+    assert GUIDE.is_file()
+    w = MainWindow()
+    w.show_guide()
+    g = w._guide
+    assert isinstance(g, GuideWindow) and g.isVisible()
+    text = g.browser.toPlainText()
+    assert "Synnax Desktop" in text and "Test connection" in text
+    titles = [g.contents.item(i).text().strip() for i in range(g.contents.count())]
+    assert "5. Connecting to Synnax" in titles and "Synnax Desktop (easiest)" in titles
+    assert g.browser.verticalScrollBar().value() == 0  # opens at the top
+    assert g.show_section("troubleshooting") and not g.show_section("no such heading")
+    g.find_box.setText("desktop.json")
+    assert g.browser.textCursor().selectedText() == "desktop.json"
+    w.show_guide()  # F1 again raises the same window
+    assert w._guide is g
+    g.close()
+    w.dirty = False
+    w.close()
+
+
+def test_quick_start_guide_names_real_menus_and_examples():
+    """The guide names menu items, examples and settings that exist, so it can't drift silently."""
+    from owlfluids.app.guide import guide_text
+    from owlfluids.drivers.synnax import SynnaxConfig
+    from owlfluids.examples import EXAMPLES
+
+    text = guide_text()
+    for name in EXAMPLES:
+        assert f"`{name}`" in text, name
+    for field in SynnaxConfig.__dataclass_fields__:
+        assert f"`{field}`" in text, field
+    src = (Path(__file__).parents[1] / "owlfluids" / "app" / "window.py").read_text(encoding="utf-8")
+    for item in ("Synnax setup…", "Connect to Synnax…", "Check for updates…", "Update settings…", "Quick start guide"):
+        assert item in src and item in text, item

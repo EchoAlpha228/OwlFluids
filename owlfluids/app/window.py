@@ -190,11 +190,27 @@ class MainWindow(QMainWindow):
         from .updates import Updater
 
         self.updater = Updater(self)
+        self._guide = None
+        act("Quick start guide", lambda: self.show_guide(), QKeySequence.HelpContents, m_help,
+            tip="Install, first run, building a system and connecting to Synnax")
+        m_help.addSeparator()
         act("Check for updates…", lambda: self.updater.check(), menu=m_help)
         act("Update settings…", self.updater.settings, menu=m_help)
         m_help.addSeparator()
         act("About OwlFluids", self.about, menu=m_help)
         self._set_running_ui(False)
+
+    def show_guide(self, section: str = "") -> None:
+        """Help > Quick start guide: one window, kept open beside the app and raised again on F1."""
+        from .guide import GuideWindow
+
+        if self._guide is None:
+            self._guide = GuideWindow(self)
+        if section:
+            self._guide.show_section(section)
+        self._guide.show()
+        self._guide.raise_()
+        self._guide.activateWindow()
 
     def about(self) -> None:
         from .. import __version__

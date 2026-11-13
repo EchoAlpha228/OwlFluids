@@ -24,6 +24,8 @@ for pkg in ("CoolProp", "pyqtgraph", "synnax"):
 
 # the desktop app's bundled fonts (Lato, Roboto Mono, Barlow Semi Condensed; all OFL)
 datas.append((str(ROOT / "owlfluids" / "app" / "fonts"), "owlfluids/app/fonts"))
+# Help > Quick start guide reads its Markdown at run time
+datas.append((str(ROOT / "owlfluids" / "app" / "docs"), "owlfluids/app/docs"))
 
 bundled = ROOT / "owlfluids" / "fluids" / "bundled"
 if any(bundled.glob("*.npz")):

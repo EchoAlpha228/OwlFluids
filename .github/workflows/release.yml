@@ -3,7 +3,8 @@ name: Release
 # Every merge to main publishes an installer. __version__ in owlfluids/__init__.py is the
 # major.minor line: the first merge after a bump releases it as is (v0.2.0), each later
 # merge takes the next patch (v0.2.1, v0.2.2, ...; packaging/release_version.py). Bump
-# __version__ only to start a new line. Changes to Markdown or tests alone don't release.
+# __version__ only to start a new line. Changes to Markdown or tests alone don't release,
+# except the in-app quick start guide (owlfluids/app/docs), which ships in the installer.
 # The installed app finds the new GitHub release and offers to update.
 #
 # Also published: Actions > Release > Run workflow with "publish" ticked, a pushed tag
@@ -16,7 +17,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-    paths-ignore: ["**.md", "tests/**"]
+    paths: ["**", "!**.md", "!tests/**", "owlfluids/app/docs/**"]  # later patterns win
   pull_request:  # check that installer changes still build; nothing is published
     paths: ["packaging/**", ".github/workflows/release.yml", "owlfluids/update.py"]
   workflow_dispatch:

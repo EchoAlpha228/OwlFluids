@@ -38,7 +38,7 @@ version = { attr = "owlfluids.__version__" }
 include = ["owlfluids*"]
 
 [tool.setuptools.package-data]
-"owlfluids.app" = ["fonts/*"]
+"owlfluids.app" = ["fonts/*", "docs/*.md"]
 
 [tool.ruff]
 line-length = 120
