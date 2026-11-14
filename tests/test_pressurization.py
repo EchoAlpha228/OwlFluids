@@ -73,11 +73,10 @@ def _lox_press(**tank):
     return s
 
 
-@pytest.mark.parametrize("tank", [{}, {"pressurant": "nitrogen", "pressure": "15.5 psi",
-                                       "gas_temperature": "90 K"}],
-                         ids=["saturated LOX tank", "LOX under a nitrogen pressurant"])
-def test_pressing_lox_with_gn2_keeps_the_liquid_and_matches_adiabatic_ullage_compression(tank):
-    sim = Simulation(_lox_press(**tank))
+def test_pressing_lox_with_gn2_matches_adiabatic_ullage_compression():
+    """With no heat or condensation at the liquid surface, the textbook adiabatic limit."""
+    sim = Simulation(_lox_press(pressurant="nitrogen", pressure="15.5 psi", gas_temperature="90 K",
+                                ullage_heat_coefficient=0, condensation_coefficient=0))
     nodes = sim.net.comp_nodes["TK"]
     assert [sim.net.node_names[i] for i in nodes] == ["TK.ullage", "TK.liquid"]
     p1, t1 = sim.pressure("TK.top"), sim.temperature("TK.top")
@@ -103,22 +102,32 @@ def test_pressing_lox_with_gn2_keeps_the_liquid_and_matches_adiabatic_ullage_com
     assert sim.pressure("TK.top") > 250 * PSI
 
 
-def test_a_saturated_tank_gets_an_ullage_only_from_a_gas_that_can_press_it():
+def test_pressing_a_saturated_lox_tank_takes_more_gn2_than_the_adiabatic_limit():
+    """The LOX cools the GN2 and takes up some of its own vapor: the ullage "collapses"."""
+    sim = Simulation(_lox_press())
+    assert any("TK: nitrogen can be pushed into its oxygen, so its ullage holds a mix" in w for w in sim.net.warnings)
+    p1 = sim.pressure("TK.top")
+    m_liq, level, vapor = sim.mass("TK.bottom"), sim._level("TK"), sim.mass("TK.top")
+    sim.open("V")
+    sim.run(30.0)
+    assert sim.pressure("TK.top") == pytest.approx(300 * PSI, rel=2e-3)
+    assert m_liq <= sim.mass("TK.bottom") <= m_liq + vapor  # only its own vapor condenses
+    assert sim._level("TK") == pytest.approx(level, abs=0.002)
+    gn2 = sim.mass("TK.top") - (vapor - (sim.mass("TK.bottom") - m_liq))
+    # the adiabatic minimum: rigid-tank charging from the vapor's own state, as ideal gases
+    ideal = 0.030 * (300 * PSI - p1) / (1.4 * 296.8 * 293.15)
+    assert 1.0 < gn2 / ideal < 1.6
+
+
+def test_a_saturated_tank_mixes_in_only_a_gas_that_can_press_it():
     s = _lox_press()
     net = build_network(s)
-    assert len(net.comp_nodes["TK"]) == 2
-    assert any("TK: nitrogen can be pushed into its oxygen" in w for w in net.warnings)
-    # an air vent at 1 atm is not a press: the tank stays saturated, so it still boils off
+    assert len(net.comp_nodes["TK"]) == 2 and net.NI[net.comp_nodes["TK"][0], 5] >= 0
+    # an air vent at 1 atm is not a press: no air in its ullage
     v = System("vented")
     v.add("TK", "tank", fluid="oxygen", volume="60 L", fill=0.5, temperature="90 K")
     v.add("V", "valve", cv=0.2, normally="open")
     v.add("ATM", "boundary", fluid="air")
     v.connect("TK.top", "V.in"), v.connect("V.out", "ATM.port")
-    assert len(build_network(v).comp_nodes["TK"]) == 1
-    # GN2 into an LN2 tank is a press too: one well-mixed node would condense it all
-    n = System("ln2")
-    n.add("TK", "tank", fluid="nitrogen", volume="60 L", fill=0.5, temperature="77 K")
-    n.add("V", "valve", cv=0.2)
-    n.add("GN2", "boundary", fluid="nitrogen", pressure="100 psi")
-    n.connect("GN2.port", "V.in"), n.connect("V.out", "TK.top")
-    assert len(build_network(n).comp_nodes["TK"]) == 2
+    net = build_network(v)
+    assert net.NI[net.comp_nodes["TK"][0], 5] < 0
