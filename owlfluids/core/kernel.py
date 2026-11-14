@@ -921,12 +921,13 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
     colour costs a small fraction of a full right-hand side.
     """
     col_ptr, col_rows, color_ptr, color_cols, sowner, nl_ptr, nl_idx = st
-    xp, dfp, stn, stl, dl, ll, wsave, fnt, fvt, nst, gen = sc
+    xp, dfp, stn, stl, dl, ll, wsave, fnt, fvt, nst, gen, cscale = sc
     n = x.shape[0]
     nw = W.shape[1]
     for j in range(n):
         xp[j] = x[j]
         dfp[j] = 0.0
+        cscale[j] = xscale[j]
     ncol = color_ptr.shape[0] - 1
     for c in range(ncol):
         gen[0] += 1
@@ -976,6 +977,20 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
                 i = col_rows[idx]
                 jvals[idx] = dfp[i] / h
             xp[j] = x[j]
+            # convergence scale: the change of this state that would move its node's
+            # pressure by that whole pressure (at least P_TOL_FLOOR), so Newton's
+            # tolerances are shares of pressure. A gas's mass scale stays about its own
+            # mass, but a liquid is so stiff that a part in 1e4 of its mass is tens of psi
+            o = sowner[j]
+            for d in range(nd):
+                if dl[d] == o:
+                    dp = abs(W[o, W_P] - wsave[d, W_P])
+                    p_ref = max(abs(wsave[d, W_P]), P_TOL_FLOOR)
+                    if dp > 0.0 and math.isfinite(dp):
+                        s_p = p_ref * abs(h) / dp
+                        if s_p < cscale[j]:
+                            cscale[j] = max(s_p, 1e-12 * xscale[j])
+                    break
         # undo: scratch rows and the derivative entries (all inside these columns' rows)
         for d in range(nd):
             i = dl[d]
@@ -1003,6 +1018,10 @@ def _liquid_margin(f, rho, u, model, grid, lgrid, rhol):
     r_l = (1 - c) * rhol[f, k0] + c * rhol[f, k0 + 1]
     return rho / r_l - 1.0
 
+
+# Pa; Newton's tolerances are shares of a node's pressure, or of this when it is lower
+# (NEWTON_TOL is then 100 Pa). Tighter makes the stiff interpolated liquid tables stall
+P_TOL_FLOOR = 1e6
 
 TRACE = 1e-3  # a mixed node's fluid or gas below this share of its scale is a trace: never chopped for
 
@@ -1168,6 +1187,17 @@ DAMP_MIN = 0.125  # smallest damping of a Newton update that keeps overshooting
 DAMP_EXTRA = 6  # extra iterations a damped solve may take
 
 
+@inl
+def _slow(raw, err_prev):
+    """Chord iterations converge too slowly to be worth more than a new Jacobian."""
+    if raw <= 0.25 * err_prev:
+        return False
+    if raw >= err_prev:
+        return True
+    # iterations still needed at this rate; a Jacobian costs about JAC_COST of them
+    return math.log(NEWTON_TOL / raw) / math.log(raw / err_prev) > 2.0
+
+
 @jit
 def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl):
@@ -1182,6 +1212,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     """
     n = x.shape[0]
     nn = NI.shape[0]
+    cscale = sc[11]
     if ctl[4] > 0.0:
         ctl[8] += JAC_COST + 1.0
         rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
@@ -1216,7 +1247,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         # the size of the full update measures how Newton converges, before any chop
         raw = 0.0
         for i in range(n):
-            e = abs(bvec[iperm[i]]) / xscale[i]
+            e = abs(bvec[iperm[i]]) / cscale[i]
             if e > raw:
                 raw = e
         chopped = _chop(xk, bvec, iperm, NI, NF, fl, xscale, W)
@@ -1229,6 +1260,12 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                 limit = NEWTON_MAX + DAMP_EXTRA
             elif raw < 0.5 * err_prev:
                 damp = min(2.0 * damp, 1.0)
+        elif it >= 1 and raw >= NEWTON_TOL and raw > 0.9 * err_prev and damp == 1.0:
+            # close, but not shrinking: a stiff liquid node on a square-root flow law
+            # flips between two iterates either side of where it settles (each full
+            # update about minus the last). Half of one lands between them
+            damp = 0.5
+            limit = NEWTON_MAX + DAMP_EXTRA
         elif it >= 1:
             damp = 1.0  # close enough: full steps converge from here
         if damp < 1.0:
@@ -1238,7 +1275,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         for i in range(n):
             d = bvec[iperm[i]]
             xk[i] += d
-            e = abs(d) / xscale[i]
+            e = abs(d) / cscale[i]
             if e > err:
                 err = e
                 ctl[7] = i
@@ -1251,7 +1288,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             ctl[6] += 1.0
             converged = True
             break
-        if it + 1 < limit and ((it == 0 and raw > NEWTON_REJAC) or (it >= 1 and raw > 0.25 * err_prev)):
+        if it + 1 < limit and ((it == 0 and raw > NEWTON_REJAC) or (it >= 1 and _slow(raw, err_prev))):
             # a huge first update, or slow convergence: re-linearize at the current iterate
             ctl[8] += JAC_COST + 1.0
             rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
