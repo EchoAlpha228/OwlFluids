@@ -19,6 +19,7 @@ from ..core.layout import (
     DRAW_LIQUID,
     DRAW_MIX,
     DRAW_VAPOR,
+    NODE_BOUNDARY,
 )
 from ..io.system import PIPE_TYPES
 
@@ -454,10 +455,19 @@ class ReliefValve(ComponentType):
         Param("set_pressure", "pressure", None, "inlet-minus-outlet pressure where it starts to open"),
         Param("overpressure", "pressure", "10 psi", "extra pressure to open fully"),
     )
-    help = "Opens when the inlet exceeds the outlet by the set pressure."
+    help = ("Opens when the inlet exceeds the outlet by the set pressure. With nothing connected to its "
+            "outlet it vents to the atmosphere.")
 
     @classmethod
     def build(cls, b, comp):
+        if b.port_open(comp, "out"):
+            b.vent_port(comp, "out")
+        if b.port_open(comp, "in"):
+            b.warnings.append(f"{comp.id}: nothing is connected to its inlet, so it never relieves anything")
+        up = b.net_node.get(b.net_of[(comp.id, "in")])
+        if up is not None and b.nodes[up].kind == NODE_BOUNDARY and b.nodes[up].bp <= 1.5 * units.ATM:
+            b.warnings.append(f"{comp.id}: its inlet is on the vent {b.nodes[up].owner}, and it only relieves from "
+                              "inlet to outlet; swap its ends so the inlet faces what it protects")
         b.add_orifice(comp, "", "in", "out", cda=_flow_area(cls, comp), ctrl=CTRL_RELIEF,
                       p1=cls.require(comp, "set_pressure"), p2=max(cls.param(comp, "overpressure"), 100.0))
 

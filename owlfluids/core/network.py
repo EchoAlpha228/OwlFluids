@@ -157,6 +157,7 @@ class NetworkBuilder:
         self.assumed_pneumatic: dict[str, list[str]] = defaultdict(list)  # supply -> valves not set either way
         self.air_stroke: dict[int, float] = {}  # supply node -> lowest gauge pressure that moves one of its valves
         self.warnings: list[str] = list(system.notes)
+        self.vented: set[tuple[str, str]] = set()  # unconnected ports that vent to the atmosphere
         self.p_init = units.parse(system.setting("initial_pressure"), "pressure")
         self.t_init = units.parse(system.setting("initial_temperature"), "temperature")
         self.junction_volume = units.parse(system.setting("junction_volume"), "volume")
@@ -242,6 +243,21 @@ class NetworkBuilder:
         self.net_node[net] = node
         self.net_draw[net] = draw
 
+    def port_open(self, comp, port) -> bool:
+        """Whether nothing is connected to this port."""
+        net = self.net_of[(comp.id, port)]
+        return sum(1 for n in self.net_of.values() if n == net) == 1
+
+    def vent_port(self, comp, port) -> None:
+        """Let an unconnected port vent to the atmosphere (the fluid it vents is whatever reaches it)."""
+        net = self.net_of[(comp.id, port)]
+        n = _Node(f"{comp.id}.{port}.atm", L.NODE_BOUNDARY, None, 0.0, None, f"{comp.id}.{port}")
+        n.bp, n.bt = units.ATM, 293.15
+        self.nodes.append(n)
+        self.net_node[net] = len(self.nodes) - 1
+        self.net_draw[net] = L.DRAW_MIX
+        self.vented.add((comp.id, port))
+
     def port_node(self, comp, port) -> int:
         net = self.net_of[(comp.id, port)]
         if net not in self.net_node:
@@ -270,6 +286,9 @@ class NetworkBuilder:
 
     def add_orifice(self, comp, suffix, port_a, port_b, cda, ctrl=L.CTRL_FIXED, p1=0.0, p2=1.0, valve=None,
                     port_volume=None, reg=(0.0, 0.0, 0.0, 0.0)):
+        for port in (port_a, port_b):
+            if self.port_open(comp, port) and (comp.id, port) not in self.vented:
+                self.warnings.append(f"{comp.id}.{port} is not connected to anything, so it is capped")
         a = self.port_node(comp, port_a)
         b = self.port_node(comp, port_b)
         # Valves, fittings and orifices have internal cavities on each side of the
