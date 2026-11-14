@@ -138,6 +138,7 @@ class Simulation:
         self.LF = net.LF.copy()  # regulator setpoints change during a run
         self.NF = net.NF.copy()
         self.t = 0.0
+        self._t_goal = 0.0
         self.steps = 0
         self.ctl = np.zeros(12)
         self.ctl[1] = -1.0
@@ -169,8 +170,15 @@ class Simulation:
         self._advance(n)
 
     def run(self, duration: float, chunk: float = 0.01) -> None:
-        """Advance simulated time by ``duration`` seconds."""
-        steps = int(round(units.parse(duration, "time") / self.dt))
+        """Advance simulated time by ``duration`` seconds.
+
+        Time moves in whole steps of dt. What a duration leaves over carries to the next
+        call, so many runs shorter than a step still add up (a loop of run(dt / 4) takes
+        a step every fourth call rather than never moving).
+        """
+        goal = max(self._t_goal, self.t) + units.parse(duration, "time")
+        steps = int(math.floor((goal - self.t) / self.dt + 1e-6))
+        self._t_goal = goal
         per = max(1, int(round(chunk / self.dt)))
         while steps > 0:
             k = min(per, steps)

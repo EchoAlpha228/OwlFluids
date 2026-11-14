@@ -245,7 +245,8 @@ def test_filling_an_unvented_air_tank_compresses_the_air_adiabatically():
     sim.open("V")
     sim.run(90.0)
     ratio = 100 * PSI / 101325.0
-    assert sim.pressure("RT.top") == pytest.approx(100 * PSI, rel=1e-3)
+    assert sim.pressure("RT.bottom") == pytest.approx(100 * PSI, rel=1e-3)  # the supply holds the bottom
+    assert sim.pressure("RT.top") < sim.pressure("RT.bottom")  # less the ethanol's head
     assert sim._level("RT") == pytest.approx(1.0 - ratio ** (-1 / 1.4), abs=0.002)  # 74.6 %, then it stops
     assert sim.temperature("RT.top") == pytest.approx(293.15 * ratio ** (0.4 / 1.4), rel=0.005)
 

@@ -224,10 +224,10 @@ class Tank(ComponentType):
             fill = float(fill)
             if not 0.0 <= fill <= 1.0:
                 raise ValueError(f"{comp.id}.fill must be from 0 to 1")
-            d = cls.param(comp, "diameter")
-            _a, iface = cls._surface(comp, vol)
+            # liquid head over the surface area, of the given diameter or the default cylinder
+            area, iface = cls._surface(comp, vol)
             _g, liq = b.new_pressurized_tank(
-                comp, fluid, fluid, vol, min(fill, 0.999), p, t, None, math.pi * d * d / 4.0 if d else 0.0,
+                comp, fluid, fluid, vol, min(fill, 0.999), p, t, None, area,
                 heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")),
                 wall=_wall(cls, comp, vol), iface=iface, saturated=True)
             return
@@ -250,9 +250,7 @@ class Tank(ComponentType):
         if not 0.0 <= fill < 1.0:
             raise ValueError(f"{comp.id}.fill must be at least 0 and below 1 with a pressurant")
         p = cls.require(comp, "pressure")
-        d = cls.param(comp, "diameter")
-        area = math.pi * d * d / 4.0 if d else 0.0
-        _a, iface = cls._surface(comp, vol)
+        area, iface = cls._surface(comp, vol)
         g, _liq = b.new_pressurized_tank(
             comp, cls.require(comp, "fluid"), cls.param(comp, "pressurant"), vol, fill, p,
             cls.param(comp, "temperature"), cls.param(comp, "gas_temperature") or b.t_init, area,

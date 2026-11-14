@@ -1078,7 +1078,8 @@ def _structure(net: Network) -> None:
     net.color_cols = np.array([j for c in colour_cols for j in c], dtype=np.int64)
 
     sym = (pat + pat.T).tocsr()
-    perm = reverse_cuthill_mckee(sym, symmetric_mode=True).astype(np.int64)
+    # (a system of boundaries and links only has no states: nothing to order)
+    perm = reverse_cuthill_mckee(sym, symmetric_mode=True).astype(np.int64) if n else np.zeros(0, np.int64)
     iperm = np.empty(n, dtype=np.int64)
     iperm[perm] = np.arange(n)
     net.iperm = iperm

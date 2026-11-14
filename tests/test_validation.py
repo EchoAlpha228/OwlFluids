@@ -176,3 +176,39 @@ def test_wall_gives_up_nist_heat_from_room_to_lox_temperature(material, cp_room,
     t = np.linspace(90.0, 293.15, 400)
     cp = np.array([mat["cp"] * _wall_cp(mat["curve"], tk) for tk in t])
     assert np.trapezoid(cp, t) == pytest.approx(dh, rel=0.01)
+
+
+def test_tank_without_a_diameter_has_liquid_head():
+    """A tank with no diameter is a cylinder four diameters long, liquid head included."""
+    import math
+
+    s = System("head")
+    s.add("TK", "tank", fluid="water", pressurant="nitrogen", volume="100 L", fill=0.5, pressure="50 psi",
+          temperature="293.15 K")
+    sim = Simulation(s)
+    d = (0.1 / math.pi) ** (1.0 / 3.0)
+    head = 998.2 * 9.80665 * 0.05 / (math.pi * d * d / 4.0)
+    assert sim.pressure("TK.bottom") - sim.pressure("TK.top") == pytest.approx(head, rel=0.01)
+
+
+def test_boundary_to_boundary_orifice_runs():
+    """An orifice straight between two boundaries has no states; it still flows (GN2 choked, 100 psia)."""
+    s = System("bb")
+    s.add("UP", "boundary", fluid="nitrogen", pressure="100 psi", temperature="300 K")
+    s.add("O", "orifice", cda="1 mm2")
+    s.add("DN", "boundary", fluid="nitrogen")
+    s.connect("UP.port", "O.in")
+    s.connect("O.out", "DN.port")
+    sim = Simulation(s)
+    sim.run(0.01)
+    assert sim.mass_flow("O") / 1e-6 == pytest.approx(_real_choked_flux("Nitrogen", 100 * PSI, 300.0), rel=0.01)
+
+
+def test_runs_shorter_than_a_step_add_up(gas_blowdown):
+    sim = Simulation(gas_blowdown())
+    for _ in range(40):
+        sim.run(sim.dt / 4)
+    assert sim.steps == 10
+    sim.run(0.0015)
+    sim.run(0.0015)
+    assert sim.steps == 13
