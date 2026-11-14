@@ -48,6 +48,8 @@ REFPROP_NAMES = {
     "NitrousOxide": "N2O",
     "Water": "WATER",
     "Ethanol": "ETHANOL",
+    "Helium": "HELIUM",
+    "Air": "AIR.PPF",
 }
 
 

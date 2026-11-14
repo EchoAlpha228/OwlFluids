@@ -46,6 +46,8 @@ def _press_and_drain(liquid, gas, **tank):
 def test_pressing_any_liquid_with_any_gas_keeps_the_gas_out_of_the_liquid(liquid, gas, tank):
     if liquid == "nitrous" and "pressure" in tank:
         pytest.skip("nitrous at 20 psi and 20 C is a gas")
+    if liquid == "nitrogen" and gas == "air" and "pressure" in tank:
+        pytest.skip("an air ullage starting at LN2's 77.5 K and 20 psi would be liquid air")
     sim, p_sup, level, m_liq, (p, level_pressed, m_liq_pressed) = _press_and_drain(liquid, gas, **tank)
     assert len(sim.net.comp_nodes["TK"]) == 2  # an ullage of the gas over the liquid
     assert p == pytest.approx(p_sup, rel=0.01)
@@ -232,6 +234,7 @@ def test_a_purge_clears_the_line_and_leaves_the_tank_alone(liquid, gas, t):
 def test_filling_an_unvented_air_tank_compresses_the_air_adiabatically():
     """Liquid filled into a closed tank of air squeezes the air: p V^k and T V^(k-1) hold (k = 1.4)."""
     s = System("closed fill")
+    s.settings["fluid_models"] = {"air": "ideal"}  # the textbook's ideal gas
     s.add("SUP", "boundary", fluid="ethanol", pressure="100 psi")
     s.add("RT", "tank", fluid="air", volume="20 L", pressure="1 atm", temperature="293.15 K",
           ullage_heat_coefficient=0)  # the textbook's adiabatic limit

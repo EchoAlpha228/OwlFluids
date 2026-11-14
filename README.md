@@ -11,11 +11,11 @@ or Synnax) open and close valves.
   so hard transients (LOX hitting a warm line) can't stall the clock. A slower CPU
   gets more forced steps instead of falling behind; if a machine is too slow even
   for the smallest budget, the simulation says so when it starts.
-- **Real fluids.** Water, ethanol, oxygen (GOX/LOX), methane, nitrogen (GN2/LN2) and
-  nitrous oxide, from ambient to ~3,000 psi and cryogenic to room temperature.
-  Gases and cryogens use tables built once from CoolProp or REFPROP, including
-  two-phase states (saturated tanks, flashing, chilldown). Helium and air are
-  available as gases.
+- **Real fluids.** Water, ethanol, oxygen (GOX/LOX), methane, nitrogen (GN2/LN2),
+  nitrous oxide, helium and air, from ambient to ~5,000 psi and cryogenic to room
+  temperature. Gases and cryogens use tables built once from CoolProp or REFPROP,
+  including two-phase states (saturated tanks, flashing, chilldown), so a 4,500 psi
+  helium bottle holds its real mass and helium warms through a regulator.
 - **Purges and shop air.** Helium, nitrogen or air can purge a propellant or
   water line: the gas pushes the liquid out, and a `purge_fraction` sensor shows
   how clear the line is. After a purge the line fills again normally. Air pumps
