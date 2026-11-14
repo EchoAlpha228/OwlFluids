@@ -225,7 +225,8 @@ and in the app a line is the wire between two ports. Each line is a length of tu
 pressure difference between its ends accelerates, so a fast valve close gives water
 hammer (the Joukowsky surge, rho·c·v) and a long feed line takes time to get flowing. An
 `auto` diameter is the largest bore of the parts at either end (at least 1/4 in tubing's
-4.6 mm). Set them on a connection as a third item:
+4.6 mm). In the app, click a line to set its own in **Properties**, and change the
+defaults for every line in **Edit > Settings…**. In a file they are a connection's third item:
 
 ```yaml
 connections:

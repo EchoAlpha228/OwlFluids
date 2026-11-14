@@ -308,6 +308,57 @@ class Properties(QScrollArea):
             rm.clicked.connect(remove)
             self._layout.addWidget(rm)
 
+    def show_line(self, a: str, b: str, system, read_only: bool = False) -> None:
+        """A line: the tubing between two ports, its length and inner diameter."""
+        self._clear()
+        self.comp, self.system = None, system
+        title = QLabel("Line")
+        title.setFont(T.ui_font(12, bold=True))
+        self._layout.addWidget(title)
+        about = QLabel(f"Tubing from {a} to {b}. Its fluid has inertia: a long line takes time to get "
+                       "flowing, and a fast valve close on it shows water hammer. It has no friction (the "
+                       "valves, orifices and fittings set the flow). Length 0 joins parts bolted straight "
+                       "together into one point.")
+        about.setWordWrap(True)
+        about.setObjectName("hint")
+        self._layout.addWidget(about)
+        form_w = QWidget()
+        form = QFormLayout(form_w)
+        spec = system.line_spec(a, b)
+        for key, setting, tip in (
+                ("length", "line_length", "Tubing length; 0 for parts bolted together"),
+                ("diameter", "line_diameter", "Inner diameter, or auto: the largest bore of the parts at "
+                                              "its ends (at least 1/4 in tubing's 4.6 mm)")):
+            cur = spec.get(key)
+            ed = QLineEdit("" if cur is None else str(cur))
+            ed.setPlaceholderText(f"default: {system.setting(setting)}")
+            hint = f"{tip}  (units accepted, e.g. {UNIT_EXAMPLES['length']}; blank uses the {_label(setting)} setting)"
+            ed.setToolTip(hint)
+            ed.setProperty("hint", hint)
+            ed.setReadOnly(read_only)
+            ed.editingFinished.connect(lambda e=ed, k=key: self._set_line(a, b, k, e))
+            form.addRow(key, ed)
+        self._layout.addWidget(form_w)
+
+    def _set_line(self, a: str, b: str, key: str, ed: QLineEdit) -> None:
+        text = ed.text().strip()
+        if text and not (key == "diameter" and text.lower() == "auto"):
+            try:
+                v = units.parse(text, "length")
+            except (ValueError, TypeError) as e:
+                _show_error(ed, str(e))
+                return
+            if v < 0 or (key == "diameter" and v == 0):
+                _show_error(ed, "a length can't be negative" if v < 0 else "a diameter must be above 0")
+                return
+        _set_error(ed, False)
+        ed.setToolTip(ed.property("hint") or "")
+        value = None if not text else 0 if text == "0" else text  # a bare 0 saves as length: 0
+        if self.system.line_spec(a, b).get(key) == value:
+            return
+        self.system.set_line_spec(a, b, key, value)
+        self.edited.emit()
+
     def _editor(self, p, comp, read_only):
         cur = comp.params.get(p.name)
         if isinstance(cur, bool) and p.choices == ("on", "off"):

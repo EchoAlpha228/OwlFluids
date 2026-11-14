@@ -225,6 +225,19 @@ class System:
         """The length and diameter given for the line a -- b (either way round), if any."""
         return self.line_specs.get(f"{a} -- {b}") or self.line_specs.get(f"{b} -- {a}") or {}
 
+    def set_line_spec(self, a: str, b: str, key: str, value) -> None:
+        """Give the line a -- b its own ``length`` or ``diameter`` (None or "" goes back to the setting)."""
+        k = next((f"{x} -- {y}" for x, y in self.connections if (x, y) in ((a, b), (b, a))), f"{a} -- {b}")
+        spec = dict(self.line_spec(a, b))
+        self.line_specs.pop(f"{a} -- {b}", None)
+        self.line_specs.pop(f"{b} -- {a}", None)
+        if value is None or value == "":
+            spec.pop(key, None)
+        else:
+            spec[key] = value
+        if spec:
+            self.line_specs[k] = spec
+
     def sense(self, sid: str, stype: str, at: str = "", line: tuple[str, str] | None = None, **kw) -> Sensor:
         """A sensor on ``line`` (the two ports it joins), or on part ``at`` (a level, mass or
         valve position sensor; or, in older scripts, the line at port ``at``)."""
