@@ -74,8 +74,7 @@ class Simulation:
         self.st = (net.col_ptr, net.col_rows, net.color_ptr, net.color_cols, net.sowner, net.nl_ptr, net.nl_idx)
         self.sc = (np.zeros(n), np.zeros(n), np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64),
                    np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64), np.zeros((nn, kernel.N_W)),
-                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(3), np.zeros(1, dtype=np.int64),
-                   net.xscale.copy())
+                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(3), np.zeros(1, dtype=np.int64))
         self.ab = np.zeros((n, 2 * net.kl + net.ku + 1))
         self.piv = np.zeros(n, dtype=np.int64)
         self.bvec = np.zeros(n)

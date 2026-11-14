@@ -46,7 +46,7 @@ def test_noise_follows_what_the_sensor_sees(lox):
     lox.reset()
     lox.run(0.1)
     still = _reads(lox, "PT-INJ").std()
-    assert np.all(np.abs(_reads(lox, "FM-LOX", 20)) < 1e-9)  # a meter on a still line reads 0
+    assert np.all(_reads(lox, "FM-LOX", 20) == 0.0)  # a meter on a still line reads 0
     lox.open("V-M")
     lox.run(1.0)
     flowing = _reads(lox, "PT-INJ").std()

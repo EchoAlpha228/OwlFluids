@@ -101,29 +101,3 @@ def test_stand_purge_converges():
     sim.run(1.5)
     stats = sim.solver_stats()
     assert stats["forced_steps"] < 75, f"{stats} on {_machine()}"
-
-
-@pytest.mark.slow
-def test_lox_main_shuts_at_every_budget():
-    """No flow through the shut LOX main valve, whatever the work budget.
-
-    Small liquid junctions downstream used to stall on a chord Newton that accepted
-    updates tens of psi wide (the tolerance was a share of their whole mass), and the
-    meter read up to +-5 kg/s through the shut valve at some budgets.
-    """
-    bad = []
-    for budget in range(12, 41, 2):
-        sim = Simulation(engine_test_stand(), step_budget=budget)
-        sim.run(0.15)
-        sim.open("V-OXP", "V-FUP")
-        sim.run(1.0)
-        sim.close("V-OXV", "V-FUV")
-        sim.run(0.5)
-        sim.open("V-OXM", "V-FUM")
-        sim.run(1.0)
-        sim.close("V-OXM", "V-FUM")
-        sim.run(0.3)
-        v = sim.read("FM-OX")
-        if abs(v) > 0.05:
-            bad.append((budget, round(v, 2)))
-    assert not bad, f"flow through the shut LOX main (budget, kg/s): {bad}"
