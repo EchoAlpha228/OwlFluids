@@ -1,6 +1,7 @@
 """Desktop app smoke tests (offscreen)."""
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -8,7 +9,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 pytest.importorskip("pyqtgraph")
 
+from PySide6.QtCore import QPointF  # noqa: E402
+
 from owlfluids.app.window import MainWindow  # noqa: E402
+from owlfluids.io.system import System  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -33,9 +37,9 @@ def test_edit_save_and_run(app, tmp_path):
     sc.add_component("tank", QPointF(0, 0))
     sc.add_component("valve", QPointF(150, 0))
     sc.add_component("boundary", QPointF(300, 0))
-    sc.connect_ports("NT-1.port", "XV-1.in")  # the valve takes the tank's nitrogen once wired to it
+    sc.connect_ports("NT-1.top", "XV-1.in")  # the valve takes the tank's nitrogen once wired to it
     sc.connect_ports("NV-1.out", "BND-1.port")
-    sc.system.sense("PT-K1", "pressure", "NT-1.port", units="psi")
+    sc.system.sense("PT-K1", "pressure", "NT-1.top", units="psi")
     assert w.dirty
     w.path = tmp_path / "s.yaml"
     assert w.save()
@@ -163,12 +167,10 @@ def test_sensors_on_lines(app):
     p = sc.add_line_sensor(wire, "pressure")
     q = sc.add_line_sensor(wire, "mass_flow")
     assert (p.id, q.id) == ("OPT-1", "OFM-1")  # oxidizer pressure and flow
-    assert q.at in ("V-M.out", "INJ.in")  # a flow element's end
-    assert set(sc.sensor_items) >= {"OPT-1", "OFM-1", "PT-TK"}  # sensors at a port already show on its line
+    assert q.line == ("V-M.out", "INJ.in")  # positive the way the valve passes fluid
+    assert set(sc.sensor_items) >= {"OPT-1", "OFM-1", "PT-TK"}
     a, b = sc.sensor_items["OPT-1"].pos(), sc.sensor_items["OFM-1"].pos()
-    assert a != b and a.y() == b.y()  # spread along the line, above it
-    tee_line = sc.line_sensor_end
-    assert tee_line(wire, "temperature") is not None
+    assert a != b and a.y() == b.y()  # kept clear of each other, above the line
     w.run()
     deadline = time.time() + 60
     while w.runner is None and time.time() < deadline:
@@ -187,8 +189,49 @@ def test_sensors_on_lines(app):
     assert "OPT-1" not in [s.id for s in sc.system.sensors] and "OPT-1" not in sc.sensor_items
     sc.clearSelection()
     wire.setSelected(True)
-    sc.delete_selected()  # the line's sensors go with it
-    assert "OFM-1" not in [s.id for s in sc.system.sensors]
+    sc.delete_selected()  # the line goes; its sensors stay where they were, on no line
+    fm = next(s for s in sc.system.sensors if s.id == "OFM-1")
+    assert fm.line is None and fm.pos is not None and not sc.sensor_items["OFM-1"].attached
+    w.dirty = False
+    w.close()
+
+
+@pytest.mark.gui
+def test_sensors_go_anywhere_on_a_line(app, tmp_path):
+    from owlfluids.app.schematic import _length, _point_at
+
+    w = MainWindow()
+    w.show()
+    w.load_example("lox-feed")
+    sc = w.scene
+    feed = next(x for x in sc.wires if {x.a, x.b} == {"TK.bottom", "F1.in"})
+    n = _length(feed.points)
+    spot, level = _point_at(feed.points, 0.3 * n)
+    s = sc.add_sensor("pressure", spot + (QPointF(0, 8) if level else QPointF(8, 0)))  # beside the line: snaps on
+    assert s.line == ("TK.bottom", "F1.in") and s.along == pytest.approx(0.3, abs=0.02)
+    assert s.id == "OPT-1" and sc.sensor_items[s.id].attached
+    tap = sc.sensor_items[s.id].pos() + sc.sensor_items[s.id].anchor
+    assert (tap - spot).manhattanLength() < 2  # the tap is where it was dropped
+
+    # dragged onto another line, it reads there; dropped far from every line, it is loose
+    press = next(x for x in sc.wires if {x.a, x.b} == {"REG.out", "V-P.in"})
+    to, _ = _point_at(press.points, _length(press.points) / 2)
+    item = sc.sensor_items[s.id]
+    sc.drag_sensor(item, to, drop=True)
+    assert set(s.line) == {"REG.out", "V-P.in"} and s.id == "NPT-1"  # its default name follows the nitrogen
+    sc.drag_sensor(sc.sensor_items[s.id], QPointF(2000, 2000), drop=True)
+    assert s.line is None and s.pos == (2000, 2000) and not sc.sensor_items[s.id].attached
+
+    # a flow meter dropped between two tees reads the flow along that line
+    t = sc.add_sensor("mass_flow", QPointF(-3000, -3000))
+    assert t.line is None and t.pos is not None
+    sc.drag_sensor(sc.sensor_items[t.id], _point_at(feed.points, n / 2)[0], drop=True)
+    assert t.line == ("TK.bottom", "F1.in")  # out of the tank
+    path = tmp_path / "placed.yaml"
+    sc.system.save(path)
+    again = System.load(path)
+    assert [x.to_dict() for x in again.sensors] == [x.to_dict() for x in sc.system.sensors]
+    assert not again.notes
     w.dirty = False
     w.close()
 
@@ -248,13 +291,13 @@ def test_default_names_follow_commodity(app):
     tee = sc.add_component("tee", QPointF(0, 150))
     assert [c.id for c in sc.system.components] == ["NT-1", "XV-1", "XV-2", "XC-1", "XRV-1", "TEE-1"]
     assert sc.labels["TEE-1"][0].text() == "" and sc.labels["XRV-1"][0].text() == "XRV-1"  # plumbing goes unnamed
-    sc.connect_ports("NT-1.port", "XV-1.in")
+    sc.connect_ports("NT-1.top", "XV-1.in")
     sc.connect_ports("NV-1.out", "XV-2.in")
     assert (v1.id, v2.id) == ("NV-1", "NV-2")
     tank.params["fluid"] = "LOX"
     sc.refresh_media()
     assert (tank.id, v1.id, v2.id, cv.id, rv.id, tee.id) == ("OT-1", "OV-1", "OV-2", "XC-1", "XRV-1", "TEE-1")
-    assert ("OT-1.port", "OV-1.in") in sc.system.connections
+    assert ("OT-1.top", "OV-1.in") in sc.system.connections
     wire = next(x for x in sc.wires if "OV-1.out" in (x.a, x.b))
     s = sc.add_line_sensor(wire, "pressure")
     assert s.id == "OPT-1"
@@ -382,3 +425,43 @@ def test_synnax_setup_says_when_synnax_desktop_shares_nothing(app):
     assert d.core.currentData() is False  # no desktop.json: start from an address
     d.core.setCurrentIndex(0)
     assert "1.0 and older" in d.desktop_note.text()
+
+
+@pytest.mark.gui
+def test_quick_start_guide_opens_from_help(app):
+    from owlfluids.app.guide import GUIDE, GuideWindow
+
+    assert GUIDE.is_file()
+    w = MainWindow()
+    w.show_guide()
+    g = w._guide
+    assert isinstance(g, GuideWindow) and g.isVisible()
+    text = g.browser.toPlainText()
+    assert "Synnax Desktop" in text and "Test connection" in text
+    titles = [g.contents.item(i).text().strip() for i in range(g.contents.count())]
+    assert "5. Connecting to Synnax" in titles and "Synnax Desktop (easiest)" in titles
+    assert g.browser.verticalScrollBar().value() == 0  # opens at the top
+    assert g.show_section("troubleshooting") and not g.show_section("no such heading")
+    g.find_box.setText("desktop.json")
+    assert g.browser.textCursor().selectedText() == "desktop.json"
+    w.show_guide()  # F1 again raises the same window
+    assert w._guide is g
+    g.close()
+    w.dirty = False
+    w.close()
+
+
+def test_quick_start_guide_names_real_menus_and_examples():
+    """The guide names menu items, examples and settings that exist, so it can't drift silently."""
+    from owlfluids.app.guide import guide_text
+    from owlfluids.drivers.synnax import SynnaxConfig
+    from owlfluids.examples import EXAMPLES
+
+    text = guide_text()
+    for name in EXAMPLES:
+        assert f"`{name}`" in text, name
+    for field in SynnaxConfig.__dataclass_fields__:
+        assert f"`{field}`" in text, field
+    src = (Path(__file__).parents[1] / "owlfluids" / "app" / "window.py").read_text(encoding="utf-8")
+    for item in ("Synnax setup…", "Connect to Synnax…", "Check for updates…", "Update settings…", "Quick start guide"):
+        assert item in src and item in text, item

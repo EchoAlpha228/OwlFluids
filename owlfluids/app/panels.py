@@ -24,9 +24,11 @@ from PySide6.QtWidgets import (
 
 from .. import units
 from ..components import TYPES, get_type
+from ..core.lines import LINE_TYPES, Lines, part_types
 from ..fluids.registry import FLUIDS
 from ..io.system import Component, Sensor
 from . import theme as T
+from .schematic import SENSOR_MIME
 
 UNIT_EXAMPLES = {"pressure": "300 psi", "temperature": "-196 C", "length": "0.5 in", "area": "0.1 in2",
                  "volume": "2 L", "time": "50 ms", "mass_flow": "1.2 kg/s"}
@@ -65,8 +67,19 @@ def _fluid_heading(fluid: str | None) -> QLabel:
 
 
 FLUID_PARAMS = ("fluid", "pressurant")
-SENSOR_TYPES = ("pressure", "temperature", "mass_flow", "valve_position", "quality", "density", "mass",
-                "wall_temperature", "level", "purge_fraction")
+# sensors in the palette, put anywhere on a line: (name, what it reads)
+INSTRUMENTS = {
+    "pressure": ("Pressure transducer", "Reads the pressure in the line where it sits."),
+    "temperature": ("Thermocouple", "Reads the fluid temperature where it sits, with a probe's lag."),
+    "mass_flow": ("Mass flow meter", "Reads the mass flow along the line where it sits."),
+    "density": ("Density meter", "Reads the fluid density where it sits."),
+    "quality": ("Vapor quality", "Reads the vapor mass fraction where it sits (0 liquid, 1 vapor)."),
+    "purge_fraction": ("Purge gas fraction", "Reads how much of the fluid where it sits is purge gas."),
+}
+# a part's own sensors, added from its properties
+PART_SENSOR_LABELS = {"level": "level", "mass": "mass (load cell)", "valve_position": "valve position",
+                      "wall_temperature": "wall temperature"}
+PART_SENSOR_PREFIX = {"level": "LL", "mass": "M", "valve_position": "ZS", "wall_temperature": "TW"}
 
 
 class Palette(QTreeWidget):
@@ -89,6 +102,13 @@ class Palette(QTreeWidget):
             it = QTreeWidgetItem(cat, [ct.label or name])
             it.setData(0, Qt.UserRole, name)
             it.setToolTip(0, ct.help or (ct.__doc__ or "").strip().split("\n")[0])
+        # sensors are parts of their own: drop one anywhere on a line and it reads what is there
+        cat = QTreeWidgetItem(self, ["Sensors"])
+        cat.setFlags(Qt.ItemIsEnabled)
+        for stype, (label, tip) in INSTRUMENTS.items():
+            it = QTreeWidgetItem(cat, [f"{label} ({LINE_TYPES[stype]})"])
+            it.setData(0, Qt.UserRole, SENSOR_MIME + stype)
+            it.setToolTip(0, tip + " Drop it on a line (or a tank) to read there; drag it to move it.")
         self.expandAll()
         self.itemDoubleClicked.connect(self._double)
 
@@ -172,7 +192,7 @@ class Properties(QScrollArea):
             form.addRow(_label(p.name), self._editor(p, comp, read_only))
         self._layout.addWidget(form_w)
         self._layout.addWidget(_heading("Sensors"))
-        for s in [s for s in system.sensors if s.at.split(".")[0] == comp.id]:
+        for s in [s for s in system.sensors if s.at.split(".")[0] == comp.id]:  # its own, and any on a free port
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
@@ -187,20 +207,39 @@ class Properties(QScrollArea):
                 rm.clicked.connect(lambda _=False, s=s: self._remove_sensor(s))
                 h.addWidget(rm)
             self._layout.addWidget(row)
-        if not read_only:
-            self._layout.addWidget(self._sensor_adder(comp, ct))
+        kinds = part_types(comp.type)
+        if not read_only and kinds:
+            self._layout.addWidget(self._sensor_adder(comp, kinds))
+        hint = QLabel("Pressure, temperature and flow sensors are parts of their own: drag one from the "
+                      "palette onto any line.")
+        hint.setWordWrap(True)
+        hint.setObjectName("hint")
+        self._layout.addWidget(hint)
 
     def show_sensor(self, s: Sensor, system, read_only: bool = False) -> None:
-        """A sensor on a line: its id, display units and where it reads."""
+        """A sensor: its id, display units and where it reads."""
         self._clear()
         self.comp, self.system = None, system
-        title = QLabel(f"{_label(s.type).capitalize()} sensor")
+        label = INSTRUMENTS.get(s.type, (f"{_label(s.type).capitalize()} sensor",))[0]
+        title = QLabel(label)
         title.setFont(T.ui_font(12, bold=True))
         self._layout.addWidget(title)
-        where = ("Reads the flow along the line at " if s.type == "mass_flow" else "Reads the line at ") + s.at
-        if s.type == "mass_flow":
-            where += (": positive in to out through a valve, orifice or fitting, or out of a tank or volume. "
-                      "Right-click the line to add another sensor.")
+        what = _label(s.type)
+        line = system.line_of(s)
+        if line is not None:
+            a, b = s.line
+            if s.type == "mass_flow":
+                where = (f"Reads the flow along the line between {a} and {b} where it sits, positive from "
+                         f"{a.split('.')[0]} toward {b.split('.')[0]}.")
+                if Lines(system).flow_side(*line) is None:
+                    where += " This line is part of a loop of lines, so no flow is its own: it reads nothing."
+            else:
+                where = f"Reads the {what} on the line between {a} and {b} where it sits."
+            where += " Drag it along the line or onto another."
+        elif s.at:
+            where = f"Reads the {what} at {s.at}. Drag it onto a line to read there."
+        else:
+            where = "On no line, so it reads nothing. Drag it onto a line (or a tank) to read there."
         about = QLabel(where)
         about.setWordWrap(True)
         about.setObjectName("hint")
@@ -245,6 +284,19 @@ class Properties(QScrollArea):
         unit.editingFinished.connect(set_unit)
         form.addRow("units", unit)
         self._layout.addWidget(form_w)
+        if s.type == "mass_flow" and line is not None and not read_only:
+            flip = QPushButton("reverse direction")
+            flip.setToolTip("Read positive the other way along the line")
+
+            def reverse():
+                s.line = (s.line[1], s.line[0])
+                if s.along is not None:
+                    s.along = round(1.0 - s.along, 3)
+                self.edited.emit()
+                self.show_sensor(s, system)
+
+            flip.clicked.connect(reverse)
+            self._layout.addWidget(flip)
         if not read_only:
             rm = QPushButton("remove sensor")
 
@@ -321,36 +373,29 @@ class Properties(QScrollArea):
         if self.comp is not None and new and new != self.comp.id:
             self.rename_requested.emit(self.comp.id, new)
 
-    def _sensor_adder(self, comp, ct) -> QWidget:
+    def _sensor_adder(self, comp, kinds) -> QWidget:
+        """Add one of the part's own sensors: its level, mass, valve position or wall temperature."""
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(0, 0, 0, 0)
         kind = QComboBox()
-        for t in SENSOR_TYPES:
-            kind.addItem(t)
-        where = QComboBox()
-        if ct.ports:
-            for port in ct.ports:
-                where.addItem(f"{comp.id}.{port}")
-        where.addItem(comp.id)
+        for t in kinds:
+            kind.addItem(PART_SENSOR_LABELS[t], t)
         add = QPushButton("add sensor")
 
         def do():
-            t = kind.currentText()
-            at = comp.id if t in ("mass_flow", "valve_position", "mass", "level") else where.currentText()
-            prefix = {"pressure": "PT", "temperature": "TC", "mass_flow": "FM", "valve_position": "ZS",
-                      "mass": "M", "level": "LL", "purge_fraction": "PF"}.get(t, t[:2].upper())
+            t = kind.currentData()
+            prefix = PART_SENSOR_PREFIX[t]
             n = 1
             while any(s.id == f"{prefix}-{comp.id}" + (f"-{n}" if n > 1 else "") for s in self.system.sensors):
                 n += 1
             sid = f"{prefix}-{comp.id}" + (f"-{n}" if n > 1 else "")
-            self.system.sensors.append(Sensor(sid, t, at, units=units.DEFAULT_UNITS.get(t, "")))
+            self.system.sensors.append(Sensor(sid, t, comp.id, units=units.DEFAULT_UNITS.get(t, "")))
             self.edited.emit()
             self.show_component(comp, self.system)
 
         add.clicked.connect(do)
-        h.addWidget(kind)
-        h.addWidget(where)
+        h.addWidget(kind, 1)
         h.addWidget(add)
         return w
 

@@ -61,9 +61,9 @@ components:
 - {id: V-P4, type: valve, cv: 0.1, at: [150.0, 1347.5]}
 - {id: CK-P4, type: check_valve, cv: 0.1, at: [450.0, 1347.5]}
 connections:
-- [GN2-K1.port, V-K1.in]
+- [GN2-K1.top, V-K1.in]
 - [V-K1.out, MAN-HP.a]
-- [GN2-K2.port, V-K2.in]
+- [GN2-K2.top, V-K2.in]
 - [V-K2.out, MAN-HP.b]
 - [MAN-HP.c, PT-HP-RV.in]
 - [PT-HP-RV.out, ATM-HP.port]
@@ -108,24 +108,24 @@ connections:
 - [INJ-FU.out, CH-FU.a]
 - [CH-FU.b, NOZ-FU.in]
 - [NOZ-FU.out, ATM-CFU.port]
-- [K-P1.port, V-P1.in]
+- [K-P1.top, V-P1.in]
 - [V-P1.out, CK-P1.in]
 - [CK-P1.out, F-OXF2.out]
-- [K-P2.port, V-P2.in]
+- [K-P2.top, V-P2.in]
 - [V-P2.out, CK-P2.in]
 - [CK-P2.out, F-FUF2.out]
-- [K-P3.port, V-P3.in]
+- [K-P3.top, V-P3.in]
 - [V-P3.out, CK-P3.in]
 - [CK-P3.out, CH-OX.c]
-- [K-P4.port, V-P4.in]
+- [K-P4.top, V-P4.in]
 - [V-P4.out, CK-P4.in]
 - [CK-P4.out, CH-FU.c]
 sensors:
-- {id: PT-HP, type: pressure, at: MAN-HP.a, units: psi}
-- {id: PT-OX, type: pressure, at: TK-OX.top, units: psi}
-- {id: PT-FU, type: pressure, at: TK-FU.top, units: psi}
-- {id: PT-OXI, type: pressure, at: INJ-OX.in, units: psi}
-- {id: PT-FUI, type: pressure, at: INJ-FU.in, units: psi}
-- {id: TC-OX, type: temperature, at: TK-OX.bottom}
-- {id: FM-OX, type: mass_flow, at: V-OXM}
-- {id: FM-FU, type: mass_flow, at: V-FUM}
+- {id: PT-HP, type: pressure, line: [V-K1.out, MAN-HP.a], units: psi}
+- {id: PT-OX, type: pressure, line: [TEE-OXU.b, TK-OX.top], units: psi}
+- {id: PT-FU, type: pressure, line: [TEE-FUU.b, TK-FU.top], units: psi}
+- {id: PT-OXI, type: pressure, line: [F-OXF2.out, INJ-OX.in], units: psi}
+- {id: PT-FUI, type: pressure, line: [F-FUF2.out, INJ-FU.in], units: psi}
+- {id: TC-OX, type: temperature, line: [TK-OX.bottom, F-OXF1.in]}
+- {id: FM-OX, type: mass_flow, line: [V-OXM.out, F-OXF2.in]}
+- {id: FM-FU, type: mass_flow, line: [V-FUM.out, F-FUF2.in]}

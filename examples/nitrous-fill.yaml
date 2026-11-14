@@ -44,23 +44,23 @@ connections:
 - [RFCV.out, RT.bottom]
 - [RT.top, RTV.in]
 - [RTV.out, ATM-4.port]
-- [AC.out, AR.port]
-- [AR.port, APRV.in]
+- [AC.out, AR.top]
+- [AR.top, APRV.in]
 - [APRV.out, ATM-A.port]
-- [AR.port, APR.in]
+- [AR.top, APR.in]
 - [APR.out, AIV.in]
 - [AIV.out, ACF.in]
 - [ACF.out, OPGS.in]
 - [OPGS.out, OPGCV.in]
 - [OPGCV.out, OFV.out]
 sensors:
-- {id: OFPT, type: pressure, at: OFV.in, units: psig}
-- {id: OFT, type: temperature, at: OFV.in, units: F}
-- {id: OIPT, type: pressure, at: OFIF.out, units: psig}
-- {id: APT, type: pressure, at: ACF.out, units: psig}
-- {id: ART, type: pressure, at: AR.port, units: psig}
-- {id: FM-OF, type: mass_flow, at: OFV, units: kg/s}
+- {id: OFPT, type: pressure, line: [OFF.out, OFV.in], units: psig}
+- {id: OFT, type: temperature, line: [OFF.out, OFV.in], units: F}
+- {id: OIPT, type: pressure, line: [OFIF.out, OQD.in], units: psig}
+- {id: APT, type: pressure, line: [ACF.out, OPGS.in], units: psig}
+- {id: ART, type: pressure, line: [AC.out, AR.top], units: psig}
+- {id: FM-OF, type: mass_flow, line: [OFF.out, OFV.in], units: kg/s}
 - {id: M-RT, type: mass, at: RT, units: kg}
 - {id: LL-RT, type: level, at: RT, units: '%'}
-- {id: PF-OF, type: purge_fraction, at: OFIF.out, units: '%'}
+- {id: PF-OF, type: purge_fraction, line: [OFIF.out, OQD.in], units: '%'}
 - {id: AC-ON, type: valve_position, at: AC}

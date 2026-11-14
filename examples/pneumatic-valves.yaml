@@ -9,12 +9,12 @@ components:
 - {id: ATM, type: boundary, fluid: nitrogen, at: [600, 0]}
 connections:
 - [C.out, A.a]
-- [K.port, V-FILL.in]
+- [K.top, V-FILL.in]
 - [V-FILL.out, TK.a]
 - [TK.b, V-VENT.in]
 - [V-VENT.out, ATM.port]
 sensors:
-- {id: PT-A, type: pressure, at: A.a, units: psig}
-- {id: PT-TK, type: pressure, at: TK.a, units: psi}
+- {id: PT-A, type: pressure, line: [C.out, A.a], units: psig}
+- {id: PT-TK, type: pressure, line: [V-FILL.out, TK.a], units: psi}
 - {id: ZS-FILL, type: valve_position, at: V-FILL}
 - {id: ZS-VENT, type: valve_position, at: V-VENT}

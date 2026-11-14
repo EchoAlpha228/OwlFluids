@@ -9,7 +9,7 @@ components:
 - {id: INJ, type: orifice, cda: 60 mm2, at: [600, 150]}
 - {id: AMB, type: boundary, fluid: oxygen, at: [750, 150]}
 connections:
-- [K-N2.port, REG.in]
+- [K-N2.top, REG.in]
 - [REG.out, V-P.in]
 - [V-P.out, TK.top]
 - [TK.bottom, F1.in]
@@ -17,9 +17,9 @@ connections:
 - [V-M.out, INJ.in]
 - [INJ.out, AMB.port]
 sensors:
-- {id: PT-TK, type: pressure, at: TK.top, units: psi}
-- {id: PT-INJ, type: pressure, at: INJ.in, units: psi}
-- {id: TC-INJ, type: temperature, at: INJ.in, units: F}
-- {id: FM-LOX, type: mass_flow, at: V-M, units: kg/s}
+- {id: PT-TK, type: pressure, line: [V-P.out, TK.top], units: psi}
+- {id: PT-INJ, type: pressure, line: [V-M.out, INJ.in], units: psi}
+- {id: TC-INJ, type: temperature, line: [V-M.out, INJ.in], units: F}
+- {id: FM-LOX, type: mass_flow, line: [V-M.out, INJ.in], units: kg/s}
 - {id: M-LOX, type: mass, at: TK, units: kg}
 - {id: LL-LOX, type: level, at: TK, units: '%'}

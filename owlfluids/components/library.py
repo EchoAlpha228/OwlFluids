@@ -19,6 +19,7 @@ from ..core.layout import (
     DRAW_LIQUID,
     DRAW_MIX,
     DRAW_VAPOR,
+    NODE_BOUNDARY,
 )
 from ..io.system import PIPE_TYPES
 
@@ -157,7 +158,7 @@ class Tank(ComponentType):
     type_name = "tank"
     label = "Tank"
     category = "Volumes"
-    ports = ("top", "bottom", "port")
+    ports = ("top", "bottom")
     params = (
         Param("fluid", "text", None, "fluid in the tank (the liquid, if it has a pressurant)"),
         Param("volume", "volume", None, "internal volume"),
@@ -188,8 +189,8 @@ class Tank(ComponentType):
             "Without one it holds a single fluid: with 'fill' saturated liquid (LOX, LN2, nitrous) under its own "
             "vapor, which boils off the liquid as it vents or drains and condenses back onto it, slowly, as an "
             "unvented fill or a press squeezes it (see condensation_coefficient); otherwise a "
-            "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor, 'bottom' draws "
-            "liquid, 'port' draws the mixture (the ullage gas, with a pressurant). A 'wall_mass' gives a "
+            "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor (the ullage gas, "
+            "with a pressurant), 'bottom' draws liquid while there is any. A 'wall_mass' gives a "
             "single-fluid tank a shell that feeds heat into the boiling fluid.")
 
     @classmethod
@@ -222,7 +223,6 @@ class Tank(ComponentType):
                 comp, fluid, fluid, vol, min(fill, 0.999), p, t, None, math.pi * d * d / 4.0 if d else 0.0,
                 heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")),
                 wall=_wall(cls, comp, vol), iface=iface, saturated=True)
-            b.bind_port(comp, "port", liq, DRAW_LIQUID)  # nearly all of its mass is liquid
             return
         else:
             if p is None or t is None:
@@ -233,7 +233,6 @@ class Tank(ComponentType):
                        heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")), wall=wall)
         b.bind_port(comp, "top", n, DRAW_VAPOR)
         b.bind_port(comp, "bottom", n, DRAW_LIQUID)
-        b.bind_port(comp, "port", n, DRAW_MIX)
 
     @classmethod
     def _build_pressurized(cls, b, comp):
@@ -252,7 +251,6 @@ class Tank(ComponentType):
             cls.param(comp, "temperature"), cls.param(comp, "gas_temperature") or b.t_init, area,
             heat=(cls.param(comp, "heat_transfer"), cls.param(comp, "ambient_temperature")),
             wall=_wall(cls, comp, vol), iface=iface)
-        b.bind_port(comp, "port", g, DRAW_MIX)
 
 
 class Boundary(ComponentType):
@@ -491,10 +489,19 @@ class ReliefValve(ComponentType):
         Param("set_pressure", "pressure", None, "inlet-minus-outlet pressure where it starts to open"),
         Param("overpressure", "pressure", "10 psi", "extra pressure to open fully"),
     )
-    help = "Opens when the inlet exceeds the outlet by the set pressure."
+    help = ("Opens when the inlet exceeds the outlet by the set pressure. With nothing connected to its "
+            "outlet it vents to the atmosphere.")
 
     @classmethod
     def build(cls, b, comp):
+        if b.port_open(comp, "out"):
+            b.vent_port(comp, "out")
+        if b.port_open(comp, "in"):
+            b.warnings.append(f"{comp.id}: nothing is connected to its inlet, so it never relieves anything")
+        up = b.net_node.get(b.net_of[(comp.id, "in")])
+        if up is not None and b.nodes[up].kind == NODE_BOUNDARY and b.nodes[up].bp <= 1.5 * units.ATM:
+            b.warnings.append(f"{comp.id}: its inlet is on the vent {b.nodes[up].owner}, and it only relieves from "
+                              "inlet to outlet; swap its ends so the inlet faces what it protects")
         b.add_orifice(comp, "", "in", "out", cda=_flow_area(cls, comp), ctrl=CTRL_RELIEF,
                       p1=cls.require(comp, "set_pressure"), p2=max(cls.param(comp, "overpressure"), 100.0))
 

@@ -24,8 +24,8 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     add("V-K1", "valve", cv=0.6, normally="open")
     add("V-K2", "valve", cv=0.6, normally="open")
     add("MAN-HP", "volume", volume="0.2 L")
-    con("GN2-K1.port", "V-K1.in"), con("V-K1.out", "MAN-HP.a")
-    con("GN2-K2.port", "V-K2.in"), con("V-K2.out", "MAN-HP.b")
+    con("GN2-K1.top", "V-K1.in"), con("V-K1.out", "MAN-HP.a")
+    con("GN2-K2.top", "V-K2.in"), con("V-K2.out", "MAN-HP.b")
     add("PT-HP-RV", "relief_valve", cv=0.2, set_pressure="4800 psi")
     add("ATM-HP", "boundary", fluid="nitrogen")
     con("MAN-HP.c", "PT-HP-RV.in"), con("PT-HP-RV.out", "ATM-HP.port")
@@ -91,7 +91,7 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
         add(f"K-{tag}", "tank", fluid="nitrogen", volume="10 L", pressure="1000 psi", temperature="20 C")
         add(f"V-{tag}", "valve", cv=0.1)
         add(f"CK-{tag}", "check_valve", cv=0.1)
-        con(f"K-{tag}.port", f"V-{tag}.in"), con(f"V-{tag}.out", f"CK-{tag}.in")
+        con(f"K-{tag}.top", f"V-{tag}.in"), con(f"V-{tag}.out", f"CK-{tag}.in")
         con(f"CK-{tag}.out", targets[i % len(targets)])
 
     if pneumatic:
@@ -101,14 +101,14 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
 
     _place(s, n_purge)
 
-    s.sense("PT-HP", "pressure", "MAN-HP.a", units="psi")
-    s.sense("PT-OX", "pressure", "TK-OX.top", units="psi")
-    s.sense("PT-FU", "pressure", "TK-FU.top", units="psi")
-    s.sense("PT-OXI", "pressure", "INJ-OX.in", units="psi")
-    s.sense("PT-FUI", "pressure", "INJ-FU.in", units="psi")
-    s.sense("TC-OX", "temperature", "TK-OX.bottom")
-    s.sense("FM-OX", "mass_flow", "V-OXM")
-    s.sense("FM-FU", "mass_flow", "V-FUM")
+    s.sense("PT-HP", "pressure", line=("V-K1.out", "MAN-HP.a"), units="psi")
+    s.sense("PT-OX", "pressure", line=("TEE-OXU.b", "TK-OX.top"), units="psi")
+    s.sense("PT-FU", "pressure", line=("TEE-FUU.b", "TK-FU.top"), units="psi")
+    s.sense("PT-OXI", "pressure", line=("F-OXF2.out", "INJ-OX.in"), units="psi")
+    s.sense("PT-FUI", "pressure", line=("F-FUF2.out", "INJ-FU.in"), units="psi")
+    s.sense("TC-OX", "temperature", line=("TK-OX.bottom", "F-OXF1.in"))
+    s.sense("FM-OX", "mass_flow", line=("V-OXM.out", "F-OXF2.in"))
+    s.sense("FM-FU", "mass_flow", line=("V-FUM.out", "F-FUF2.in"))
     return s
 
 

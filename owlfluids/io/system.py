@@ -9,10 +9,17 @@ Systems are stored as YAML so they can be written by hand, diffed and kept in gi
       - {id: V-1, type: valve, cv: 0.5}
       - {id: AMB, type: boundary, fluid: nitrogen}
     connections:
-      - [TK-1.port, V-1.in]
+      - [TK-1.top, V-1.in]
       - [V-1.out, AMB.port]
     sensors:
-      - {id: PT-1, type: pressure, at: TK-1.port}
+      - {id: PT-1, type: pressure, line: [V-1.out, AMB.port], along: 0.5}
+      - {id: LL-1, type: level, at: TK-1}
+
+A pressure, temperature, flow, density, quality or purge sensor sits on a line (``line``, the
+two ports it joins, and ``along``, how far from the first one, 0-1) and reads what is there;
+see core/lines.py. Level, mass, valve position and wall temperature sensors belong to a part
+(``at``). A line sensor can also read a tank's or volume's port with nothing wired to it
+(``at: TK-1.top``), and one that is on no line keeps its place on the schematic (``pos``).
 """
 
 from __future__ import annotations
@@ -42,6 +49,24 @@ THROTTLE_TYPES = ("throttle_valve", "needle_valve")
 # Pressurized tanks from before they became tanks with a pressurant, and their old port names.
 PRESSURIZED_TANK = "pressurized_tank"
 TANK_PORTS = {"gas": "top", "liquid": "bottom"}
+# Tanks had a third, side port ("port") before they had only a top and a bottom.
+OLD_TANK_PORT = "port"
+
+
+def tank_side_port(params: dict) -> str:
+    """Where an old tank's side port goes: the bottom if the tank holds liquid there, else the top.
+
+    A tank with a pressurant drew its ullage gas from the side port, so that is the top. A saturated
+    tank (with a fill) drew its bulk mixture, which is mostly liquid by mass, so that is the bottom;
+    so is a tank of a fluid that is only ever liquid. A gas bottle's two ports are alike: the top.
+    """
+    from ..fluids.registry import is_liquid_name
+
+    if params.get("pressurant"):
+        return "top"
+    if params.get("fill") is not None or is_liquid_name(params.get("fluid")):
+        return "bottom"
+    return "top"
 
 
 def _tank_params(params: dict) -> dict:
@@ -83,15 +108,30 @@ def _optional_float(v) -> float | None:
 @dataclass
 class Sensor:
     id: str
-    type: str  # pressure, temperature, mass_flow, valve_position, quality, density, mass, level
-    at: str  # "COMP.port" for node quantities, "COMP" for links and tanks
+    type: str  # pressure, temperature, mass_flow, valve_position, quality, density, mass, level...
+    # what it reads without a line: "COMP" for a part's sensors (level, mass, valve position), or
+    # "COMP.port" for a port with no line (and in scripts and files from before sensors had lines)
+    at: str = ""
     lag: float | None = None  # s, first-order time constant; None = the realistic default for the type
     noise: float | None = None  # standard deviation in SI units; None = realistic model, 0 = none
     rate: float = 0.0  # Hz, 0 = every step
     units: str = ""  # display units, e.g. "psi"
+    # on a line: the two ports it joins (a flow meter reads positive from the first toward the
+    # second), and where along it the sensor sits, 0-1 from the first (None: spread out evenly)
+    line: tuple[str, str] | None = None
+    along: float | None = None
+    pos: tuple[float, float] | None = None  # schematic position of a sensor on no line
 
     def to_dict(self) -> dict:
-        d = {"id": self.id, "type": self.type, "at": self.at}
+        d = {"id": self.id, "type": self.type}
+        if self.line:
+            d["line"] = list(self.line)
+            if self.along is not None:
+                d["along"] = round(float(self.along), 3)
+        elif self.at:
+            d["at"] = self.at
+        elif self.pos is not None:
+            d["pos"] = [round(self.pos[0], 1), round(self.pos[1], 1)]
         for k in ("lag", "noise"):
             if getattr(self, k) is not None:
                 d[k] = getattr(self, k)
@@ -146,18 +186,42 @@ class System:
         if old in (sx.get("exclude") or []):
             sx["exclude"] = [new if x == old else x for x in sx["exclude"]]
 
-    def _tank_port(self, ref: str) -> str:
+    def _pressurized_port(self, ref: str) -> str:
         """An old pressurized tank's port (TK.gas, TK.liquid) by its tank name (TK.top, TK.bottom)."""
         cid, dot, port = ref.rpartition(".")
         return f"{cid}.{TANK_PORTS[port]}" if cid in self._old_tanks and port in TANK_PORTS else ref
 
-    def connect(self, a: str, b: str) -> None:
-        self.connections.append((self._tank_port(a), self._tank_port(b)))
+    def _side_port(self, ref: str) -> str:
+        """An old tank side port (TK.port) by the port it is now: TK.top or TK.bottom."""
+        cid, dot, port = ref.rpartition(".")
+        if dot and port == OLD_TANK_PORT:
+            c = next((c for c in self.components if c.id == cid), None)
+            if c is not None and c.type == "tank":
+                return f"{cid}.{tank_side_port(c.params)}"
+        return ref
 
-    def sense(self, sid: str, stype: str, at: str, **kw) -> Sensor:
-        s = Sensor(sid, stype, self._tank_port(at), **kw)
+    def current_port(self, ref: str) -> str:
+        """An old tank port by its name now (scripts written before tanks changed)."""
+        return self._side_port(self._pressurized_port(ref))
+
+    def connect(self, a: str, b: str) -> None:
+        self.connections.append((self.current_port(a), self.current_port(b)))
+
+    def sense(self, sid: str, stype: str, at: str = "", line: tuple[str, str] | None = None, **kw) -> Sensor:
+        """A sensor on ``line`` (the two ports it joins), or on part ``at`` (a level, mass or
+        valve position sensor; or, in older scripts, the line at port ``at``)."""
+        if line is not None:
+            line = (self.current_port(line[0]), self.current_port(line[1]))
+        s = Sensor(sid, stype, self.current_port(at) if at else "", line=line, **kw)
         self.sensors.append(s)
         return s
+
+    def line_of(self, s: Sensor) -> tuple[str, str] | None:
+        """The connection a sensor sits on, in the system's own order, or None."""
+        if not s.line:
+            return None
+        a, b = s.line
+        return next(((x, y) for x, y in self.connections if (x, y) in ((a, b), (b, a))), None)
 
     def setting(self, key: str):
         return self.settings.get(key, DEFAULT_SETTINGS[key])
@@ -185,16 +249,114 @@ class System:
         sensors = []
         for s in d.get("sensors") or []:
             s = dict(s)
-            sensors.append(Sensor(str(s.pop("id")), s.pop("type"), str(s.pop("at")),
+            line = s.pop("line", None)
+            if isinstance(line, str):
+                line = [x.strip() for x in line.split("--")]
+            along, pos = s.pop("along", None), s.pop("pos", None)
+            sensors.append(Sensor(str(s.pop("id")), s.pop("type"), str(s.pop("at", "") or ""),
                                   _optional_float(s.pop("lag", None)), _optional_float(s.pop("noise", None)),
-                                  float(s.pop("rate", 0) or 0), str(s.pop("units", "") or "")))
+                                  float(s.pop("rate", 0) or 0), str(s.pop("units", "") or ""),
+                                  (str(line[0]), str(line[1])) if line else None,
+                                  None if along is None else min(max(float(along), 0.0), 1.0),
+                                  (float(pos[0]), float(pos[1])) if pos else None))
         routes = {str(k): dict(v) for k, v in (d.get("routes") or {}).items()}
         system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings, routes,
                      dict(d.get("synnax") or {}))
         system._fold_pipes()
         system._throttles_to_manual()
         system._merge_pressurized_tanks()
+        system._tank_side_ports()
+        moved = system.sensors_onto_lines()
+        if moved:
+            system.notes.append("sensors sit on lines now, not on a part's port: " + ", ".join(moved)
+                                + " moved onto the line they were drawn on (save the file to keep it that way)")
         return system
+
+    def sensors_onto_lines(self) -> list[str]:
+        """Put sensors that read the line at a part's port (files and scripts from before sensors
+        were parts of their own) on that line, reading the same. Returns the ids moved.
+
+        A flow meter at a flow element's port, or on the element itself, goes on the line at its
+        outlet (or inlet), reading positive the way the element passes fluid; at a tank's or
+        volume's port, on the line out of it. A port with two or more lines straight off it keeps
+        its sensor where it is: no one line carries all its flow.
+        """
+        from ..components import get_type
+        from ..core.lines import LINE_TYPES
+
+        comps = {c.id: c for c in self.components}
+        moved = []
+        for s in self.sensors:
+            if s.line or not s.at or s.type not in LINE_TYPES:
+                continue
+            ref = s.at
+            cid, dot, port = ref.rpartition(".")
+            if not dot:  # a part: a flow meter on a flow element reads the line at its outlet, else its inlet
+                c = comps.get(ref)
+                if s.type != "mass_flow" or c is None:
+                    continue
+                ct = get_type(c.type)
+                ports = ct.ports
+                if len(ports) != 2 or ct.category == "Volumes" or ct.merges_ports:
+                    continue
+                ref = next((f"{ref}.{p}" for p in (ports[-1], ports[0])
+                            if sum(f"{ref}.{p}" in ab for ab in self.connections) == 1), None)
+                if ref is None:
+                    continue
+                cid, port = ref.rpartition(".")[0], ref.rpartition(".")[2]
+            on = [ab for ab in self.connections if ref in ab]
+            if not on or (s.type == "mass_flow" and len(on) > 1) or cid not in comps:
+                continue
+            a, b = on[0]
+            other = b if a == ref else a
+            ct = get_type(comps[cid].type)
+            if s.type == "mass_flow" and ct.merges_ports:  # never read: a tee's ports are all one point
+                continue
+            if s.type == "mass_flow":
+                # positive the way the element passes fluid (in to out), or out of a tank or volume
+                inlet = ct.category != "Volumes" and not ct.merges_ports and port == ct.ports[0] and len(ct.ports) > 1
+                s.line = (other, ref) if inlet else (ref, other)
+            else:
+                s.line = (a, b)
+            s.at = ""
+            moved.append(s.id)
+        return moved
+
+    def _fix_refs(self, fix) -> None:
+        """Rename port references everywhere they appear: connections, sensors and hand-shaped wires."""
+        self.connections = [(fix(a), fix(b)) for a, b in self.connections]
+        for s in self.sensors:
+            s.at = fix(s.at) if s.at else s.at
+            if s.line:
+                s.line = (fix(s.line[0]), fix(s.line[1]))
+        routes = {}
+        for k, v in self.routes.items():
+            a, _, b = k.partition(" -- ")
+            routes[f"{fix(a)} -- {fix(b)}" if b else k] = v
+        self.routes = routes
+
+    def _tank_side_ports(self) -> None:
+        """Move what was on an old tank's side port to its top or bottom (see ``tank_side_port``)."""
+        moved = {}
+        tanks = {c.id: c for c in self.components if c.type == "tank"}
+        refs = [r for ab in self.connections for r in ab] + [s.at for s in self.sensors] + [
+            r for s in self.sensors for r in (s.line or ())]
+        for ref in refs:
+            cid, _, port = ref.rpartition(".")
+            if port == OLD_TANK_PORT and cid in tanks:
+                moved[cid] = tank_side_port(tanks[cid].params)
+        if not moved:
+            return
+        self._fix_refs(self._side_port)
+        # a wire can now join a tank's port to itself or repeat another; keep one of each
+        kept = []
+        for a, b in self.connections:
+            if a != b and (a, b) not in kept and (b, a) not in kept:
+                kept.append((a, b))
+        self.connections = kept
+        self.notes.append("tanks have only a top and a bottom port now: "
+                          + ", ".join(f"{cid}.port is {cid}.{p}" for cid, p in sorted(moved.items()))
+                          + " (save the file to keep it that way)")
 
     def _merge_pressurized_tanks(self) -> None:
         """Turn old pressurized tanks into tanks with a pressurant: gas port on top, liquid at the bottom."""
@@ -204,15 +366,7 @@ class System:
                 self._old_tanks.add(c.id)
         if not self._old_tanks:
             return
-        fix = self._tank_port
-        self.connections = [(fix(a), fix(b)) for a, b in self.connections]
-        for s in self.sensors:
-            s.at = fix(s.at)
-        routes = {}
-        for k, v in self.routes.items():
-            a, _, b = k.partition(" -- ")
-            routes[f"{fix(a)} -- {fix(b)}" if b else k] = v
-        self.routes = routes
+        self._fix_refs(self._pressurized_port)
         self.notes.append(f"pressurized tanks are now tanks with a pressurant: {', '.join(sorted(self._old_tanks))} "
                           "(their gas port is 'top' and their liquid port 'bottom'; save the file to keep it that way)")
 

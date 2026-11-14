@@ -17,7 +17,7 @@ def hand_vent(**valve):
     s.add("V1", "valve", cv=0.2)
     s.add("MV1", "manual_valve", cv=0.2, **valve)
     s.add("AMB", "boundary", fluid="nitrogen", pressure="1 bar")
-    s.connect("TK.port", "V1.in")
+    s.connect("TK.top", "V1.in")
     s.connect("V1.out", "MV1.in")
     s.connect("MV1.out", "AMB.port")
     return s
@@ -30,7 +30,7 @@ def regulated():
     s.add("VOL", "volume", volume="1 L")
     s.add("O1", "orifice", cda="0.5 mm2")
     s.add("AMB", "boundary", fluid="nitrogen", pressure="1 bar")
-    s.connect("TK.port", "REG.in")
+    s.connect("TK.top", "REG.in")
     s.connect("REG.out", "VOL.a")
     s.connect("VOL.b", "O1.in")
     s.connect("O1.out", "AMB.port")

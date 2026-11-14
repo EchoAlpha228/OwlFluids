@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import deque
 
 from ..components import get_type
-from ..fluids.registry import FLUIDS, canonical
+from ..fluids.registry import canonical, is_liquid_name
 
 SOURCES = ("tank", "air_pump", "pneumatic_supply")  # set what they feed, first
 WEAK_SOURCES = ("boundary",)  # a vent takes what flows into it; only fills lines nothing else reaches
@@ -23,13 +23,6 @@ def _fluid(name) -> str | None:
         return None
 
 
-def _liquid_name(name) -> bool:
-    """LOX, LN2, LCH4 or a fluid that is only ever liquid here (water, ethanol)."""
-    raw = str(name or "").strip().lower()
-    f = _fluid(raw)
-    return f is not None and (FLUIDS[f][1] == "liquid" or (raw.startswith("l") and raw[1:] in ("ox", "n2", "ch4")))
-
-
 def _seeds(comp) -> dict[str, tuple[str, bool]]:
     """port -> (fluid, is_gas) for a part that sets its own fluid."""
     t = get_type(comp.type).type_name
@@ -38,15 +31,15 @@ def _seeds(comp) -> dict[str, tuple[str, bool]]:
         out = {}
         if _fluid(prm.get("fluid")):
             out["bottom"] = (_fluid(prm.get("fluid")), False)
-        out["top"] = out["port"] = (_fluid(prm.get("pressurant")), True)
+        out["top"] = (_fluid(prm.get("pressurant")), True)
         return out
     name = prm.get("fluid", "air" if t in ("air_pump",) else None)
     f = _fluid(name)
     if f is None:
         return {}
     if t == "tank" and prm.get("fill") is not None:  # saturated: vapor over liquid
-        return {"top": (f, True), "bottom": (f, False), "port": (f, False)}
-    gas = not _liquid_name(name)
+        return {"top": (f, True), "bottom": (f, False)}
+    gas = not is_liquid_name(name)
     return {p: (f, gas) for p in get_type(comp.type).ports}
 
 

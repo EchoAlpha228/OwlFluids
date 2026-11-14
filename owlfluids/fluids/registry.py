@@ -75,6 +75,16 @@ def canonical(name: str) -> str:
     return ALIASES[key]
 
 
+def is_liquid_name(name) -> bool:
+    """LOX, LN2, LCH4 or a fluid that is only ever liquid here (water, ethanol)."""
+    raw = str(name or "").strip().lower()
+    try:
+        f = canonical(raw) if raw else None
+    except ValueError:
+        return False
+    return f is not None and (FLUIDS[f][1] == "liquid" or (raw.startswith("l") and raw[1:] in ("ox", "n2", "ch4")))
+
+
 @dataclass
 class FluidSet:
     """The fluids one system uses, packed into arrays for the solver kernel."""
