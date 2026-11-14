@@ -123,3 +123,40 @@ def test_saturated_tank_drains_at_dyer_flux(fluid, cpn, t):
     sim.run(0.3)
     expected = _dyer_hem(cpn, t, sim.pressure("TK.bottom"))
     assert sim.mass_flow("O") / 1e-6 == pytest.approx(expected, rel=0.06)
+
+
+def _real_choked_flux(cpn, p0, t0):
+    """Largest rho sqrt(2 (h0 - h)) along the isentrope from (p0, T0): the real choked flux."""
+    import math
+
+    import CoolProp.CoolProp as CP
+    import numpy as np
+
+    h0, s0 = CP.PropsSI("H", "P", p0, "T", t0, cpn), CP.PropsSI("S", "P", p0, "T", t0, cpn)
+    best = 0.0
+    for p in np.linspace(0.2 * p0, 0.9999 * p0, 600):
+        h, d = CP.PropsSI("H", "P", p, "S", s0, cpn), CP.PropsSI("D", "P", p, "S", s0, cpn)
+        best = max(best, d * math.sqrt(max(2 * (h0 - h), 0.0)))
+    return best
+
+
+@pytest.mark.parametrize("fluid,cpn,psia,t", [("nitrous", "NitrousOxide", 800, 300.0),
+                                              ("nitrogen", "Nitrogen", 300, 120.0),
+                                              ("nitrogen", "Nitrogen", 500, 140.0),
+                                              ("nitrogen", "Nitrogen", 5000, 300.0),
+                                              ("methane", "Methane", 3000, 300.0)])
+def test_dense_gas_chokes_at_its_real_flux(fluid, cpn, psia, t):
+    """Choked flow of a dense real gas: cp/cv in the ideal formula read 17 to 42 % high."""
+    s = System("choke")
+    s.add("UP", "boundary", fluid=fluid, pressure=f"{psia} psi", temperature=f"{t} K")
+    s.add("O", "orifice", cda="1 mm2")
+    s.add("VV", "volume", volume="0.1 L", fluid=fluid, pressure="1 atm", temperature=f"{t} K")
+    s.add("O2", "orifice", cda="2000 mm2")
+    s.add("DN", "boundary", fluid=fluid, pressure="1 atm", temperature=f"{t} K")
+    s.connect("UP.port", "O.in")
+    s.connect("O.out", "VV.a")
+    s.connect("VV.b", "O2.in")
+    s.connect("O2.out", "DN.port")
+    sim = Simulation(s)
+    sim.run(0.05)
+    assert sim.mass_flow("O") / 1e-6 == pytest.approx(_real_choked_flux(cpn, psia * PSI, t), rel=0.02)
