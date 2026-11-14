@@ -113,20 +113,23 @@ def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
     sx = sim.net.NI[i_wall, 3] + 2
     assert sim.x[sx] == pytest.approx(293.15)
     sim.open("V1")
-    walls = []
+    walls, tank = [], []
     for _ in range(6):
         sim.run(5.0)
         walls.append(sim.x[sx])
-    flows, quality = [], []
-    for _ in range(20):  # the last 10 s: near-saturated LN2 flashing at the outlet surges a little
+        tank.append(sim.mass("TK"))
+    quality = []
+    for _ in range(20):  # the last 10 s
         sim.run(0.5)
-        flows.append(sim.mass_flow("O1"))
         quality.append(sim.quality("O1.in"))
     walls.append(sim.x[sx])
+    tank.append(sim.mass("TK"))
     assert all(b < a for a, b in zip(walls, walls[1:], strict=False))  # the wall only cools
     assert walls[-1] < 130.0
     assert np.mean(quality) < 0.1  # liquid (or nearly) at the outlet by the end
-    assert np.mean(flows) > 0.14  # the unpressed tank's warm GN2 ullage cools on the LN2 as it blows down
+    # the flow over the last 10 s: the outlet sputters as the liquid flashes, so one sample swings
+    # 0.08-0.21 kg/s; vapor alone would be ~0.03. The unpressed tank's warm GN2 ullage cools on the LN2
+    assert (tank[-2] - tank[-1]) / 10.0 > 0.13
     assert sim.solver_stats()["forced_steps"] < 60  # violent boiling in the first seconds
 
 
