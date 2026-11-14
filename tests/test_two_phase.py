@@ -27,7 +27,7 @@ def _dewar(**kw):
 def test_closed_ln2_dewar_self_pressurizes_along_saturation():
     """With fast condensation at the surface it is the homogeneous (equilibrium) limit."""
     sim = _dewar(condensation_coefficient=1e5)
-    m0 = sim.mass("D")
+    m0 = sim.total_mass()  # the dewar and the line to its shut vent valve
     p_prev = sim.pressure("D")
     for _ in range(3):
         sim.run(60.0)
@@ -36,7 +36,7 @@ def test_closed_ln2_dewar_self_pressurizes_along_saturation():
         assert sim._level("D") == pytest.approx(0.8, abs=0.01)
         assert p == pytest.approx(CP.PropsSI("P", "T", t, "Q", 0, "Nitrogen"), rel=0.02)
         p_prev = p
-    assert sim.mass("D") == pytest.approx(m0, rel=1e-9)
+    assert sim.total_mass() == pytest.approx(m0, rel=1e-9)
     # venting the vapor space drops the pressure and draws vapor, not liquid
     sim.open("V")
     sim.run(10.0)

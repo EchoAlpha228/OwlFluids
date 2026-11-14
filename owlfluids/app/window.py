@@ -393,6 +393,10 @@ class MainWindow(QMainWindow):
                 self.scene.add_component(type_name, centre)
 
     def _selected(self, comp) -> None:
+        if isinstance(comp, tuple):  # a line
+            self.properties.show_line(*comp, self.scene.system, read_only=self.scene.running)
+            self.side_tabs.setCurrentWidget(self.properties)
+            return
         if isinstance(comp, Sensor):
             self.properties.show_sensor(comp, self.scene.system, read_only=self.scene.running)
             self.side_tabs.setCurrentWidget(self.properties)

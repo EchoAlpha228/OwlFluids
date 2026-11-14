@@ -1,23 +1,26 @@
 """Lines, and what a sensor tapped onto one reads.
 
 Sensors are parts of their own: a pressure transducer, thermocouple or flow meter is put
-anywhere on a line and reads what the fluid is doing at that spot. In the model a line has
-no length, friction or volume of its own, so all the lines joining a set of ports are one
-point (a node: a tank's or volume's, or a small junction). Every sensor on those lines reads
-that node's pressure, temperature, density, quality or purge gas.
+anywhere on a line and reads what the fluid is doing at that spot. In the model a line is a
+length of tubing (``length``, inner ``diameter``; the ``line_length`` and ``line_diameter``
+settings by default) whose fluid has inertia: its mass flow is a state of its own, which the
+pressure difference between its ends accelerates (water hammer, the time a line takes to
+get flowing). It has no friction: losses are in the valves, orifices and fittings. The
+fluid it holds sits at its ends, next to the parts it joins. Each end is a point (a node: a
+tank's or volume's, or a small junction at a valve's port); a tee joins the lines on its
+ports into one point.
 
-The mass flow along one line is found by cutting the line there: whatever is on the far side
-takes in exactly what the line carries (a junction holds next to nothing), so it is the sum
-of the flows into the flow elements over there. If a tank or volume is on that side, the near
-side is used instead. A line that is part of a loop of lines has no flow of its own.
+A pressure, temperature, density, quality or purge sensor reads the end of its line it sits
+nearer (with no place of its own, the end at a tank or volume, else the first). A flow meter
+reads the line's own flow. A line of length 0 joins two parts bolted straight together into
+one point: it has no flow of its own, so a meter on it reads the flow element at one of its
+ends.
 
 Some sensors belong to a part rather than to a line, and stay on it: a tank's level, a load
 cell's mass, a valve's position and a wall thermocouple (``PART_TYPES``).
 """
 
 from __future__ import annotations
-
-from collections import defaultdict
 
 from ..components import get_type
 
@@ -58,23 +61,14 @@ class Lines:
     """How the lines of a system join its ports, for working out what a line sensor reads."""
 
     def __init__(self, system):
+        self.system = system
         self.types = {}
         for c in system.components:
             try:
                 self.types[c.id] = get_type(c.type)
             except ValueError:
                 continue
-        self.adj: dict[str, list[tuple[str, int]]] = defaultdict(list)  # port -> [(port, line)]
         self.lines = list(system.connections)
-        for k, (a, b) in enumerate(self.lines):
-            self.adj[a].append((b, k))
-            self.adj[b].append((a, k))
-        for cid, ct in self.types.items():
-            if ct.merges_ports:  # a tee's ports are all one point
-                refs = [f"{cid}.{p}" for p in ct.ports]
-                for r in refs[1:]:
-                    self.adj[refs[0]].append((r, -1))
-                    self.adj[r].append((refs[0], -1))
 
     def index(self, a: str, b: str) -> int | None:
         for k, (x, y) in enumerate(self.lines):
@@ -92,41 +86,24 @@ class Lines:
             return "point"
         return "storage" if ct.category == "Volumes" else "element"
 
-    def _reach(self, start: str, cut: int) -> set[str]:
-        seen = {start}
-        todo = [start]
-        while todo:
-            r = todo.pop()
-            for q, k in self.adj.get(r, ()):
-                if k != cut and q not in seen:
-                    seen.add(q)
-                    todo.append(q)
-        return seen
+    def flow_readable(self, a: str, b: str) -> bool:
+        """Whether a flow meter on line a--b reads a flow: every line with a length carries its
+        own, and one of length 0 reads the flow element at one of its ends."""
+        if self.index(a, b) is None:
+            return False
+        if self.length(a, b) > 0.0:
+            return True
+        return self.kind(a) == "element" or self.kind(b) == "element"
 
-    def sides(self, a: str, b: str) -> tuple[set[str], set[str]] | None:
-        """The ports still joined to each end once line a--b is cut there: (a's, b's).
-        None when the line is part of a loop of lines (or isn't a line of the system)."""
-        k = self.index(a, b)
-        if k is None:
-            return None
-        near = self._reach(a, k)
-        if b in near:
-            return None
-        return near, self._reach(b, k)
+    def length(self, a: str, b: str) -> float:
+        from .. import units
 
-    def flow_side(self, a: str, b: str) -> tuple[set[str], float] | None:
-        """The ports whose flow elements add up to the flow along a--b, from a toward b, and
-        the sign to give the sum of what they take from the line. None if no flow is
-        readable there: the line is in a loop, or has a tank or volume on both sides."""
-        sd = self.sides(a, b)
-        if sd is None:
-            return None
-        near, far = sd
-        if not any(self.kind(r) == "storage" for r in far):
-            return far, 1.0  # all the line carries goes into the far side's elements
-        if not any(self.kind(r) == "storage" for r in near):
-            return near, -1.0  # ... or comes out of the near side's
-        return None
+        spec = self.system.line_spec(a, b)
+        raw = spec["length"] if spec.get("length") is not None else self.system.setting("line_length")
+        try:
+            return units.parse(raw, "length")
+        except ValueError:
+            return 1.0
 
     def flow_order(self, a: str, b: str) -> tuple[str, str]:
         """Which way a flow meter on line a--b reads positive: (from, to).

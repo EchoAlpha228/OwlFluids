@@ -14,22 +14,22 @@ components:
 - {id: INJ, type: orifice, cda: 25 mm2, at: [600, 160]}
 - {id: ATM, type: boundary, fluid: nitrogen, at: [750, 160]}
 connections:
-- [K-N2.top, REG.in]
-- [REG.out, V-P.in]
-- [V-P.out, TK.top]
-- [TK.top, V-V.in]
-- [V-V.out, ATM-V.port]
-- [TK.bottom, V-M.in]
-- [V-M.out, L-F.a]
-- [L-F.b, TEE.a]
-- [TEE.b, INJ.in]
-- [INJ.out, ATM.port]
-- [TEE.d, V-B.in]
-- [V-B.out, ATM-B.port]
+- [K-N2.top, REG.in, {length: 0.3}]
+- [REG.out, V-P.in, {length: 0.5}]
+- [V-P.out, TK.top, {length: 1}]
+- [TK.top, V-V.in, {length: 0.3}]
+- [V-V.out, ATM-V.port, {length: 0}]
+- [TK.bottom, V-M.in, {length: 0.5}]
+- [V-M.out, L-F.a, {length: 0}]
+- [L-F.b, TEE.a, {length: 0}]
+- [TEE.b, INJ.in, {length: 0.3}]
+- [INJ.out, ATM.port, {length: 0}]
+- [TEE.d, V-B.in, {length: 0.3}]
+- [V-B.out, ATM-B.port, {length: 0}]
 sensors:
 - {id: PT-TK, type: pressure, line: [V-P.out, TK.top], units: psi}
-- {id: PT-INJ, type: pressure, line: [TEE.b, INJ.in], units: psi}
-- {id: TC-INJ, type: temperature, line: [TEE.b, INJ.in], units: F}
+- {id: PT-INJ, type: pressure, line: [TEE.b, INJ.in], along: 1.0, units: psi}
+- {id: TC-INJ, type: temperature, line: [TEE.b, INJ.in], along: 1.0, units: F}
 - {id: TC-LINE, type: wall_temperature, at: L-F, units: F}
 - {id: FM-LN2, type: mass_flow, line: [V-M.out, L-F.a], units: kg/s}
 - {id: M-LN2, type: mass, at: TK, units: kg}

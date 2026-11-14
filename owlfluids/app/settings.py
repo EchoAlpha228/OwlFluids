@@ -22,9 +22,11 @@ class SettingsDialog(QDialog):
         form.addRow("name", self.name)
         self.fields = {}
         for key, dim in (("dt", "time"), ("initial_pressure", "pressure"), ("initial_temperature", "temperature"),
-                         ("junction_volume", "volume")):
+                         ("junction_volume", "volume"), ("line_length", "length"), ("line_diameter", "length")):
             ed = QLineEdit(str(system.setting(key)))
-            ed.setToolTip(f"default: {DEFAULT_SETTINGS[key]}; units accepted, e.g. {UNIT_EXAMPLES[dim]}")
+            ed.setToolTip(f"default: {DEFAULT_SETTINGS[key]}; units accepted, e.g. {UNIT_EXAMPLES[dim]}"
+                          + ("; auto: the largest bore of the parts at a line's ends" if key == "line_diameter"
+                             else "; each line can have its own (select it)" if key == "line_length" else ""))
             self.fields[key] = (ed, dim)
             form.addRow(LABELS.get(key, key.replace("_", " ")), ed)
         self.backend = QComboBox()
@@ -55,7 +57,9 @@ class SettingsDialog(QDialog):
         form.addRow(bb)
 
     def _ok(self) -> None:
-        for ed, dim in self.fields.values():
+        for key, (ed, dim) in self.fields.items():
+            if key == "line_diameter" and ed.text().strip().lower() == "auto":
+                continue
             try:
                 units.parse(ed.text(), dim)
             except (ValueError, TypeError) as e:

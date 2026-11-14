@@ -505,7 +505,7 @@ class ReliefValve(ComponentType):
             b.vent_port(comp, "out")
         if b.port_open(comp, "in"):
             b.warnings.append(f"{comp.id}: nothing is connected to its inlet, so it never relieves anything")
-        up = b.net_node.get(b.net_of[(comp.id, "in")])
+        up = b.across(comp, "in")
         if up is not None and b.nodes[up].kind == NODE_BOUNDARY and b.nodes[up].bp <= 1.5 * units.ATM:
             b.warnings.append(f"{comp.id}: its inlet is on the vent {b.nodes[up].owner}, and it only relieves from "
                               "inlet to outlet; swap its ends so the inlet faces what it protects")

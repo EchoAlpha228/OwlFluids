@@ -38,8 +38,8 @@ from ..fluids.registry import (
 )
 from ..io.system import System
 from . import layout as L
-from .lines import Lines
 
+LINE_DIAMETER_MIN = 0.0046  # m, the bore of 1/4 in tubing: the smallest line "auto" sizes
 GAS_TRACE = 1e-6  # least gas partial pressure (as a share of the total) a liquid node starts its solve from
 
 
@@ -85,7 +85,8 @@ class _Link:
     valve: tuple | None = None
     air: tuple | None = None  # pneumatic actuator: (its valve link, volume, normally open)
     reg: tuple = (0.0, 0.0, 0.0, 0.0)  # regulator lockup rise, seat leak, supply effect, droop reset rate
-    nets: tuple = (-1, -1)  # the nets (connected ports) its ends are on; -1 for an end no port reaches
+    nets: tuple = (-1, -1)  # the points (ports a tee joins) its ends are on; -1 for an end no port reaches
+    area: float = 0.0  # a line's flow area
 
 
 @dataclass
@@ -188,13 +189,29 @@ class NetworkBuilder:
             if ct.merges_ports:
                 for p in ct.ports[1:]:
                     union((c.id, ct.ports[0]), (c.id, p))
+        # each connection is a line between two points, which it keeps apart (see _add_lines);
+        # one of length 0 joins parts bolted straight together into one point
+        self.line_ends = []
+        self.connected = set()
         for a, b in self.system.connections:
             pa, pb = self._port(a, comps), self._port(b, comps)
-            union(pa, pb)
+            self.connected |= {pa, pb}
+            if self._line_length(a, b) == 0.0:
+                union(pa, pb)
+            else:
+                self.line_ends.append((pa, pb, a, b))
         roots: dict[tuple[str, str], int] = {}
         for p in parent:
             r = find(p)
             self.net_of[p] = roots.setdefault(r, len(roots))
+
+    def _line_length(self, a: str, b: str) -> float:
+        spec = self.system.line_spec(a, b)
+        raw = spec["length"] if spec.get("length") is not None else self.system.setting("line_length")
+        length = units.parse(raw, "length")
+        if length < 0.0:
+            raise BuildError(f"the line {a} -- {b} has a negative length")
+        return length
 
     @staticmethod
     def _port(ref: str, comps) -> tuple[str, str]:
@@ -253,15 +270,24 @@ class NetworkBuilder:
         if net in self.net_node and self.net_node[net] != node:
             other = self.nodes[self.net_node[net]].owner
             raise BuildError(
-                f"{comp.id}.{port} and {other} are connected directly, but both are volumes; "
-                "put a valve, orifice or fitting between them")
+                f"{comp.id}.{port} and {other} are joined by a line of length 0, but both are volumes; "
+                "give the line a length, or put a valve, orifice or fitting between them")
         self.net_node[net] = node
         self.net_draw[net] = draw
 
     def port_open(self, comp, port) -> bool:
         """Whether nothing is connected to this port."""
         net = self.net_of[(comp.id, port)]
-        return sum(1 for n in self.net_of.values() if n == net) == 1
+        return not any(p in self.connected for p, n in self.net_of.items() if n == net)
+
+    def across(self, comp, port) -> int | None:
+        """The node at the far end of the (first) line on this port, if it has one yet."""
+        net = self.net_of[(comp.id, port)]
+        for pa, pb, _, _ in self.line_ends:
+            for here, there in ((pa, pb), (pb, pa)):
+                if self.net_of[here] == net and self.net_of[there] != net:
+                    return self.net_node.get(self.net_of[there])
+        return None
 
     def vent_port(self, comp, port) -> None:
         """Let an unconnected port vent to the atmosphere (the fluid it vents is whatever reaches it)."""
@@ -274,7 +300,9 @@ class NetworkBuilder:
         self.vented.add((comp.id, port))
 
     def port_node(self, comp, port) -> int:
-        net = self.net_of[(comp.id, port)]
+        return self._net_node(self.net_of[(comp.id, port)])
+
+    def _net_node(self, net) -> int:
         if net not in self.net_node:
             j = _Node(f"J{net}", L.NODE_VOLUME, None, 0.0, None, "")
             self.nodes.append(j)
@@ -364,6 +392,68 @@ class NetworkBuilder:
         if assumed:
             self.assumed_pneumatic[self.nodes[supply].owner].append(comp.id)
 
+    def _bore(self, lk) -> float:
+        """The bore of the line a flow element sits in: its own diameter when it has one (a
+        fitting's is its line's), else twice the bore of its Cd*A: a valve or orifice
+        restricts the line it is in."""
+        if lk.owner:
+            comp = self.system.component(lk.owner)
+            ct = get_type(comp.type)
+            if any(p.name == "diameter" for p in ct.params):
+                d = ct.param(comp, "diameter")
+                if d:
+                    return float(d)
+        return 2.0 * (4.0 * lk.cda / math.pi) ** 0.5
+
+    def _line_size(self, pa, pb) -> float:
+        """A line's inner diameter for line_diameter "auto": plumbing is sized to its valves and
+        fittings, so the largest bore of those at either end (through tees), and never under
+        1/4 in tubing."""
+        ends = {self.net_of[pa], self.net_of[pb]}
+        # a tee passes its lines' size on: the elements one line further on count too
+        for qa, qb, _, _ in self.line_ends:
+            na, nb = self.net_of[qa], self.net_of[qb]
+            for here, there in ((na, nb), (nb, na)):
+                if here in ends and self.nodes[self.net_node[here]].owner == "" and not any(
+                        here in lk.nets for lk in self.links):
+                    ends = ends | {there}
+        bore = max((self._bore(lk) for lk in self.links if lk.ctrl not in (L.CTRL_LINE, L.CTRL_AIR, L.CTRL_PUMP)
+                    and set(lk.nets) & ends), default=0.0)
+        return max(bore, LINE_DIAMETER_MIN)
+
+    def _add_lines(self) -> None:
+        """A link for every line, carrying its own mass flow: the fluid in a line has inertia.
+
+        The fluid the line holds is put in the junctions at its ends that are not tanks,
+        volumes or boundaries (shared when both are): next to a valve, where a valve
+        shutting on a moving column of liquid stops it against that volume. With the whole
+        line's volume there, the surge is the Joukowsky rho*c*v.
+        """
+        dia_setting = self.system.setting("line_diameter")
+        for pa, pb, ra, rb in self.line_ends:
+            na, nb = self.net_of[pa], self.net_of[pb]
+            if na == nb:
+                continue  # two ports of one tee
+            spec = self.system.line_spec(ra, rb)
+            length = self._line_length(ra, rb)
+            if spec.get("diameter") is not None:
+                dia = units.parse(spec["diameter"], "length")
+            elif str(dia_setting).strip().lower() == "auto":
+                dia = self._line_size(pa, pb)
+            else:
+                dia = units.parse(dia_setting, "length")
+            if not dia > 0.0:
+                raise BuildError(f"the line {ra} -- {rb} needs a diameter above zero")
+            area = math.pi * dia * dia / 4.0
+            a, b = self._net_node(na), self._net_node(nb)
+            junctions = [net for net, i in ((na, a), (nb, b)) if self.nodes[i].owner == ""]
+            for net in junctions:
+                self.net_volume[net] += area * length / len(junctions)
+            lk = _Link(f"{ra} -- {rb}", a, b, "", cda=area / length, ctrl=L.CTRL_LINE,
+                       draw_a=self.net_draw.get(na, L.DRAW_MIX), draw_b=self.net_draw.get(nb, L.DRAW_MIX),
+                       nets=(na, nb), area=area)
+            self.links.append(lk)
+
     # ---- build
     def build(self) -> Network:
         sysm = self.system
@@ -382,6 +472,7 @@ class NetworkBuilder:
                 raise
             except (ValueError, KeyError, TypeError) as e:
                 raise BuildError(f"{c.id}: {e}") from None
+        self._add_lines()
         for supply, valves in self.assumed_pneumatic.items():
             self.warnings.append(f"{supply} runs {', '.join(valves)} as pneumatic valves; set actuator: solenoid "
                                  "on any that are direct-acting")
@@ -402,7 +493,7 @@ class NetworkBuilder:
                                  "above it: set a pressurant (such as air or nitrogen) and a pressure")
         self._resolve_tank_liquids(fs)
         if self.system.setting("prime_lines"):
-            self._prime_lines()
+            self._prime_lines(fs)
         for i, p_start in self.air_stroke.items():
             n = self.nodes[i]
             if n.kind == L.NODE_BOUNDARY:
@@ -602,7 +693,8 @@ class NetworkBuilder:
             sb = {nb.fluid} | ({nb.gas} if nb.gas else set())
             others = (sa | sb) - set(PURGE_GASES)
             if len(others) > 1:
-                raise BuildError(f"{lk.owner} connects {na.fluid} to {nb.fluid}; lines may carry one fluid "
+                what = lk.owner or f"the line {lk.name}"
+                raise BuildError(f"{what} connects {na.fluid} to {nb.fluid}; lines may carry one fluid "
                                  f"plus one purge gas ({purge_list})")
             for n, s_self, s_other in ((na, sa, sb), (nb, sb, sa)):
                 if n is na and k in one_way:
@@ -674,6 +766,21 @@ class NetworkBuilder:
         for j, outs in fwd.items():
             for i in outs:
                 into[i].append(j)
+
+        def sources(i):
+            """What can flow into node i, and from where: (fluid, source node) for every node
+            that sets its fluid and reaches i along the way flow can go (not through i)."""
+            out, seen, todo = [], {i}, list(into[i])
+            while todo:
+                j = todo.pop()
+                if j in seen:
+                    continue
+                seen.add(j)
+                if j in src:
+                    out.append((src[j], j))
+                else:
+                    todo.extend(into[j])
+            return out
         for i, n in enumerate(self.nodes):
             if (n.kind != L.NODE_VOLUME or not n.init or n.init[0] not in ("satvap", "pt") or n.gas
                     or types.get(n.owner) != "tank"):
@@ -693,21 +800,17 @@ class NetworkBuilder:
                 p = self.p_init if n.init[1] is None else n.init[1]
                 t = self.t_init if n.init[2] is None else n.init[2]
                 kind = "liquid" if liquid_at(f, p, t) else "gas"
-            gases = set()
-            for j in into[i]:
-                came = [(src[j], j)] if j in src else [(g, s) for g, (_d, s) in flows.get(j, {}).items()]
-                gases |= {g for g, s in came if g in PURGE_GASES and (g != n.fluid or kind != "gas")
-                          and gas_source_p(s, g) > p + 0.5 * units.ATM}
+            came = sources(i)
+            gases = {g for g, s in came if g in PURGE_GASES and (g != n.fluid or kind != "gas")
+                     and gas_source_p(s, g) > p + 0.5 * units.ATM}
             if kind == "gas" and n.partner < 0 and n.fluid in PURGE_GASES:
                 # an "empty" tank of air or nitrogen that a liquid can be filled into: the
                 # liquid collects at the bottom under the gas, which it compresses
                 liquids = {}
-                for j in into[i]:
-                    came = [(src[j], j)] if j in src else [(g, s) for g, (_d, s) in flows.get(j, {}).items()]
-                    for g, s in came:
-                        t_l = liquid_source_t(s, g)
-                        if g not in PURGE_GASES and t_l is not None:
-                            liquids[g] = t_l
+                for g, s in came:
+                    t_l = liquid_source_t(s, g)
+                    if g not in PURGE_GASES and t_l is not None:
+                        liquids[g] = t_l
                 if liquids:
                     liq = sorted(liquids)[0]
                     self.pressed[n.owner] = (liq, "empty", liquids[liq])
@@ -728,7 +831,7 @@ class NetworkBuilder:
                 self.warnings = [w for w in self.warnings if not w.startswith(f"{n.owner} holds only")]
                 self.warnings.append(f"{n.owner}: {gas} can be pushed into its {n.fluid}, so {where} a mix of both")
 
-    def _prime_lines(self) -> None:
+    def _prime_lines(self, fs: FluidSet) -> None:
         """Start lines in equilibrium with the tank or volume they are open to.
 
         Every node without its own initial state takes the state of the nearest
@@ -746,6 +849,11 @@ class NetworkBuilder:
         def source_state(i, draw):
             n = self.nodes[i]
             if n.kind == L.NODE_BOUNDARY:
+                f = fs.names.index(n.fluid)
+                if n.phase in ("liquid", "vapor") and fs.models[f] == "table" and n.bt < fs.critical_temperature(f):
+                    psat = fs.saturation_pressure(f, n.bt)
+                    if abs(n.bp - psat) <= 1e-6 * psat:  # on its saturation line: the phase it supplies
+                        return ("saturated", n.bt, None, 1.0 if n.phase == "liquid" else 0.0)
                 return ("pt", n.bp, n.bt)
             if n.init[0] == "tank_liquid":
                 if n.sat:  # saturated liquid: a line on it starts full of that liquid
@@ -761,7 +869,7 @@ class NetworkBuilder:
                 # a regulated line sits locked up at its setpoint (gas sources only)
                 adj[lk.a].append((lk.b, lk.draw_a, lk.p1))
                 continue
-            if lk.ctrl != L.CTRL_FIXED:
+            if lk.ctrl not in (L.CTRL_FIXED, L.CTRL_LINE):
                 if lk.ctrl != L.CTRL_VALVE or not lk.valve or lk.valve[0] <= 0.0:
                     continue
             adj[lk.a].append((lk.b, lk.draw_a, None))
@@ -807,6 +915,7 @@ class NetworkBuilder:
         xscale: list[float] = []
         # mixed nodes: the state their first solves start from (see kernel._mixed_one)
         mix_init = np.zeros((nn, 4))
+        rho0 = np.zeros(nn)  # starting density of each node, to scale the lines' flows by
         for i, n in enumerate(self.nodes):
             f = used.index(n.fluid)
             NI[i, L.N_KIND] = n.kind
@@ -821,6 +930,7 @@ class NetworkBuilder:
                 NI[i, L.N_SX] = -1
                 rho, u = self._boundary_state(fs, f, n)
                 NF[i, L.NF_BP], NF[i, L.NF_BT], NF[i, L.NF_BRHO], NF[i, L.NF_BU] = n.bp, n.bt, rho, u
+                rho0[i] = rho
                 continue
             if n.gas and n.gas_fill:
                 # starts full of purge gas, with a trace of the line's own fluid at the same state
@@ -854,6 +964,7 @@ class NetworkBuilder:
                 # volume pumped down to vacuum cannot be driven to negative mass
                 NF[i, L.NF_MREF] = max(vol, 1e-9) * 0.01
             m_full = m
+            rho0[i] = rho
             e = m * u
             if n.gas:
                 g = used.index(n.gas)
@@ -884,7 +995,12 @@ class NetworkBuilder:
         LF = np.zeros((nl, L.N_LF))
         LV = np.zeros((nl, L.N_V))
         for k, lk in enumerate(self.links):
-            LI[k] = (lk.a, lk.b, lk.draw_a, lk.draw_b, lk.ctrl)
+            LI[k] = (lk.a, lk.b, lk.draw_a, lk.draw_b, lk.ctrl, -1)
+            if lk.ctrl == L.CTRL_LINE:
+                # its flow starts at rest; scaled by the flow at 1 m/s
+                LI[k, L.L_SX] = len(x0)
+                x0.append(0.0)
+                xscale.append(max(0.5 * (rho0[lk.a] + rho0[lk.b]) * lk.area, 1e-9))
             LF[k, :L.LF_PREF] = (lk.cda, lk.p1, lk.p2, *lk.reg[:3])
             LF[k, L.LF_RESET] = lk.reg[3]
             LV[k, L.V_AIR] = -1.0
@@ -930,49 +1046,56 @@ class NetworkBuilder:
                                  f"{'vapor' if n.bp < psat else 'liquid'}, not {n.phase}")
         return fs.rho_u_from_pt(f, n.bp, n.bt)
 
+    def _lines_at(self, net) -> list[tuple[int, float]]:
+        """The lines on a point, each with the sign that makes its flow positive out of that point."""
+        return [(k, 1.0 if lk.nets[0] == net else -1.0) for k, lk in enumerate(self.links)
+                if lk.ctrl == L.CTRL_LINE and net in lk.nets]
+
     def _port_flows(self) -> dict[str, list[tuple[int, float]]]:
         """How to read the flow along the line at each port, for mass flow sensors on lines.
 
         At a flow element's port (valve, orifice, regulator, fitting, pump) it is the element's
         own flow, positive in to out. At a tank's or volume's port it is the flow leaving the
-        part there: every flow element on that port's net, outward positive. A tee's ports
-        are all one point, so no flow belongs to one of them.
+        part there: the lines on that port, outward positive. A tee's ports are all one point,
+        so no flow belongs to one of them.
         """
-        on_net: dict[int, list[int]] = defaultdict(list)
-        for k, lk in enumerate(self.links):
-            for net in set(lk.nets) - {-1}:
-                on_net[net].append(k)
         comps = {c.id: get_type(c.type) for c in self.system.components}
+        on_net: dict[int, list[int]] = defaultdict(list)  # flow elements joined straight on (length 0)
+        for k, lk in enumerate(self.links):
+            if lk.ctrl != L.CTRL_LINE:
+                for net in set(lk.nets) - {-1}:
+                    on_net[net].append(k)
         out = {}
         for (cid, port), net in self.net_of.items():
             own = [k for k in self.comp_links.get(cid, []) if net in self.links[k].nets]
             if own:
                 out[f"{cid}.{port}"] = [(own[0], 1.0)]
+            elif not comps[cid].merges_ports and self._lines_at(net):
+                out[f"{cid}.{port}"] = self._lines_at(net)
             elif not comps[cid].merges_ports and on_net.get(net):
                 out[f"{cid}.{port}"] = [(k, 1.0 if self.links[k].nets[0] == net else -1.0) for k in on_net[net]]
         return out
 
     def _line_flows(self) -> dict[tuple[str, str], list[tuple[int, float]] | None]:
-        """How to read the flow along each line, for flow meters placed on it (see core/lines.py)."""
-        lines = Lines(self.system)
-        taken: dict[str, list[tuple[int, float]]] = defaultdict(list)  # port -> what its elements take from it
-        for k, lk in enumerate(self.links):
-            ct = get_type(self.system.component(lk.owner).type) if lk.owner else None
-            if ct is None:
-                continue
-            for port in ct.ports:
-                net = self.net_of.get((lk.owner, port))
-                if net is None or net not in lk.nets or lk.nets[0] == lk.nets[1]:
-                    continue
-                taken[f"{lk.owner}.{port}"].append((k, 1.0 if lk.nets[0] == net else -1.0))
+        """How to read the flow along each line from a to b: its own flow (see core/lines.py)."""
+        own = {lk.name: k for k, lk in enumerate(self.links) if lk.ctrl == L.CTRL_LINE}
+        ports = self._port_flows()
         out = {}
         for a, b in self.system.connections:
-            side = lines.flow_side(a, b)
-            if side is None:
-                out[(a, b)] = None
+            k = own.get(f"{a} -- {b}")
+            if k is not None:
+                out[(a, b)] = [(k, 1.0)]
                 continue
-            ports, sign = side
-            out[(a, b)] = [(k, sign * g) for r in sorted(ports) for k, g in taken.get(r, ())]
+            # a line of length 0 is no line of its own: what the flow element at one end passes
+            out[(a, b)] = None
+            for ref, sign in ((a, -1.0), (b, 1.0)):
+                cid, port = ref.rsplit(".", 1)
+                terms = ports.get(ref)
+                if terms and any(self.links[t].owner == cid for t, _ in terms):
+                    first = port == get_type(self.system.component(cid).type).ports[0]
+                    # positive from a to b: into the element's inlet at b, out of its outlet at a
+                    out[(a, b)] = [(t, g * (sign if first else -sign)) for t, g in terms]
+                    break
         return out
 
     def _initial_state(self, fs: FluidSet, f: int, n: _Node) -> tuple[float, float, float]:
@@ -1070,6 +1193,8 @@ def _structure(net: Network) -> None:
     for k in range(LI.shape[0]):
         a, b = int(LI[k, L.L_A]), int(LI[k, L.L_B])
         s = [st for g in group(a) + group(b) for st in node_states(g)]
+        if LI[k, L.L_SX] >= 0:  # a line's flow moves its ends, and their pressures drive it
+            s.append(int(LI[k, L.L_SX]))
         mark(s, s)
     for i in range(n):
         entries.add((i, i))
@@ -1106,10 +1231,14 @@ def _structure(net: Network) -> None:
     net.kl = net.ku = bw
 
     # owner node of each state and the links at each node, for the incremental Jacobian
+    # (a line's flow state belongs to the line: -1 - its link)
     sowner = np.zeros(n, dtype=np.int64)
     for i in range(NI.shape[0]):
         for st in node_states(i):
             sowner[st] = i
+    for k in range(LI.shape[0]):
+        if LI[k, L.L_SX] >= 0:
+            sowner[LI[k, L.L_SX]] = -1 - k
     adj: list[list[int]] = [[] for _ in range(NI.shape[0])]
     for k in range(LI.shape[0]):
         adj[int(LI[k, L.L_A])].append(k)

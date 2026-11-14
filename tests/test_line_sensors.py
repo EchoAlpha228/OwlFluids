@@ -47,23 +47,41 @@ def test_flow_meters_read_the_flow_along_their_line_wherever_they_sit():
     sim.run(0.5)
     o1, o2, v = sim.mass_flow("O1"), sim.mass_flow("O2"), sim.mass_flow("V")
     assert o1 > 0.01 and o2 > 1.5 * o1
-    assert sim.read("F_V") == pytest.approx(v, rel=1e-9)
-    assert sim.read("F_TT") == pytest.approx(o1, rel=1e-9)  # no flow element at either end, still read
-    assert sim.read("F_O2") == pytest.approx(o2, rel=1e-9)
-    assert sim.read("F_BACK") == pytest.approx(-o1, rel=1e-9)
-    assert sim.read("F_V") == pytest.approx(sim.read("F_TT") + sim.read("F_O2"), rel=1e-3)  # mass balance
-    # lines have no friction of their own: all the lines joining the tees are one point
-    assert sim.read("P_TT") == sim.read("P_V") == sim.pressure("TEE1.a")
+    # every line carries its own flow; with the bottle blowing down slowly, it is what the
+    # elements at its ends pass, less what the line's ends take up as the pressure falls
+    assert sim.read("F_V") == sim.mass_flow("K.top -- V.in") == pytest.approx(v, rel=0.01)
+    assert sim.read("F_TT") == pytest.approx(o1, rel=0.01)  # no flow element at either end, still read
+    assert sim.read("F_O2") == pytest.approx(o2, rel=0.01)
+    assert sim.read("F_BACK") == -sim.read("F_TT")
+    assert sim.read("F_V") == pytest.approx(sim.read("F_TT") + sim.read("F_O2"), rel=0.01)  # mass balance
+    # lines have no friction: the pressure at their two ends differs only while they get flowing
+    assert sim.read("P_TT") == sim.pressure("TEE1.a")  # reads the end it sits at (the first, with no place)
+    assert sim.read("P_V") == sim.pressure("V.out")
+    assert sim.read("P_TT") == pytest.approx(sim.read("P_V"), rel=0.01)
     assert not any("reads nothing" in w for w in sim.net.warnings)
 
 
-def test_a_line_in_a_loop_has_no_flow_of_its_own():
-    s = _branches(F_LOOP=("mass_flow", ("TEE1.b", "TEE2.a")), P_LOOP=("pressure", ("TEE1.b", "TEE2.a")))
-    s.connect("TEE1.d", "TEE2.c")  # a second line between the tees: the two share the flow somehow
-    assert Lines(s).flow_side("TEE1.b", "TEE2.a") is None
+def test_a_line_in_a_loop_has_a_flow_of_its_own():
+    s = _branches(F_LOOP=("mass_flow", ("TEE1.b", "TEE2.a")), F_OTHER=("mass_flow", ("TEE1.d", "TEE2.c")))
+    s.connect("TEE1.d", "TEE2.c")  # a second line between the tees: the two share the flow
     sim = Simulation(s, step_budget=200)
-    assert math.isnan(sim.read("F_LOOP")) and math.isfinite(sim.read("P_LOOP"))
-    assert any("F_LOOP reads nothing" in w and "loop" in w for w in sim.net.warnings)
+    sim.open("V")
+    sim.run(0.5)
+    a, b = sim.read("F_LOOP"), sim.read("F_OTHER")
+    assert a > 0 and b > 0 and a + b == pytest.approx(sim.mass_flow("O1"), rel=0.01)
+    assert a == pytest.approx(b, rel=0.01)  # two lines alike take half each
+
+
+def test_a_line_of_length_zero_reads_the_element_at_its_end():
+    s = _branches(F_O1=("mass_flow", ("O1.out", "A1.port")), F_IN=("mass_flow", ("V.in", "K.top")))
+    s.line_specs["O1.out -- A1.port"] = {"length": 0}
+    s.line_specs["K.top -- V.in"] = {"length": "0 m"}
+    sim = Simulation(s, step_budget=200)
+    sim.open("V")
+    sim.run(0.2)
+    assert "O1.out -- A1.port" not in sim.net.link_names
+    assert sim.read("F_O1") == sim.mass_flow("O1") > 0
+    assert sim.read("F_IN") == -sim.mass_flow("V")  # read from the valve's inlet toward the bottle
 
 
 def test_a_sensor_on_no_line_reads_nothing():
@@ -106,8 +124,9 @@ def test_old_files_read_the_same_once_their_sensors_are_on_lines():
     sim.run(0.5)
     v = sim.mass_flow("V-M")
     assert v > 0.5
-    assert sim.read("FM-LOX") == pytest.approx(v) and sim.read("FM-OUT") == pytest.approx(v, rel=0.05)
-    assert sim.read("FM-IN") == pytest.approx(v)
+    # the meters read the lines, which carry what the valve passes, less what they take up
+    assert sim.read("FM-LOX") == pytest.approx(v, rel=0.01) and sim.read("FM-OUT") == pytest.approx(v, rel=0.05)
+    assert sim.read("FM-IN") == pytest.approx(v, rel=0.01)
     assert sim.read("PT-INJ") == sim.pressure("INJ.in") and sim.read("PT-TK") == sim.pressure("TK.top")
     again = System.from_dict(s.to_dict())
     assert not again.notes and [x.line for x in again.sensors] == [x.line for x in s.sensors]
