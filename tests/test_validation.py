@@ -40,3 +40,41 @@ def test_dead_headed_liquid_line_equalizes(fluid, t, vol):
     sim.run(0.45)
     assert abs(sim.mass_flow("TUBE")) < 1e-4
     assert (sim.pressure("L") - ATM) / PSI == pytest.approx(500.0, abs=0.05)
+
+
+@pytest.mark.parametrize("psia", [2400, 4500])
+def test_helium_bottle_holds_its_real_mass(psia):
+    """A 49 L helium bottle: helium is 8 % denser than ideal at 2,400 psia and 15 % at 4,500 (NIST)."""
+    import CoolProp.CoolProp as CP
+
+    s = System("bottle")
+    s.add("K", "tank", fluid="helium", volume="49 L", pressure=f"{psia} psi", temperature="293.15 K")
+    s.add("O", "orifice", cda="1 mm2")
+    s.add("A", "boundary", fluid="helium")
+    s.connect("K.top", "O.in")
+    s.connect("O.out", "A.port")
+    sim = Simulation(s)
+    expected = CP.PropsSI("D", "P", psia * PSI, "T", 293.15, "Helium") * 0.049
+    assert sim.mass("K") == pytest.approx(expected, rel=0.005)
+
+
+def test_helium_warms_through_a_regulator():
+    """Helium is above its inversion temperature: 3,000 to 500 psig isenthalpic warms it 10.6 K."""
+    import CoolProp.CoolProp as CP
+
+    s = System("reg")
+    s.add("SUP", "boundary", fluid="helium", pressure="3000 psi", temperature="293.15 K")
+    s.add("R", "regulator", cv=0.2, setpoint="500 psig", droop_on="off")
+    s.add("V", "volume", volume="1 L", fluid="helium", pressure="1 atm", temperature="293.15 K")
+    s.add("O", "orifice", cda="2 mm2")
+    s.add("A", "boundary", fluid="helium")
+    s.connect("SUP.port", "R.in")
+    s.connect("R.out", "V.a")
+    s.connect("V.b", "O.in")
+    s.connect("O.out", "A.port")
+    sim = Simulation(s)
+    sim.run(10.0)
+    h = CP.PropsSI("H", "P", 3000 * PSI, "T", 293.15, "Helium")
+    t_jt = CP.PropsSI("T", "P", sim.pressure("V"), "H", h, "Helium")
+    assert t_jt - 293.15 > 10.0
+    assert sim.temperature("V") == pytest.approx(t_jt, abs=1.0)
