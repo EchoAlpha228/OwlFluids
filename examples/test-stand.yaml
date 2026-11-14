@@ -121,11 +121,11 @@ connections:
 - [V-P4.out, CK-P4.in]
 - [CK-P4.out, CH-FU.c]
 sensors:
-- {id: PT-HP, type: pressure, at: MAN-HP.a, units: psi}
-- {id: PT-OX, type: pressure, at: TK-OX.top, units: psi}
-- {id: PT-FU, type: pressure, at: TK-FU.top, units: psi}
-- {id: PT-OXI, type: pressure, at: INJ-OX.in, units: psi}
-- {id: PT-FUI, type: pressure, at: INJ-FU.in, units: psi}
-- {id: TC-OX, type: temperature, at: TK-OX.bottom}
-- {id: FM-OX, type: mass_flow, at: V-OXM}
-- {id: FM-FU, type: mass_flow, at: V-FUM}
+- {id: PT-HP, type: pressure, line: [V-K1.out, MAN-HP.a], units: psi}
+- {id: PT-OX, type: pressure, line: [TEE-OXU.b, TK-OX.top], units: psi}
+- {id: PT-FU, type: pressure, line: [TEE-FUU.b, TK-FU.top], units: psi}
+- {id: PT-OXI, type: pressure, line: [F-OXF2.out, INJ-OX.in], units: psi}
+- {id: PT-FUI, type: pressure, line: [F-FUF2.out, INJ-FU.in], units: psi}
+- {id: TC-OX, type: temperature, line: [TK-OX.bottom, F-OXF1.in]}
+- {id: FM-OX, type: mass_flow, line: [V-OXM.out, F-OXF2.in]}
+- {id: FM-FU, type: mass_flow, line: [V-FUM.out, F-FUF2.in]}

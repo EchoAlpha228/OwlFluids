@@ -101,14 +101,14 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
 
     _place(s, n_purge)
 
-    s.sense("PT-HP", "pressure", "MAN-HP.a", units="psi")
-    s.sense("PT-OX", "pressure", "TK-OX.top", units="psi")
-    s.sense("PT-FU", "pressure", "TK-FU.top", units="psi")
-    s.sense("PT-OXI", "pressure", "INJ-OX.in", units="psi")
-    s.sense("PT-FUI", "pressure", "INJ-FU.in", units="psi")
-    s.sense("TC-OX", "temperature", "TK-OX.bottom")
-    s.sense("FM-OX", "mass_flow", "V-OXM")
-    s.sense("FM-FU", "mass_flow", "V-FUM")
+    s.sense("PT-HP", "pressure", line=("V-K1.out", "MAN-HP.a"), units="psi")
+    s.sense("PT-OX", "pressure", line=("TEE-OXU.b", "TK-OX.top"), units="psi")
+    s.sense("PT-FU", "pressure", line=("TEE-FUU.b", "TK-FU.top"), units="psi")
+    s.sense("PT-OXI", "pressure", line=("F-OXF2.out", "INJ-OX.in"), units="psi")
+    s.sense("PT-FUI", "pressure", line=("F-FUF2.out", "INJ-FU.in"), units="psi")
+    s.sense("TC-OX", "temperature", line=("TK-OX.bottom", "F-OXF1.in"))
+    s.sense("FM-OX", "mass_flow", line=("V-OXM.out", "F-OXF2.in"))
+    s.sense("FM-FU", "mass_flow", line=("V-FUM.out", "F-FUF2.in"))
     return s
 
 

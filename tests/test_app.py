@@ -9,7 +9,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 pytest.importorskip("pyqtgraph")
 
+from PySide6.QtCore import QPointF  # noqa: E402
+
 from owlfluids.app.window import MainWindow  # noqa: E402
+from owlfluids.io.system import System  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -164,12 +167,10 @@ def test_sensors_on_lines(app):
     p = sc.add_line_sensor(wire, "pressure")
     q = sc.add_line_sensor(wire, "mass_flow")
     assert (p.id, q.id) == ("OPT-1", "OFM-1")  # oxidizer pressure and flow
-    assert q.at in ("V-M.out", "INJ.in")  # a flow element's end
-    assert set(sc.sensor_items) >= {"OPT-1", "OFM-1", "PT-TK"}  # sensors at a port already show on its line
+    assert q.line == ("V-M.out", "INJ.in")  # positive the way the valve passes fluid
+    assert set(sc.sensor_items) >= {"OPT-1", "OFM-1", "PT-TK"}
     a, b = sc.sensor_items["OPT-1"].pos(), sc.sensor_items["OFM-1"].pos()
-    assert a != b and a.y() == b.y()  # spread along the line, above it
-    tee_line = sc.line_sensor_end
-    assert tee_line(wire, "temperature") is not None
+    assert a != b and a.y() == b.y()  # kept clear of each other, above the line
     w.run()
     deadline = time.time() + 60
     while w.runner is None and time.time() < deadline:
@@ -188,8 +189,49 @@ def test_sensors_on_lines(app):
     assert "OPT-1" not in [s.id for s in sc.system.sensors] and "OPT-1" not in sc.sensor_items
     sc.clearSelection()
     wire.setSelected(True)
-    sc.delete_selected()  # the line's sensors go with it
-    assert "OFM-1" not in [s.id for s in sc.system.sensors]
+    sc.delete_selected()  # the line goes; its sensors stay where they were, on no line
+    fm = next(s for s in sc.system.sensors if s.id == "OFM-1")
+    assert fm.line is None and fm.pos is not None and not sc.sensor_items["OFM-1"].attached
+    w.dirty = False
+    w.close()
+
+
+@pytest.mark.gui
+def test_sensors_go_anywhere_on_a_line(app, tmp_path):
+    from owlfluids.app.schematic import _length, _point_at
+
+    w = MainWindow()
+    w.show()
+    w.load_example("lox-feed")
+    sc = w.scene
+    feed = next(x for x in sc.wires if {x.a, x.b} == {"TK.bottom", "F1.in"})
+    n = _length(feed.points)
+    spot, level = _point_at(feed.points, 0.3 * n)
+    s = sc.add_sensor("pressure", spot + (QPointF(0, 8) if level else QPointF(8, 0)))  # beside the line: snaps on
+    assert s.line == ("TK.bottom", "F1.in") and s.along == pytest.approx(0.3, abs=0.02)
+    assert s.id == "OPT-1" and sc.sensor_items[s.id].attached
+    tap = sc.sensor_items[s.id].pos() + sc.sensor_items[s.id].anchor
+    assert (tap - spot).manhattanLength() < 2  # the tap is where it was dropped
+
+    # dragged onto another line, it reads there; dropped far from every line, it is loose
+    press = next(x for x in sc.wires if {x.a, x.b} == {"REG.out", "V-P.in"})
+    to, _ = _point_at(press.points, _length(press.points) / 2)
+    item = sc.sensor_items[s.id]
+    sc.drag_sensor(item, to, drop=True)
+    assert set(s.line) == {"REG.out", "V-P.in"} and s.id == "NPT-1"  # its default name follows the nitrogen
+    sc.drag_sensor(sc.sensor_items[s.id], QPointF(2000, 2000), drop=True)
+    assert s.line is None and s.pos == (2000, 2000) and not sc.sensor_items[s.id].attached
+
+    # a flow meter dropped between two tees reads the flow along that line
+    t = sc.add_sensor("mass_flow", QPointF(-3000, -3000))
+    assert t.line is None and t.pos is not None
+    sc.drag_sensor(sc.sensor_items[t.id], _point_at(feed.points, n / 2)[0], drop=True)
+    assert t.line == ("TK.bottom", "F1.in")  # out of the tank
+    path = tmp_path / "placed.yaml"
+    sc.system.save(path)
+    again = System.load(path)
+    assert [x.to_dict() for x in again.sensors] == [x.to_dict() for x in sc.system.sensors]
+    assert not again.notes
     w.dirty = False
     w.close()
 

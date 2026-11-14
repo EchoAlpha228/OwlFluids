@@ -91,8 +91,11 @@ still (PAUSED) while you pan and zoom, and press it again to follow.
 - **R** rotates clockwise, **Shift+R** back, **Delete** removes, **F**
   fits the drawing to the window, and the middle mouse button drags it around.
   Drag a line segment sideways to reshape it; double-click it to reset.
-- **Sensors on lines:** right-click a line to add a pressure, temperature or
-  mass flow sensor. Its reading shows beside it during a run.
+- **Sensors:** drag a pressure transducer, thermocouple or flow meter from
+  **Parts > Sensors** onto any point of any line (or right-click a line). It
+  reads what the fluid does right there; drag it along the line or onto another
+  to move it. Its reading shows beside it during a run. A tank's level, mass and
+  a valve's position are added from that part's properties.
 - **Names:** new parts are named commodity letter, part letter, number: `OV-1` is
   the first oxidizer valve, `FT-1` a fuel tank, `HR-1` a helium regulator, and
   line sensors add their tag (`OPT-1`). Commodities are O oxidizer, F fuel, H
