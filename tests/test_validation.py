@@ -212,3 +212,23 @@ def test_runs_shorter_than_a_step_add_up(gas_blowdown):
     sim.run(0.0015)
     sim.run(0.0015)
     assert sim.steps == 13
+
+
+@pytest.mark.parametrize("cpn,t", [("NitrousOxide", 293.15), ("NitrousOxide", 273.15)])
+def test_saturated_liquid_boundary_flashes_at_dyer_flux(cpn, t):
+    """A boundary exactly at the vapor pressure supplies saturated liquid when asked to
+    (it was read as vapor, flowing at half the flux)."""
+    import CoolProp.CoolProp as CP
+
+    psat = CP.PropsSI("P", "T", t, "Q", 0, cpn)
+    s = System("flash")
+    s.add("UP", "boundary", fluid="nitrous", pressure=f"{psat} Pa", temperature=f"{t} K", phase="liquid")
+    s.add("O", "orifice", cda="1 mm2")
+    s.add("DN", "boundary", fluid="nitrous", pressure="1 atm", temperature="300 K")
+    s.connect("UP.port", "O.in")
+    s.connect("O.out", "DN.port")
+    sim = Simulation(s)
+    sim.run(0.01)
+    assert sim.mass_flow("O") / 1e-6 == pytest.approx(_dyer_hem(cpn, t, psat), rel=0.06)
+    s.component("UP").params["phase"] = "auto"
+    assert any("vapor pressure" in w for w in Simulation(s).net.warnings)

@@ -267,13 +267,15 @@ class Boundary(ComponentType):
         Param("fluid", "text", None, "fluid supplied or vented"),
         Param("pressure", "pressure", "1 atm", "fixed pressure"),
         Param("temperature", "temperature", "293.15 K", "fixed temperature"),
+        Param("phase", "choice", "auto", "at exactly the vapor pressure: saturated liquid or vapor "
+              "(auto: vapor, with a warning)", ("auto", "liquid", "vapor")),
     )
     help = "Fixed pressure and temperature: a regulated supply, the atmosphere, or a vent."
 
     @classmethod
     def build(cls, b, comp):
         n = b.new_boundary(comp, cls.require(comp, "fluid"), cls.param(comp, "pressure"),
-                           cls.param(comp, "temperature"))
+                           cls.param(comp, "temperature"), cls.param(comp, "phase"))
         b.bind_port(comp, "port", n, DRAW_MIX)
 
 

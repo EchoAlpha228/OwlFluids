@@ -67,6 +67,7 @@ class _Node:
     sat: bool = False  # a tank liquid that starts saturated, under its own vapor
     iface: tuple = (0.0, 0.0, 0.0)  # tank liquid surface conductances (see layout.NF_IFC)
     gas_fill: bool = False  # a mixed node that starts full of its purge gas
+    phase: str = "auto"  # a boundary exactly on its saturation line: liquid, vapor, or auto (vapor)
 
 
 @dataclass
@@ -218,10 +219,11 @@ class NetworkBuilder:
         self.comp_nodes[comp.id].append(idx)
         return idx
 
-    def new_boundary(self, comp, fluid, p, t) -> int:
+    def new_boundary(self, comp, fluid, p, t, phase="auto") -> int:
         idx = self.new_node(comp, "", fluid=fluid, kind=L.NODE_BOUNDARY)
         self.nodes[idx].bp = p
         self.nodes[idx].bt = t
+        self.nodes[idx].phase = phase
         return idx
 
     def new_pressurized_tank(self, comp, liquid, pressurant, vol, fill, p, t_l, t_g, area, heat, wall=None,
@@ -817,7 +819,7 @@ class NetworkBuilder:
             NF[i, L.NF_TAMB] = n.heat[1]
             if n.kind == L.NODE_BOUNDARY:
                 NI[i, L.N_SX] = -1
-                rho, u = fs.rho_u_from_pt(f, n.bp, n.bt)
+                rho, u = self._boundary_state(fs, f, n)
                 NF[i, L.NF_BP], NF[i, L.NF_BT], NF[i, L.NF_BRHO], NF[i, L.NF_BU] = n.bp, n.bt, rho, u
                 continue
             if n.gas and n.gas_fill:
@@ -910,6 +912,23 @@ class NetworkBuilder:
                       line_flows=self._line_flows())
         _structure(net)
         return net
+
+    def _boundary_state(self, fs: FluidSet, f: int, n: _Node) -> tuple[float, float]:
+        """A boundary's density and energy; on its saturation line, the phase it asks for."""
+        if fs.model[f] == MODEL_TABLE and n.bt < fs.critical_temperature(f):
+            psat = fs.saturation_pressure(f, n.bt)
+            if abs(n.bp - psat) <= 1e-6 * psat:
+                if n.phase == "auto":
+                    self.warnings.append(
+                        f"{n.owner} sits exactly at {n.fluid}'s vapor pressure at {n.bt:.2f} K, so it supplies "
+                        "saturated vapor; set phase: liquid for saturated liquid")
+                return fs.rho_u_saturated(f, n.bt, 1.0 if n.phase == "liquid" else 0.0)
+        if n.phase in ("liquid", "vapor") and fs.model[f] == MODEL_TABLE and n.bt < fs.critical_temperature(f):
+            psat = fs.saturation_pressure(f, n.bt)
+            if (n.phase == "liquid") != (n.bp > psat):
+                raise BuildError(f"{n.owner}: {n.fluid} at {n.bp / 6894.757:.1f} psia and {n.bt:.2f} K is "
+                                 f"{'vapor' if n.bp < psat else 'liquid'}, not {n.phase}")
+        return fs.rho_u_from_pt(f, n.bp, n.bt)
 
     def _port_flows(self) -> dict[str, list[tuple[int, float]]]:
         """How to read the flow along the line at each port, for mass flow sensors on lines.
