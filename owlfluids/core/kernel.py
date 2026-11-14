@@ -122,6 +122,8 @@ from .layout import (
     V_TGT,
     V_VALVE,
     V_VOL,
+    WALL_AL6061,
+    WALL_SS304,
 )
 
 # Compiled without Numba's reference counting: nothing here allocates, and the
@@ -789,6 +791,32 @@ def _interface(liq, NI, NF, W, model, par, sat, satg):
     return m, e_u
 
 
+# NIST cryogenic heat capacity fits, log10 cp = sum a_i (log10 T)^i, 4 to 300 K
+SS304_CP = (22.0061, -127.5528, 303.647, -381.0098, 274.0328, -112.9212, 24.7593, -2.239153, 0.0)
+AL6061_CP = (46.6467, -314.292, 866.662, -1298.3, 1162.27, -637.795, 210.351, -38.3094, 2.96344)
+
+
+@inl
+def _nist_cp(c, t):
+    lt = math.log10(min(max(t, 10.0), 300.0))
+    s = 0.0
+    lp = 1.0
+    for a in c:
+        s += a * lp
+        lp *= lt
+    return 10.0 ** s
+
+
+@inl
+def _wall_cp(curve, t):
+    """A wall's heat capacity at t over its value at 293.15 K (NF_WALLMC holds that one)."""
+    if curve == WALL_SS304:
+        return _nist_cp(SS304_CP, t) / _nist_cp(SS304_CP, 293.15)
+    if curve == WALL_AL6061:
+        return _nist_cp(AL6061_CP, t) / _nist_cp(AL6061_CP, 293.15)
+    return 1.0
+
+
 @inl
 def _node_source(i, x, NI, NF, W, ns):
     """Heat and mass sources of node i: ns[0] energy into the fluid, ns[1] d(Tw)/dt of
@@ -810,7 +838,7 @@ def _node_source(i, x, NI, NF, W, ns):
             tw = x[NI[i, N_SX] + 2]
             q_in = NF[i, NF_HA] * (tw - t)
             ns[0] = q_in
-            ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / NF[i, NF_WALLMC]
+            ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / (NF[i, NF_WALLMC] * _wall_cp(NI[i, N_WALL], tw))
         elif NF[i, NF_HA] > 0.0:
             ns[0] = NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
         return
@@ -825,7 +853,8 @@ def _node_source(i, x, NI, NF, W, ns):
         ns[0] = q_in
         if is_liq:
             q_wall = q_in + NF[liq, NF_HA] * (1.0 - wet) * (tw - W[pt, W_T])
-            ns[1] = (-q_wall + NF[liq, NF_HAAMB] * (NF[liq, NF_TAMB] - tw)) / NF[liq, NF_WALLMC]
+            ns[1] = (-q_wall + NF[liq, NF_HAAMB] * (NF[liq, NF_TAMB] - tw)) / (NF[liq, NF_WALLMC]
+                                                                               * _wall_cp(NI[liq, N_WALL], tw))
     elif NF[liq, NF_HA] > 0.0:
         ns[0] = NF[liq, NF_HA] * share * (NF[liq, NF_TAMB] - t)
 

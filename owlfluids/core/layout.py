@@ -3,6 +3,10 @@
 # ---- node integer columns
 N_KIND, N_FLUID, N_PARTNER, N_SX, N_WALL, N_GAS, N_GX = range(7)
 N_NI = 7
+# N_WALL: 0 for no wall, else how its heat capacity follows its temperature
+WALL_CONSTANT = 1
+WALL_SS304 = 2
+WALL_AL6061 = 3
 # N_GAS: the purge gas mixed into the node's own fluid (-1 for a node holding one fluid);
 # N_GX: index of its mass state (its energy follows), after the node's other states
 # node kinds

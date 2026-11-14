@@ -20,18 +20,25 @@ from ..core.layout import (
     DRAW_MIX,
     DRAW_VAPOR,
     NODE_BOUNDARY,
+    WALL_AL6061,
+    WALL_CONSTANT,
+    WALL_SS304,
 )
 from ..io.system import PIPE_TYPES
 
 CV_TO_CDA = 1.6987e-5  # m^2 of effective flow area per unit of valve Cv
-STEEL = {"density": 8000.0, "cp": 500.0}
+# "curve": the kernel's heat capacity curve for the material (layout.WALL_*): steel and
+# aluminum follow NIST's cryogenic fits (304 stainless, 6061-T6), whose heat capacity
+# falls to half by 90 K; "cp" is the room-temperature value (293 K)
+STEEL = {"density": 8000.0, "cp": 470.5, "curve": WALL_SS304}
+ALUMINUM = {"density": 2700.0, "cp": 942.9, "curve": WALL_AL6061}
 MATERIALS = {
     "steel": STEEL,
     "stainless": STEEL,
-    "aluminum": {"density": 2700.0, "cp": 900.0},
-    "aluminium": {"density": 2700.0, "cp": 900.0},
-    "copper": {"density": 8960.0, "cp": 385.0},
-    "brass": {"density": 8500.0, "cp": 380.0},
+    "aluminum": ALUMINUM,
+    "aluminium": ALUMINUM,
+    "copper": {"density": 8960.0, "cp": 385.0, "curve": WALL_CONSTANT},
+    "brass": {"density": 8500.0, "cp": 380.0, "curve": WALL_CONSTANT},
 }
 FITTING_K = {
     "elbow90": 0.9, "elbow45": 0.4, "tee_run": 0.4, "tee_branch": 1.8,
@@ -146,7 +153,7 @@ def _wall(cls, comp, vol):
     return (float(m_wall) * mat["cp"], float(cls.param(comp, "film_coefficient")) * area,
             float(cls.param(comp, "outer_coefficient")) * area + float(cls.param(comp, "heat_transfer") or 0.0),
             cls.param(comp, "ambient_temperature"),
-            True)
+            True, mat["curve"])
 
 
 # boiling off a liquid surface (W/m2K): nucleate boiling, fast enough that a vented or

@@ -160,3 +160,19 @@ def test_dense_gas_chokes_at_its_real_flux(fluid, cpn, psia, t):
     sim = Simulation(s)
     sim.run(0.05)
     assert sim.mass_flow("O") / 1e-6 == pytest.approx(_real_choked_flux(cpn, psia * PSI, t), rel=0.02)
+
+
+@pytest.mark.parametrize("material,cp_room,dh", [("steel", 470.5, 80.3e3), ("aluminum", 942.9, 157.1e3)])
+def test_wall_gives_up_nist_heat_from_room_to_lox_temperature(material, cp_room, dh):
+    """Heat a kilogram of wall gives up from 293 K to 90 K: NIST's 304 stainless and
+    6061-T6 fits (a constant room cp read 26 % and 16 % high, so chilldown took too much LOX)."""
+    import numpy as np
+
+    from owlfluids.components.library import MATERIALS
+    from owlfluids.core.kernel import _wall_cp
+
+    mat = MATERIALS[material]
+    assert mat["cp"] == pytest.approx(cp_room)
+    t = np.linspace(90.0, 293.15, 400)
+    cp = np.array([mat["cp"] * _wall_cp(mat["curve"], tk) for tk in t])
+    assert np.trapezoid(cp, t) == pytest.approx(dh, rel=0.01)

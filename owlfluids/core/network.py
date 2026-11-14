@@ -863,15 +863,15 @@ class NetworkBuilder:
             # held to a relative accuracy
             xscale += [max(m_full, 1e-9), max(abs(m_full * u), m_full * 1e5, 1e-3)]
             if n.wall:
-                mc, ha_in, ha_out, t_amb, *at_fluid = n.wall
-                NI[i, L.N_WALL] = 1
+                mc, ha_in, ha_out, t_amb, at_fluid, *curve = n.wall
+                NI[i, L.N_WALL] = curve[0] if curve else L.WALL_CONSTANT
                 NF[i, L.NF_WALLMC] = mc
                 NF[i, L.NF_HA] = ha_in
                 NF[i, L.NF_HAAMB] = ha_out
                 NF[i, L.NF_TAMB] = t_amb
                 # a volume primed from a tank has been sitting full, and a tank shell holds its
                 # contents: their walls are at the fluid's temperature
-                x0.append(t0 if n.primed or any(at_fluid) else t_amb)
+                x0.append(t0 if n.primed or at_fluid else t_amb)
                 xscale.append(100.0)
             if n.gas:
                 NI[i, L.N_GX] = len(x0)
