@@ -83,8 +83,10 @@ still (PAUSED) while you pan and zoom, and press it again to follow.
 ## 3. Building a system
 
 - **Add parts** by dragging them from **Parts**. Drag from one port (the small
-  circle) to another to connect them. Lines are only connections: the Cv of the
-  valves, regulators, fittings and orifices sets every flow.
+  circle) to another to connect them. The Cv of the valves, regulators, fittings
+  and orifices sets every flow. Each line is 1 m of tubing by default, and its
+  fluid has inertia, so a fast close shows water hammer; set a line's `length`
+  and `diameter` in the system file (`length: 0` for parts bolted together).
 - **Edit** a selected part in **Properties**. Values take units: `3000 psi`,
   `-196 C`, `0.5 in`, `49 L`. A value that can't be read turns red with the
   reason under it.

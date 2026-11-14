@@ -425,6 +425,16 @@ class Simulation:
             return float(sum(self.nout[i, L.O_M] for i in self.net.comp_nodes[ref]))
         return float(self.nout[self.node(ref), L.O_M])
 
+    def total_mass(self) -> float:
+        """All the fluid the system holds: its tanks and volumes, and its lines."""
+        held = self.net.NI[:, L.N_KIND] != L.NODE_BOUNDARY
+        return float(self.nout[held, L.O_M].sum())
+
+    def line_mass(self) -> float:
+        """The fluid in the lines (junctions between parts), not in any tank or volume."""
+        return float(sum(self.nout[i, L.O_M] for i, o in enumerate(self.net.node_owner)
+                         if not o and self.net.NI[i, L.N_KIND] != L.NODE_BOUNDARY))
+
     def mass_flow(self, ref: str) -> float:
         return float(self.lout[self.link(ref), L.LO_MDOT])
 
@@ -496,10 +506,18 @@ class Simulation:
                 sign = 1.0 if line == tuple(s.line) else -1.0
                 return "flow", (np.array([k for k, _ in terms], dtype=np.int64),
                                 np.array([sign * g for _, g in terms], dtype=float))
-            why = (f"the line {line[0]} -- {line[1]} is part of a loop of lines (or joins two volumes), so "
-                   "no flow is its own; move it to a line into or out of a valve, orifice or fitting")
+            why = (f"the line {line[0]} -- {line[1]} has length 0, so it is no line of its own; give it a "
+                   "length, or move the meter to a line into or out of a valve, orifice or fitting")
         elif line[0] in self.net.port_nodes:
-            return "node", self.net.port_nodes[line[0]]
+            # a line has a point at each end: the sensor reads the one it sits nearer, or with no
+            # place of its own, the end at a tank or volume (else the first)
+            if s.along is not None:
+                end = s.line[1] if s.along > 0.5 else s.line[0]
+            else:
+                held = [r for r in s.line if self.net.node_owner[self.net.port_nodes.get(r, 0)]
+                        and self.net.NI[self.net.port_nodes.get(r, 0), L.N_KIND] != L.NODE_BOUNDARY]
+                end = held[0] if len(held) == 1 else s.line[0]
+            return "node", self.net.port_nodes.get(end, self.net.port_nodes[line[0]])
         else:
             why = f"nothing on the line {line[0]} -- {line[1]} holds fluid"
         msg = f"sensor {s.id} reads nothing: {why}"

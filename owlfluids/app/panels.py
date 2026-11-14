@@ -231,8 +231,8 @@ class Properties(QScrollArea):
             if s.type == "mass_flow":
                 where = (f"Reads the flow along the line between {a} and {b} where it sits, positive from "
                          f"{a.split('.')[0]} toward {b.split('.')[0]}.")
-                if Lines(system).flow_side(*line) is None:
-                    where += " This line is part of a loop of lines, so no flow is its own: it reads nothing."
+                if not Lines(system).flow_readable(*line):
+                    where += " This line has length 0 and no valve, orifice or fitting at its ends: it reads nothing."
             else:
                 where = f"Reads the {what} on the line between {a} and {b} where it sits."
             where += " Drag it along the line or onto another."

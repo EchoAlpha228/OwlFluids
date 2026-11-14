@@ -9,11 +9,14 @@ Systems are stored as YAML so they can be written by hand, diffed and kept in gi
       - {id: V-1, type: valve, cv: 0.5}
       - {id: AMB, type: boundary, fluid: nitrogen}
     connections:
-      - [TK-1.top, V-1.in]
+      - [TK-1.top, V-1.in, {length: 3 m, diameter: 12 mm}]
       - [V-1.out, AMB.port]
     sensors:
       - {id: PT-1, type: pressure, line: [V-1.out, AMB.port], along: 0.5}
       - {id: LL-1, type: level, at: TK-1}
+
+A connection is a line: an optional third entry gives its length and inner diameter (otherwise
+the ``line_length`` and ``line_diameter`` settings). See core/lines.py.
 
 A pressure, temperature, flow, density, quality or purge sensor sits on a line (``line``, the
 two ports it joins, and ``along``, how far from the first one, 0-1) and reads what is there;
@@ -34,6 +37,10 @@ DEFAULT_SETTINGS = {
     "initial_pressure": "1 atm",
     "initial_temperature": "293.15 K",
     "junction_volume": "1 cc",
+    # every line has a length and an inner diameter; the fluid in it has inertia (water hammer,
+    # the time a line takes to get flowing). "auto": the size of the valves and fittings it joins
+    "line_length": "1 m",
+    "line_diameter": "auto",
     "prime_lines": True,
     "backend": "HEOS",
     "fluid_models": {},
@@ -152,6 +159,8 @@ class System:
     # wires shaped by hand on the schematic, ignored by the solver: "a -- b" ->
     # {"h": leaves a horizontally, "bends": [[x, y], ...]}
     routes: dict = field(default_factory=dict)
+    # lines given their own length or inner diameter: "a -- b" -> {"length": ..., "diameter": ...}
+    line_specs: dict = field(default_factory=dict)
     # Synnax test settings that belong to this system (mode, channel names...); the
     # connection itself (host, login) is the user's, see drivers/synnax.py
     synnax: dict = field(default_factory=dict)
@@ -204,8 +213,17 @@ class System:
         """An old tank port by its name now (scripts written before tanks changed)."""
         return self._side_port(self._pressurized_port(ref))
 
-    def connect(self, a: str, b: str) -> None:
-        self.connections.append((self.current_port(a), self.current_port(b)))
+    def connect(self, a: str, b: str, length=None, diameter=None) -> None:
+        """Join two ports with a line, optionally of its own length and inner diameter."""
+        a, b = self.current_port(a), self.current_port(b)
+        self.connections.append((a, b))
+        spec = {k: v for k, v in (("length", length), ("diameter", diameter)) if v is not None}
+        if spec:
+            self.line_specs[f"{a} -- {b}"] = spec
+
+    def line_spec(self, a: str, b: str) -> dict:
+        """The length and diameter given for the line a -- b (either way round), if any."""
+        return self.line_specs.get(f"{a} -- {b}") or self.line_specs.get(f"{b} -- {a}") or {}
 
     def sense(self, sid: str, stype: str, at: str = "", line: tuple[str, str] | None = None, **kw) -> Sensor:
         """A sensor on ``line`` (the two ports it joins), or on part ``at`` (a level, mass or
@@ -240,12 +258,17 @@ class System:
             rot = int(raw.pop("rotation", 0))
             comps.append(Component(cid, ctype, raw, tuple(pos) if pos else None, rot))
         conns = []
+        specs = {}
         for c in d.get("connections") or []:
+            spec = None
             if isinstance(c, str):
                 a, b = (s.strip() for s in c.split("--"))
             else:
-                a, b = c
+                a, b, *rest = c
+                spec = rest[0] if rest and isinstance(rest[0], dict) else None
             conns.append((str(a), str(b)))
+            if spec:
+                specs[f"{a} -- {b}"] = {k: spec[k] for k in ("length", "diameter") if spec.get(k) is not None}
         sensors = []
         for s in d.get("sensors") or []:
             s = dict(s)
@@ -261,7 +284,7 @@ class System:
                                   (float(pos[0]), float(pos[1])) if pos else None))
         routes = {str(k): dict(v) for k, v in (d.get("routes") or {}).items()}
         system = cls(str(d.get("name", "untitled")), comps, conns, sensors, settings, routes,
-                     dict(d.get("synnax") or {}))
+                     line_specs=specs, synnax=dict(d.get("synnax") or {}))
         system._fold_pipes()
         system._throttles_to_manual()
         system._merge_pressurized_tanks()
@@ -318,6 +341,7 @@ class System:
                 s.line = (other, ref) if inlet else (ref, other)
             else:
                 s.line = (a, b)
+                s.along = 0.0 if a == ref else 1.0  # at the port it read, as a line has two ends
             s.at = ""
             moved.append(s.id)
         return moved
@@ -329,11 +353,12 @@ class System:
             s.at = fix(s.at) if s.at else s.at
             if s.line:
                 s.line = (fix(s.line[0]), fix(s.line[1]))
-        routes = {}
-        for k, v in self.routes.items():
-            a, _, b = k.partition(" -- ")
-            routes[f"{fix(a)} -- {fix(b)}" if b else k] = v
-        self.routes = routes
+        for attr in ("routes", "line_specs"):
+            out = {}
+            for k, v in getattr(self, attr).items():
+                a, _, b = k.partition(" -- ")
+                out[f"{fix(a)} -- {fix(b)}" if b else k] = v
+            setattr(self, attr, out)
 
     def _tank_side_ports(self) -> None:
         """Move what was on an old tank's side port to its top or bottom (see ``tank_side_port``)."""
@@ -445,7 +470,8 @@ class System:
         if settings:
             d["settings"] = settings
         d["components"] = [c.to_dict() for c in self.components]
-        d["connections"] = [list(c) for c in self.connections]
+        d["connections"] = [[a, b, dict(self.line_spec(a, b))] if self.line_spec(a, b) else [a, b]
+                            for a, b in self.connections]
         if self.sensors:
             d["sensors"] = [s.to_dict() for s in self.sensors]
         if self.routes:
@@ -474,7 +500,10 @@ def _repr_dict(dumper, data):
 
 
 def _repr_list(dumper, data):
-    flow = len(data) <= 2 and all(not isinstance(v, (dict, list)) for v in data)
+    # short lists of plain values on one line, and so a connection with its line's size
+    flow = (len(data) <= 2 and all(not isinstance(v, (dict, list)) for v in data)) or (
+        len(data) == 3 and all(isinstance(v, str) for v in data[:2]) and isinstance(data[2], dict)
+        and all(not isinstance(v, (dict, list)) for v in data[2].values()))
     return dumper.represent_sequence("tag:yaml.org,2002:seq", data, flow_style=flow)
 
 

@@ -85,10 +85,11 @@ def test_pressing_lox_with_gn2_matches_adiabatic_ullage_compression():
     m_g1 = sim.mass("TK.top")
     sim.open("V")
     sim.run(30.0)
-    # GN2 raised the pressure, not the level: none of it became liquid oxygen
+    # GN2 raised the pressure, not the level: none of it became liquid oxygen (the line below
+    # the tank takes in a little as the press compresses the LOX in it)
     assert sim.pressure("TK.top") == pytest.approx(300 * PSI, rel=2e-3)
-    assert sim.mass("TK.bottom") == pytest.approx(m_liq, rel=1e-6)
-    assert sim._level("TK") == pytest.approx(level, abs=1e-6)
+    assert sim.mass("TK.bottom") == pytest.approx(m_liq, rel=2e-5)
+    assert sim._level("TK") == pytest.approx(level, abs=2e-5)
     # pressurant taken and ullage temperature: the rigid-tank energy balance on the ullage
     m2, t2 = _charged(p1, t1, v_ull, 300 * PSI, 293.15)
     assert sim.mass("TK.top") - m_g1 == pytest.approx(m2 - CP.PropsSI("D", "P", p1, "T", t1, "Nitrogen") * v_ull,

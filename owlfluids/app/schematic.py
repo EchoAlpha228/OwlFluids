@@ -906,8 +906,8 @@ class Scene(QGraphicsScene):
         return s
 
     def line_flow_readable(self, w: WireItem) -> bool:
-        """A flow meter on ``w`` reads a flow of its own (the line is not in a loop of lines)."""
-        return Lines(self.system).flow_side(w.a, w.b) is not None
+        """A flow meter on ``w`` reads a flow (see core/lines.py)."""
+        return Lines(self.system).flow_readable(w.a, w.b)
 
     def remove_sensor(self, s: Sensor) -> None:
         if s in self.system.sensors:
