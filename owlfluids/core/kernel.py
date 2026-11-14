@@ -724,7 +724,7 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
 
 
 @inl
-def _interface(liq, NI, NF, W, fl):
+def _interface(liq, NI, NF, W, model, par, sat, satg):
     """What crosses a tank's liquid surface: (mass rate liquid to ullage, energy rate into the ullage).
 
     The liquid boils when its vapor pressure is above the ullage's vapor pressure
@@ -735,7 +735,6 @@ def _interface(liq, NI, NF, W, fl):
     ullage (vapor below its dew point) rains out. Sensible heat (NF_IFS) passes
     between ullage and liquid whatever the gases.
     """
-    model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
     ull = NI[liq, N_PARTNER]
     f = NI[liq, N_FLUID]
     t_l = W[liq, W_T]
@@ -750,8 +749,8 @@ def _interface(liq, NI, NF, W, fl):
     if NI[ull, N_GX] >= 0:
         p_v = p_u * (1.0 - W[ull, W_GF])  # the vapor's own share of the ullage pressure
     ps, rl, rv, hl, hv, mul, muv, gv, sub = saturation(f, t_l, model, par, sat, satg)
-    dpdt = (_psat(f, t_l + 0.25, model, par, sat, satg) - _psat(f, t_l - 0.25, model, par, sat, satg)) / 0.5
     hfg = max(hv - hl, 1e3)
+    dpdt = hfg / (t_l * max(1.0 / rv - 1.0 / rl, 1e-12))  # Clapeyron
     dp = ps - p_v
     b = _smooth01(dp / 1000.0)  # condensing below its vapor pressure, boiling once 1 kPa above it
     g = NF[liq, NF_IFC] + b * (NF[liq, NF_IFB] - NF[liq, NF_IFC])
@@ -776,12 +775,12 @@ def _interface(liq, NI, NF, W, fl):
 
 
 @inl
-def _node_source(i, x, NI, NF, W, ns, fl):
+def _node_source(i, x, NI, NF, W, ns):
     """Heat and mass sources of node i: ns[0] energy into the fluid, ns[1] d(Tw)/dt of
     its wall, ns[2] own-fluid mass.
 
-    A tank's ullage and liquid share the tank's wall and ambient heat by wetted area,
-    and trade mass and heat across the liquid surface (``_interface``).
+    A tank's ullage and liquid share the tank's wall and ambient heat by wetted area;
+    what crosses their liquid surface is added by ``_surface_source``.
     """
     ns[0] = 0.0
     ns[1] = 0.0
@@ -791,33 +790,43 @@ def _node_source(i, x, NI, NF, W, ns, fl):
         return
     t = W[i, W_T]
     pt = NI[i, N_PARTNER]
-    tank = pt >= 0
-    liq = i if kind == NODE_TANK_LIQUID else pt
-    wet = 1.0
-    if tank:
-        ull = NI[liq, N_PARTNER]
-        wet = min(max(W[liq, W_V] / NF[ull, NF_VOL], 0.0), 1.0)
-    share = wet if kind == NODE_TANK_LIQUID else 1.0 - wet
-    src = liq if tank else i
-    if NI[src, N_WALL]:
-        tw = x[NI[src, N_SX] + 2]
-        q_in = NF[src, NF_HA] * share * (tw - t) if tank else NF[i, NF_HA] * (tw - t)
+    if pt < 0:  # most nodes: not part of a tank
+        if NI[i, N_WALL]:
+            tw = x[NI[i, N_SX] + 2]
+            q_in = NF[i, NF_HA] * (tw - t)
+            ns[0] = q_in
+            ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / NF[i, NF_WALLMC]
+        elif NF[i, NF_HA] > 0.0:
+            ns[0] = NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
+        return
+    is_liq = kind == NODE_TANK_LIQUID
+    liq = i if is_liq else pt
+    ull = NI[liq, N_PARTNER]
+    wet = min(max(W[liq, W_V] / NF[ull, NF_VOL], 0.0), 1.0)
+    share = wet if is_liq else 1.0 - wet
+    if NI[liq, N_WALL]:
+        tw = x[NI[liq, N_SX] + 2]
+        q_in = NF[liq, NF_HA] * share * (tw - t)
         ns[0] = q_in
-        if i == src:
-            q_wall = q_in
-            if tank:
-                q_wall += NF[src, NF_HA] * (1.0 - wet) * (tw - W[pt, W_T])
-            ns[1] = (-q_wall + NF[src, NF_HAAMB] * (NF[src, NF_TAMB] - tw)) / NF[src, NF_WALLMC]
-    elif NF[src, NF_HA] > 0.0:
-        ns[0] = NF[src, NF_HA] * (share if tank else 1.0) * (NF[src, NF_TAMB] - t)
-    if tank:
-        m, e_u = _interface(liq, NI, NF, W, fl)
-        if kind == NODE_TANK_LIQUID:
-            ns[0] -= e_u
-            ns[2] = -m
-        else:
-            ns[0] += e_u
-            ns[2] = m
+        if is_liq:
+            q_wall = q_in + NF[liq, NF_HA] * (1.0 - wet) * (tw - W[pt, W_T])
+            ns[1] = (-q_wall + NF[liq, NF_HAAMB] * (NF[liq, NF_TAMB] - tw)) / NF[liq, NF_WALLMC]
+    elif NF[liq, NF_HA] > 0.0:
+        ns[0] = NF[liq, NF_HA] * share * (NF[liq, NF_TAMB] - t)
+
+
+@inl
+def _surface_source(i, NI, NF, W, ns, fl):
+    """Adds to a tank node's sources what crosses its liquid surface (``_interface``).
+    Kept apart from ``_node_source`` so only tank nodes take the fluid tables."""
+    if NI[i, N_KIND] == NODE_TANK_LIQUID:
+        m, e_u = _interface(i, NI, NF, W, fl[0], fl[1], fl[7], fl[8])
+        ns[0] -= e_u
+        ns[2] = -m
+    else:
+        m, e_u = _interface(NI[i, N_PARTNER], NI, NF, W, fl[0], fl[1], fl[7], fl[8])
+        ns[0] += e_u
+        ns[2] = m
 
 
 @inl
@@ -860,7 +869,16 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
         _scatter_link(NI, FN[k], FV[k], xdot, 1.0)
     n = NI.shape[0]
     for i in range(n):
-        _node_source(i, x, NI, NF, W, NS[i], fl)
+        _node_source(i, x, NI, NF, W, NS[i])
+    for i in range(n):  # each tank's liquid surface once, for both its sides
+        if NI[i, N_KIND] == NODE_TANK_LIQUID:
+            m, e_u = _interface(i, NI, NF, W, fl[0], fl[1], fl[7], fl[8])
+            u = NI[i, N_PARTNER]
+            NS[i, 0] -= e_u
+            NS[i, 2] = -m
+            NS[u, 0] += e_u
+            NS[u, 2] = m
+    for i in range(n):
         _scatter_node(i, NI, NS[i], xdot, 1.0)
     for i in range(n):
         nout[i, O_P] = W[i, W_P]
@@ -947,7 +965,9 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
         for d in range(nd):
             i = dl[d]
             _scatter_node(i, NI, NS[i], dfp, -1.0)
-            _node_source(i, xp, NI, NF, W, nst, fl)
+            _node_source(i, xp, NI, NF, W, nst)
+            if NI[i, N_PARTNER] >= 0:
+                _surface_source(i, NI, NF, W, nst, fl)
             _scatter_node(i, NI, nst, dfp, 1.0)
         for q in range(color_ptr[c], color_ptr[c + 1]):
             j = color_cols[q]
