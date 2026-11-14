@@ -30,8 +30,8 @@ import math
 
 import numba as nb
 
+from ..fluids.props import hem_flux, saturation, state
 from ..fluids.props import psat as _psat
-from ..fluids.props import saturation, state
 from ..fluids.registry import (
     I_CV,
     I_GAMMA,
@@ -157,8 +157,12 @@ N_FV = 12
 
 
 @jit
-def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat):
-    """Mass flow (>= 0) through an effective area ``cda`` from p_up to p_dn."""
+def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat, g_hem=0.0):
+    """Mass flow (>= 0) through an effective area ``cda`` from p_up to p_dn.
+
+    ``g_hem``: for a flashing liquid, the HEM mass flux of saturated liquid at its
+    temperature expanding to p_dn (choked), from the saturation table.
+    """
     if cda <= 0.0 or p_up <= p_dn:
         return 0.0
     dp = p_up - p_dn
@@ -167,10 +171,11 @@ def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat):
         if dp < DP_LIN:
             spi *= dp / DP_LIN
         if psat > 0.0 and p_dn < psat:
-            # flashing flow: Dyer-style blend of single-phase incompressible flow and a
-            # cavitation-limited estimate of the equilibrium (HEM) flow
+            # flashing flow: Dyer's blend of single-phase incompressible flow and the
+            # homogeneous equilibrium (HEM) flow. A subcooled liquid first runs down to
+            # its vapor pressure as a liquid, then flashes as saturated liquid would
             k = math.sqrt(dp / max(psat - p_dn, 1.0))
-            hem = cda * math.sqrt(2.0 * rho * max(p_up - psat, 0.0))
+            hem = cda * math.sqrt(2.0 * rho * max(p_up - psat, 0.0) + g_hem * g_hem)
             if hem > spi:
                 hem = spi
             return (k / (1.0 + k)) * spi + (1.0 / (1.0 + k)) * hem
@@ -583,15 +588,25 @@ def _q_side(n, d, NI, W, fl):
             rho, h_v, _, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
         w_l = 1.0 if liquid else 0.0
     s = W[n, W_S] if NI[n, N_KIND] == NODE_VOLUME else 1.0
-    return rho, gam, w_l, psat, s, h
+    return rho, gam, w_l, psat, s, h, NI[n, N_FLUID], W[n, W_T]
 
 
 @inl
-def _q_orifice(cda, p_up, p_dn, side):
-    rho, gam, w_l, psat, s, h = side
+def _q_orifice(cda, p_up, p_dn, side, fl):
+    rho, gam, w_l, psat, s, h, f, t = side
     q = 0.0
     if w_l > 0.0:
-        q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat)
+        g_hem = 0.0
+        if psat > 0.0 and p_dn < psat:
+            # the quality of what flows: 0 for liquid, the mixture's for a two-phase draw
+            sat_ = fl[7]
+            x_up = 0.0
+            if rho > 0.0:
+                ps_, rl, rv = saturation(f, t, fl[0], fl[1], sat_, fl[8])[:3]
+                if rl > rv > 0.0:
+                    x_up = (1.0 / rho - 1.0 / rl) / (1.0 / rv - 1.0 / rl)
+            g_hem = hem_flux(f, t, x_up, p_dn / psat, fl[0], sat_, fl[8])
+        q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat, g_hem)
     if w_l < 1.0:
         q += (1.0 - w_l) * _orifice_flow(cda, p_up, p_dn, rho, gam, False, 0.0)
     return q * s
@@ -664,14 +679,14 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
         q = LV[k, V_Q]  # set for the step by _actuate (negative: air returning to a starved supply)
         cda = 0.0
     else:
-        q = _q_orifice(cda, p_up, p_dn, side)
+        q = _q_orifice(cda, p_up, p_dn, side, fl)
     z = (p_up - p_dn) / max(DP_LIN, R_LIN * p_up)
     if z < 1.0 and cda > 0.0:
         # near zero flow, blend toward the rate the other side would give: the
         # upstream properties switch sides at zero flow, and an unblended switch
         # puts a kink in the flow law that Newton circles across
         d_dn = LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA]
-        q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl)) * side[4]
+        q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl), fl) * side[4]
         a_up = 0.5 + 0.5 * z
         q = a_up * q + (1.0 - a_up) * q_dn
         if (mixed or NI[dn, N_GX] >= 0) and up_kind == NODE_VOLUME and NI[dn, N_KIND] == NODE_VOLUME:
@@ -679,7 +694,7 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
             # the flow is two opposite streams, each carrying its own side's fluid,
             # so what crosses does not jump from one side's to the other's as the
             # flow reverses (Newton circles such a jump). It fades out by z = 1.
-            eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side) * (1.0 - _smooth01(z))
+            eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side, fl) * (1.0 - _smooth01(z))
             back = 0.5 * (math.sqrt(q * q + eps * eps) - q) * W[dn, W_S]
     mdot = q if fwd else -q
     if back > 0.0:

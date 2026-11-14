@@ -78,3 +78,48 @@ def test_helium_warms_through_a_regulator():
     t_jt = CP.PropsSI("T", "P", sim.pressure("V"), "H", h, "Helium")
     assert t_jt - 293.15 > 10.0
     assert sim.temperature("V") == pytest.approx(t_jt, abs=1.0)
+
+
+def _dyer_hem(cpn, t, p_up, p_dn=ATM):
+    """Dyer's blend of incompressible flow and the true (isentropic, choked) HEM flux, kg/s/m2."""
+    import math
+
+    import CoolProp.CoolProp as CP
+    import numpy as np
+
+    psat = CP.PropsSI("P", "T", t, "Q", 0, cpn)
+    rho = CP.PropsSI("D", "T", t, "Q", 0, cpn)
+    h1, s1 = CP.PropsSI("H", "T", t, "Q", 0, cpn), CP.PropsSI("S", "T", t, "Q", 0, cpn)
+    g_hem = 0.0
+    for p in np.linspace(p_dn * 1.5, psat * 0.999, 300):
+        h, d = CP.PropsSI("H", "P", p, "S", s1, cpn), CP.PropsSI("D", "P", p, "S", s1, cpn)
+        g_hem = max(g_hem, d * math.sqrt(max(2 * (h1 - h), 0.0)))
+    g_hem = math.sqrt(g_hem ** 2 + 2 * rho * (p_up - psat))
+    g_spi = math.sqrt(2 * rho * (p_up - p_dn))
+    k = math.sqrt((p_up - p_dn) / (psat - p_dn))
+    return k / (1 + k) * g_spi + 1 / (1 + k) * g_hem
+
+
+@pytest.mark.parametrize("fluid,cpn,t", [("nitrous", "NitrousOxide", 293.15), ("nitrous", "NitrousOxide", 273.15),
+                                         ("oxygen", "Oxygen", 110.0), ("nitrogen", "Nitrogen", 90.0)])
+def test_saturated_tank_drains_at_dyer_flux(fluid, cpn, t):
+    """Saturated liquid flashing through an orifice to the atmosphere matches Dyer's model
+    with the real HEM flux (it read 17 to 20 % low for nitrous, whose HEM term was about 0)."""
+    import CoolProp.CoolProp as CP
+
+    psat = CP.PropsSI("P", "T", t, "Q", 0, cpn)
+    s = System("flash")
+    s.add("TK", "tank", fluid=fluid, volume="100 L", fill=0.8, pressure=f"{psat} Pa", temperature=f"{t} K",
+          diameter="0.3 m")
+    s.add("O", "orifice", cda="1 mm2")
+    s.add("VV", "volume", volume="0.1 L", fluid=fluid, pressure="1 atm", temperature="300 K")
+    s.add("O2", "orifice", cda="5000 mm2")
+    s.add("DN", "boundary", fluid=fluid, pressure="1 atm", temperature="300 K")
+    s.connect("TK.bottom", "O.in")
+    s.connect("O.out", "VV.a")
+    s.connect("VV.b", "O2.in")
+    s.connect("O2.out", "DN.port")
+    sim = Simulation(s)
+    sim.run(0.3)
+    expected = _dyer_hem(cpn, t, sim.pressure("TK.bottom"))
+    assert sim.mass_flow("O") / 1e-6 == pytest.approx(expected, rel=0.06)

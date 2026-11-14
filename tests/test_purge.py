@@ -121,12 +121,14 @@ def test_nitrous_fill_purge_and_refill():
     """The nitrous fill example: fill, dump, air purge, then fill again, in real time."""
     sim = Simulation(nitrous_fill())
     times = []
+    vented = [0.0]  # out of the run tank's vent, left open throughout
 
     def run(duration):
         for _ in range(int(round(duration / 0.01))):
             t0 = time.perf_counter()
             sim.run(0.01)
             times.append(time.perf_counter() - t0)
+            vented[0] += sim.mass_flow("RTV") * 0.01
 
     sim.open("OFTV", "RTV")
     run(0.5)
@@ -134,6 +136,7 @@ def test_nitrous_fill_purge_and_refill():
     run(5.0)
     filled = sim.mass("RT")
     assert filled > 1.0
+    vent_at_fill = vented[0]
     sim.close("OFV")
     run(0.5)
     sim.open("ODV")
@@ -141,7 +144,9 @@ def test_nitrous_fill_purge_and_refill():
     sim.open("OPGS")
     run(3.0)
     assert sim.read("PF-OF") > 0.9  # shop air has swept the fill line
-    assert sim.mass("RT") > 0.9 * filled  # the run tank's check valve kept its load
+    # the run tank's check valve kept its load: all it lost went out of its vent (what
+    # was left in the line past the fill valve still runs in after it shuts)
+    assert sim.mass("RT") + vented[0] - vent_at_fill > 0.99 * filled
     sim.close("OPGS", "ODV")
     run(0.5)
     before = sim.mass("RT")
