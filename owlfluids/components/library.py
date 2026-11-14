@@ -162,7 +162,9 @@ class Tank(ComponentType):
               "or just below the boiling point at the tank pressure if that is colder)"),
         Param("fill", None, None, "liquid volume fraction 0-1"),
         Param("pressurant", "text", None,
-              "a separate gas above the liquid, such as nitrogen or helium (blank: the tank holds one fluid)"),
+              "a separate gas above the liquid, such as nitrogen or helium (blank: the tank holds one fluid, "
+              "unless a gas can press it: a liquid tank a gas can be pushed into from a higher pressure, such "
+              "as LOX pressed with GN2, takes that gas as its pressurant)"),
         Param("gas_temperature", "temperature", None,
               "initial pressurant temperature (default: system initial temperature)"),
         Param("diameter", "length", None, "inner diameter, for liquid head at the bottom port (with a pressurant)"),
