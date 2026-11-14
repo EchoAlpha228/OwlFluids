@@ -4,11 +4,12 @@ Three runtime models keep property evaluation cheap:
 
 * ``liquid``: nearly incompressible liquid with a constant bulk modulus
   (water and ethanol by default).
-* ``ideal``: ideal gas with constant heat capacities (opt-in for gases; the only
-  model for helium and air, which OwlFluids uses as gases).
+* ``ideal``: ideal gas with constant heat capacities (opt-in for gases). Helium is
+  8 % denser than ideal at 2,400 psi and 15 % at 4,500 psi, and warms through a
+  regulator, so bottles and fills want the table.
 * ``table``: real-fluid lookup table on (density, internal energy) covering gas,
   liquid, supercritical and two-phase states (default for oxygen, methane,
-  nitrogen and nitrous oxide, so GOX/LOX and GN2/LN2 are the same fluid).
+  nitrogen, nitrous oxide, helium and air, so GOX/LOX and GN2/LN2 are the same fluid).
 """
 
 from __future__ import annotations
@@ -47,8 +48,8 @@ FLUIDS = {
     "methane": ("Methane", "table", ("table", "ideal")),
     "nitrogen": ("Nitrogen", "table", ("table", "ideal")),
     "nitrous": ("NitrousOxide", "table", ("table", "ideal")),
-    "helium": ("Helium", "ideal", ("ideal",)),
-    "air": ("Air", "ideal", ("ideal",)),
+    "helium": ("Helium", "table", ("table", "ideal")),
+    "air": ("Air", "table", ("table", "ideal")),
 }
 # gases that may purge (mix into) a line of another fluid. When two of them meet,
 # the one listed first is the purge gas and the other the line's own fluid.

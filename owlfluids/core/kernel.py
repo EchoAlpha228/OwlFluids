@@ -30,8 +30,8 @@ import math
 
 import numba as nb
 
+from ..fluids.props import hem_flux, saturation, state
 from ..fluids.props import psat as _psat
-from ..fluids.props import saturation, state
 from ..fluids.registry import (
     I_CV,
     I_GAMMA,
@@ -47,6 +47,7 @@ from ..fluids.registry import (
     L_U0,
     MODEL_IDEAL,
     MODEL_LIQUID,
+    MODEL_TABLE,
     P_CPA,
     P_OFF,
 )
@@ -89,6 +90,9 @@ from .layout import (
     NF_BU,
     NF_HA,
     NF_HAAMB,
+    NF_IFB,
+    NF_IFC,
+    NF_IFS,
     NF_MREF,
     NF_RHOREF,
     NF_TAMB,
@@ -118,6 +122,8 @@ from .layout import (
     V_TGT,
     V_VALVE,
     V_VOL,
+    WALL_AL6061,
+    WALL_SS304,
 )
 
 # Compiled without Numba's reference counting: nothing here allocates, and the
@@ -153,8 +159,12 @@ N_FV = 12
 
 
 @jit
-def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat):
-    """Mass flow (>= 0) through an effective area ``cda`` from p_up to p_dn."""
+def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat, g_hem=0.0):
+    """Mass flow (>= 0) through an effective area ``cda`` from p_up to p_dn.
+
+    ``g_hem``: for a flashing liquid, the HEM mass flux of saturated liquid at its
+    temperature expanding to p_dn (choked), from the saturation table.
+    """
     if cda <= 0.0 or p_up <= p_dn:
         return 0.0
     dp = p_up - p_dn
@@ -163,10 +173,11 @@ def _orifice_flow(cda, p_up, p_dn, rho, gam, liquid, psat):
         if dp < DP_LIN:
             spi *= dp / DP_LIN
         if psat > 0.0 and p_dn < psat:
-            # flashing flow: Dyer-style blend of single-phase incompressible flow and a
-            # cavitation-limited estimate of the equilibrium (HEM) flow
+            # flashing flow: Dyer's blend of single-phase incompressible flow and the
+            # homogeneous equilibrium (HEM) flow. A subcooled liquid first runs down to
+            # its vapor pressure as a liquid, then flashes as saturated liquid would
             k = math.sqrt(dp / max(psat - p_dn, 1.0))
-            hem = cda * math.sqrt(2.0 * rho * max(p_up - psat, 0.0))
+            hem = cda * math.sqrt(2.0 * rho * max(p_up - psat, 0.0) + g_hem * g_hem)
             if hem > spi:
                 hem = spi
             return (k / (1.0 + k)) * spi + (1.0 / (1.0 + k)) * hem
@@ -579,15 +590,25 @@ def _q_side(n, d, NI, W, fl):
             rho, h_v, _, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
         w_l = 1.0 if liquid else 0.0
     s = W[n, W_S] if NI[n, N_KIND] == NODE_VOLUME else 1.0
-    return rho, gam, w_l, psat, s, h
+    return rho, gam, w_l, psat, s, h, NI[n, N_FLUID], W[n, W_T]
 
 
 @inl
-def _q_orifice(cda, p_up, p_dn, side):
-    rho, gam, w_l, psat, s, h = side
+def _q_orifice(cda, p_up, p_dn, side, fl):
+    rho, gam, w_l, psat, s, h, f, t = side
     q = 0.0
     if w_l > 0.0:
-        q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat)
+        g_hem = 0.0
+        if psat > 0.0 and p_dn < psat:
+            # the quality of what flows: 0 for liquid, the mixture's for a two-phase draw
+            sat_ = fl[7]
+            x_up = 0.0
+            if rho > 0.0:
+                ps_, rl, rv = saturation(f, t, fl[0], fl[1], sat_, fl[8])[:3]
+                if rl > rv > 0.0:
+                    x_up = (1.0 / rho - 1.0 / rl) / (1.0 / rv - 1.0 / rl)
+            g_hem = hem_flux(f, t, x_up, p_dn / psat, fl[0], sat_, fl[8])
+        q += w_l * _orifice_flow(cda, p_up, p_dn, rho, gam, True, psat, g_hem)
     if w_l < 1.0:
         q += (1.0 - w_l) * _orifice_flow(cda, p_up, p_dn, rho, gam, False, 0.0)
     return q * s
@@ -660,14 +681,14 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
         q = LV[k, V_Q]  # set for the step by _actuate (negative: air returning to a starved supply)
         cda = 0.0
     else:
-        q = _q_orifice(cda, p_up, p_dn, side)
+        q = _q_orifice(cda, p_up, p_dn, side, fl)
     z = (p_up - p_dn) / max(DP_LIN, R_LIN * p_up)
     if z < 1.0 and cda > 0.0:
         # near zero flow, blend toward the rate the other side would give: the
         # upstream properties switch sides at zero flow, and an unblended switch
         # puts a kink in the flow law that Newton circles across
         d_dn = LI[k, L_DRAWB] if fwd else LI[k, L_DRAWA]
-        q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl)) * side[4]
+        q_dn = _q_orifice(cda, p_up, p_dn, _q_side(dn, d_dn, NI, W, fl), fl) * side[4]
         a_up = 0.5 + 0.5 * z
         q = a_up * q + (1.0 - a_up) * q_dn
         if (mixed or NI[dn, N_GX] >= 0) and up_kind == NODE_VOLUME and NI[dn, N_KIND] == NODE_VOLUME:
@@ -675,7 +696,7 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
             # the flow is two opposite streams, each carrying its own side's fluid,
             # so what crosses does not jump from one side's to the other's as the
             # flow reverses (Newton circles such a jump). It fades out by z = 1.
-            eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side) * (1.0 - _smooth01(z))
+            eps = EXCH * _q_orifice(cda, p_up, p_up - max(DP_LIN, R_LIN * p_up), side, fl) * (1.0 - _smooth01(z))
             back = 0.5 * (math.sqrt(q * q + eps * eps) - q) * W[dn, W_S]
     mdot = q if fwd else -q
     if back > 0.0:
@@ -720,20 +741,136 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
 
 
 @inl
+def _interface(liq, NI, NF, W, model, par, sat, satg):
+    """What crosses a tank's liquid surface: (mass rate liquid to ullage, energy rate into the ullage).
+
+    The liquid boils when its vapor pressure is above the ullage's vapor pressure
+    (fast: nucleate boiling, NF_IFB) and vapor condenses onto it when below (slow: the
+    heat must conduct into a stratified liquid, NF_IFC). Either way the rate is the
+    heat the surface passes over the latent heat, with the surface's temperature
+    difference taken from the vapor pressures: dT = dp / (dpsat/dT). Mist in the
+    ullage (vapor below its dew point) rains out. Sensible heat (NF_IFS) passes
+    between ullage and liquid whatever the gases.
+    """
+    ull = NI[liq, N_PARTNER]
+    f = NI[liq, N_FLUID]
+    t_l = W[liq, W_T]
+    t_u = W[ull, W_T]
+    q_s = NF[liq, NF_IFS] * (t_u - t_l)
+    e_u = -q_s
+    m = 0.0
+    if model[f] != MODEL_TABLE or NI[ull, N_FLUID] != f or t_l >= satg[f, 2] - 0.5:
+        return 0.0, e_u
+    p_u = W[ull, W_P]
+    p_v = p_u
+    if NI[ull, N_GX] >= 0:
+        p_v = p_u * (1.0 - W[ull, W_GF])  # the vapor's own share of the ullage pressure
+    ps, rl, rv, hl, hv, mul, muv, gv, sub = saturation(f, t_l, model, par, sat, satg)
+    hfg = max(hv - hl, 1e3)
+    dpdt = hfg / (t_l * max(1.0 / rv - 1.0 / rl, 1e-12))  # Clapeyron
+    dp = ps - p_v
+    b = _smooth01(dp / 1000.0)  # condensing below its vapor pressure, boiling once 1 kPa above it
+    g = NF[liq, NF_IFC] + b * (NF[liq, NF_IFB] - NF[liq, NF_IFC])
+    m = g * dp / (max(dpdt, 1.0) * hfg)
+    if m > 0.0:
+        m *= W[liq, W_S]  # no boiling off an empty tank
+        h = hv
+    else:
+        m *= W[ull, W_S] if NI[ull, N_GX] < 0 else 1.0
+        h = W[ull, W_H]
+    e_u += m * h
+    # vapor below its dew point in the ullage rains out within about a second
+    xq = W[ull, W_X]
+    if 0.0 <= xq < 1.0 and NI[ull, N_GX] < 0:
+        rain = (1.0 - xq) * W[ull, W_RHO] * W[ull, W_V]
+        hlu = saturation(f, t_u, model, par, sat, satg)[3]
+        m -= rain
+        e_u -= rain * hlu
+    # the ullage gives way to the liquid it gains, and fills the space of what it boils off
+    e_u -= m * p_u / NF[liq, NF_RHOREF]
+    return m, e_u
+
+
+# NIST cryogenic heat capacity fits, log10 cp = sum a_i (log10 T)^i, 4 to 300 K
+SS304_CP = (22.0061, -127.5528, 303.647, -381.0098, 274.0328, -112.9212, 24.7593, -2.239153, 0.0)
+AL6061_CP = (46.6467, -314.292, 866.662, -1298.3, 1162.27, -637.795, 210.351, -38.3094, 2.96344)
+
+
+@inl
+def _nist_cp(c, t):
+    lt = math.log10(min(max(t, 10.0), 300.0))
+    s = 0.0
+    lp = 1.0
+    for a in c:
+        s += a * lp
+        lp *= lt
+    return 10.0 ** s
+
+
+@inl
+def _wall_cp(curve, t):
+    """A wall's heat capacity at t over its value at 293.15 K (NF_WALLMC holds that one)."""
+    if curve == WALL_SS304:
+        return _nist_cp(SS304_CP, t) / _nist_cp(SS304_CP, 293.15)
+    if curve == WALL_AL6061:
+        return _nist_cp(AL6061_CP, t) / _nist_cp(AL6061_CP, 293.15)
+    return 1.0
+
+
+@inl
 def _node_source(i, x, NI, NF, W, ns):
-    """Heat flows of node i: ns[0] into the fluid, ns[1] d(Tw)/dt of its wall."""
+    """Heat and mass sources of node i: ns[0] energy into the fluid, ns[1] d(Tw)/dt of
+    its wall, ns[2] own-fluid mass.
+
+    A tank's ullage and liquid share the tank's wall and ambient heat by wetted area;
+    what crosses their liquid surface is added by ``_surface_source``.
+    """
     ns[0] = 0.0
     ns[1] = 0.0
-    if NI[i, N_KIND] == NODE_BOUNDARY:
+    ns[2] = 0.0
+    kind = NI[i, N_KIND]
+    if kind == NODE_BOUNDARY:
         return
     t = W[i, W_T]
-    if NI[i, N_WALL]:
-        tw = x[NI[i, N_SX] + 2]
-        q_in = NF[i, NF_HA] * (tw - t)
+    pt = NI[i, N_PARTNER]
+    if pt < 0:  # most nodes: not part of a tank
+        if NI[i, N_WALL]:
+            tw = x[NI[i, N_SX] + 2]
+            q_in = NF[i, NF_HA] * (tw - t)
+            ns[0] = q_in
+            ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / (NF[i, NF_WALLMC] * _wall_cp(NI[i, N_WALL], tw))
+        elif NF[i, NF_HA] > 0.0:
+            ns[0] = NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
+        return
+    is_liq = kind == NODE_TANK_LIQUID
+    liq = i if is_liq else pt
+    ull = NI[liq, N_PARTNER]
+    wet = min(max(W[liq, W_V] / NF[ull, NF_VOL], 0.0), 1.0)
+    share = wet if is_liq else 1.0 - wet
+    if NI[liq, N_WALL]:
+        tw = x[NI[liq, N_SX] + 2]
+        q_in = NF[liq, NF_HA] * share * (tw - t)
         ns[0] = q_in
-        ns[1] = (-q_in + NF[i, NF_HAAMB] * (NF[i, NF_TAMB] - tw)) / NF[i, NF_WALLMC]
-    elif NF[i, NF_HA] > 0.0:
-        ns[0] = NF[i, NF_HA] * (NF[i, NF_TAMB] - t)
+        if is_liq:
+            q_wall = q_in + NF[liq, NF_HA] * (1.0 - wet) * (tw - W[pt, W_T])
+            ns[1] = (-q_wall + NF[liq, NF_HAAMB] * (NF[liq, NF_TAMB] - tw)) / (NF[liq, NF_WALLMC]
+                                                                               * _wall_cp(NI[liq, N_WALL], tw))
+    elif NF[liq, NF_HA] > 0.0:
+        ns[0] = NF[liq, NF_HA] * share * (NF[liq, NF_TAMB] - t)
+
+
+@inl
+def _surface_source(i, NI, NF, W, ns, fl):
+    """Adds to a tank node's sources what crosses its liquid surface (``_interface``).
+    Kept apart from ``_node_source`` so only tank nodes take the fluid tables."""
+    if NI[i, N_KIND] == NODE_TANK_LIQUID:
+        m, e_u = _interface(i, NI, NF, W, fl[0], fl[1], fl[7], fl[8])
+        ns[0] -= e_u
+        ns[2] = -m
+    else:
+        m, e_u = _interface(NI[i, N_PARTNER], NI, NF, W, fl[0], fl[1], fl[7], fl[8])
+        ns[0] += e_u
+        ns[2] = m
 
 
 @inl
@@ -754,6 +891,7 @@ def _scatter_node(i, NI, ns, out, sign):
     if NI[i, N_KIND] == NODE_BOUNDARY:
         return
     sx = NI[i, N_SX]
+    out[sx] += sign * ns[2]
     out[sx + 1] += sign * ns[0]
     if NI[i, N_WALL]:
         out[sx + 2] += sign * ns[1]
@@ -776,6 +914,15 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
     n = NI.shape[0]
     for i in range(n):
         _node_source(i, x, NI, NF, W, NS[i])
+    for i in range(n):  # each tank's liquid surface once, for both its sides
+        if NI[i, N_KIND] == NODE_TANK_LIQUID:
+            m, e_u = _interface(i, NI, NF, W, fl[0], fl[1], fl[7], fl[8])
+            u = NI[i, N_PARTNER]
+            NS[i, 0] -= e_u
+            NS[i, 2] = -m
+            NS[u, 0] += e_u
+            NS[u, 2] = m
+    for i in range(n):
         _scatter_node(i, NI, NS[i], xdot, 1.0)
     for i in range(n):
         nout[i, O_P] = W[i, W_P]
@@ -818,12 +965,13 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
     colour costs a small fraction of a full right-hand side.
     """
     col_ptr, col_rows, color_ptr, color_cols, sowner, nl_ptr, nl_idx = st
-    xp, dfp, stn, stl, dl, ll, wsave, fnt, fvt, nst, gen = sc
+    xp, dfp, stn, stl, dl, ll, wsave, fnt, fvt, nst, gen, cscale = sc
     n = x.shape[0]
     nw = W.shape[1]
     for j in range(n):
         xp[j] = x[j]
         dfp[j] = 0.0
+        cscale[j] = xscale[j]
     ncol = color_ptr.shape[0] - 1
     for c in range(ncol):
         gen[0] += 1
@@ -863,6 +1011,8 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
             i = dl[d]
             _scatter_node(i, NI, NS[i], dfp, -1.0)
             _node_source(i, xp, NI, NF, W, nst)
+            if NI[i, N_PARTNER] >= 0:
+                _surface_source(i, NI, NF, W, nst, fl)
             _scatter_node(i, NI, nst, dfp, 1.0)
         for q in range(color_ptr[c], color_ptr[c + 1]):
             j = color_cols[q]
@@ -871,6 +1021,20 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
                 i = col_rows[idx]
                 jvals[idx] = dfp[i] / h
             xp[j] = x[j]
+            # convergence scale: the change of this state that would move its node's
+            # pressure by that whole pressure (at least P_TOL_FLOOR), so Newton's
+            # tolerances are shares of pressure. A gas's mass scale stays about its own
+            # mass, but a liquid is so stiff that a part in 1e4 of its mass is tens of psi
+            o = sowner[j]
+            for d in range(nd):
+                if dl[d] == o:
+                    dp = abs(W[o, W_P] - wsave[d, W_P])
+                    p_ref = max(abs(wsave[d, W_P]), P_TOL_FLOOR)
+                    if dp > 0.0 and math.isfinite(dp):
+                        s_p = p_ref * abs(h) / dp
+                        if s_p < cscale[j]:
+                            cscale[j] = max(s_p, 1e-12 * xscale[j])
+                    break
         # undo: scratch rows and the derivative entries (all inside these columns' rows)
         for d in range(nd):
             i = dl[d]
@@ -898,6 +1062,10 @@ def _liquid_margin(f, rho, u, model, grid, lgrid, rhol):
     r_l = (1 - c) * rhol[f, k0] + c * rhol[f, k0 + 1]
     return rho / r_l - 1.0
 
+
+# Pa; Newton's tolerances are shares of a node's pressure, or of this when it is lower
+# (NEWTON_TOL is then 100 Pa). Tighter makes the stiff interpolated liquid tables stall
+P_TOL_FLOOR = 1e6
 
 TRACE = 1e-3  # a mixed node's fluid or gas below this share of its scale is a trace: never chopped for
 
@@ -1063,6 +1231,17 @@ DAMP_MIN = 0.125  # smallest damping of a Newton update that keeps overshooting
 DAMP_EXTRA = 6  # extra iterations a damped solve may take
 
 
+@inl
+def _slow(raw, err_prev):
+    """Chord iterations converge too slowly to be worth more than a new Jacobian."""
+    if raw <= 0.25 * err_prev:
+        return False
+    if raw >= err_prev:
+        return True
+    # iterations still needed at this rate; a Jacobian costs about JAC_COST of them
+    return math.log(NEWTON_TOL / raw) / math.log(raw / err_prev) > 2.0
+
+
 @jit
 def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl):
@@ -1077,6 +1256,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     """
     n = x.shape[0]
     nn = NI.shape[0]
+    cscale = sc[11]
     if ctl[4] > 0.0:
         ctl[8] += JAC_COST + 1.0
         rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
@@ -1111,7 +1291,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         # the size of the full update measures how Newton converges, before any chop
         raw = 0.0
         for i in range(n):
-            e = abs(bvec[iperm[i]]) / xscale[i]
+            e = abs(bvec[iperm[i]]) / cscale[i]
             if e > raw:
                 raw = e
         chopped = _chop(xk, bvec, iperm, NI, NF, fl, xscale, W)
@@ -1124,6 +1304,12 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                 limit = NEWTON_MAX + DAMP_EXTRA
             elif raw < 0.5 * err_prev:
                 damp = min(2.0 * damp, 1.0)
+        elif it >= 1 and raw >= NEWTON_TOL and raw > 0.9 * err_prev and damp == 1.0:
+            # close, but not shrinking: a stiff liquid node on a square-root flow law
+            # flips between two iterates either side of where it settles (each full
+            # update about minus the last). Half of one lands between them
+            damp = 0.5
+            limit = NEWTON_MAX + DAMP_EXTRA
         elif it >= 1:
             damp = 1.0  # close enough: full steps converge from here
         if damp < 1.0:
@@ -1133,7 +1319,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         for i in range(n):
             d = bvec[iperm[i]]
             xk[i] += d
-            e = abs(d) / xscale[i]
+            e = abs(d) / cscale[i]
             if e > err:
                 err = e
                 ctl[7] = i
@@ -1146,7 +1332,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             ctl[6] += 1.0
             converged = True
             break
-        if it + 1 < limit and ((it == 0 and raw > NEWTON_REJAC) or (it >= 1 and raw > 0.25 * err_prev)):
+        if it + 1 < limit and ((it == 0 and raw > NEWTON_REJAC) or (it >= 1 and _slow(raw, err_prev))):
             # a huge first update, or slow convergence: re-linearize at the current iterate
             ctl[8] += JAC_COST + 1.0
             rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)

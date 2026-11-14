@@ -68,13 +68,14 @@ class Simulation:
         self.lout = np.zeros((nl, L.N_LO))
         self.FN = np.full((nl, 4), -1, dtype=np.int64)
         self.FV = np.zeros((nl, kernel.N_FV))
-        self.NS = np.zeros((nn, 2))
+        self.NS = np.zeros((nn, 3))
         self.jvals = np.zeros(len(net.col_rows))
         self.f0 = np.zeros(n)
         self.st = (net.col_ptr, net.col_rows, net.color_ptr, net.color_cols, net.sowner, net.nl_ptr, net.nl_idx)
         self.sc = (np.zeros(n), np.zeros(n), np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64),
                    np.zeros(nn, dtype=np.int64), np.zeros(nl, dtype=np.int64), np.zeros((nn, kernel.N_W)),
-                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(2), np.zeros(1, dtype=np.int64))
+                   np.zeros(4, dtype=np.int64), np.zeros(kernel.N_FV), np.zeros(3), np.zeros(1, dtype=np.int64),
+                   net.xscale.copy())
         self.ab = np.zeros((n, 2 * net.kl + net.ku + 1))
         self.piv = np.zeros(n, dtype=np.int64)
         self.bvec = np.zeros(n)
@@ -137,6 +138,7 @@ class Simulation:
         self.LF = net.LF.copy()  # regulator setpoints change during a run
         self.NF = net.NF.copy()
         self.t = 0.0
+        self._t_goal = 0.0
         self.steps = 0
         self.ctl = np.zeros(12)
         self.ctl[1] = -1.0
@@ -168,8 +170,15 @@ class Simulation:
         self._advance(n)
 
     def run(self, duration: float, chunk: float = 0.01) -> None:
-        """Advance simulated time by ``duration`` seconds."""
-        steps = int(round(units.parse(duration, "time") / self.dt))
+        """Advance simulated time by ``duration`` seconds.
+
+        Time moves in whole steps of dt. What a duration leaves over carries to the next
+        call, so many runs shorter than a step still add up (a loop of run(dt / 4) takes
+        a step every fourth call rather than never moving).
+        """
+        goal = max(self._t_goal, self.t) + units.parse(duration, "time")
+        steps = int(math.floor((goal - self.t) / self.dt + 1e-6))
+        self._t_goal = goal
         per = max(1, int(round(chunk / self.dt)))
         while steps > 0:
             k = min(per, steps)

@@ -25,17 +25,21 @@ from .registry import (
     L_U0,
     MODEL_IDEAL,
     MODEL_LIQUID,
+    MODEL_TABLE,
 )
 from .tables import (
     GAMMA,
     MU,
     N_ETA,
+    N_HEM,
+    N_HEMX,
     N_LIN,
     N_LOG,
     N_SAT,
     N_U,
     N_UL,
     S_GAMV,
+    S_HEM,
     S_HL,
     S_HV,
     S_MUL,
@@ -197,3 +201,29 @@ def psat(f, t, model, par, sat, satg):
     k = min(max(int(math.floor(s)), 0), N_SAT - 2)
     a = min(max(s - k, 0.0), 1.0)
     return (1 - a) * sat[f, S_PSAT, k] + a * sat[f, S_PSAT, k + 1]
+
+
+@jit
+def hem_flux(f, t, x, r, model, sat, satg):
+    """HEM mass flux (kg/s/m2) of a saturated mixture of quality x at T expanding to
+    r = p_dn / psat, choked below its critical ratio (0 without tables)."""
+    if model[f] != MODEL_TABLE or t >= satg[f, 2]:
+        return 0.0
+    t_min = satg[f, 0]
+    s = (t - t_min) / (satg[f, 1] - t_min) * (N_SAT - 1)
+    k = min(max(int(math.floor(s)), 0), N_SAT - 2)
+    a = min(max(s - k, 0.0), 1.0)
+    sq = math.sqrt(min(max(1.0 - r, 0.0), 1.0)) * (N_HEM - 1)
+    j = min(int(math.floor(sq)), N_HEM - 2)
+    b = sq - j
+    sx = math.sqrt(min(max(x, 0.0), 1.0)) * (N_HEMX - 1)
+    ix = min(int(math.floor(sx)), N_HEMX - 2)
+    c = sx - ix
+    out = 0.0
+    for di in range(2):
+        w_x = c if di else 1.0 - c
+        row = S_HEM + (ix + di) * N_HEM + j
+        lo = (1 - b) * sat[f, row, k] + b * sat[f, row + 1, k]
+        hi = (1 - b) * sat[f, row, k + 1] + b * sat[f, row + 1, k + 1]
+        out += w_x * ((1 - a) * lo + a * hi)
+    return out

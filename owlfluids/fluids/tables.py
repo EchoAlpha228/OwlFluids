@@ -34,9 +34,16 @@ P, T, X, GAMMA, MU = range(5)
 N_PROP = 5
 # saturation table rows
 S_PSAT, S_RHOL, S_RHOV, S_HL, S_HV, S_MUL, S_MUV, S_GAMV = range(8)
-N_SATPROP = 8
+# then the homogeneous-equilibrium (HEM) mass flux of a saturated mixture at T
+# expanding isentropically to p_dn = r psat, choked below its critical ratio: N_HEMX
+# qualities evenly spaced in sqrt(x), each at N_HEM points evenly spaced in
+# sqrt(1 - r) (the flux rises as sqrt(1 - r) near r = 1 and falls fast with x)
+S_HEM = 8
+N_HEM = 24
+N_HEMX = 9
+N_SATPROP = S_HEM + N_HEMX * N_HEM
 
-TABLE_VERSION = 3
+TABLE_VERSION = 6
 P_MIN = 500.0  # Pa, lowest pressure the table must reach (vacuum-ish vent lines)
 P_MAX = 400e5  # Pa, about 5,800 psi, covers 3,000 psi with margin
 T_MAX = 500.0  # K
@@ -48,6 +55,8 @@ REFPROP_NAMES = {
     "NitrousOxide": "N2O",
     "Water": "WATER",
     "Ethanol": "ETHANOL",
+    "Helium": "HELIUM",
+    "Air": "AIR.PPF",
 }
 
 
@@ -171,7 +180,9 @@ def build_table(coolprop_name: str, backend: str = "HEOS") -> dict[str, np.ndarr
         sat[S_RHOV, k] = st.rhomass()
         sat[S_HV, k] = st.hmass()
         sat[S_MUV, k] = _safe(st.viscosity, 1e-5)
-        sat[S_GAMV, k] = _safe(lambda: st.cpmass() / st.cvmass(), 1.4)
+        sat[S_GAMV, k] = _safe(lambda: _k_s(st), 1.4)
+
+    _hem_rows(st, t_sat, sat)
 
     def sat_at(t):
         """Interpolated saturation state at T (generation only)."""
@@ -197,7 +208,7 @@ def build_table(coolprop_name: str, backend: str = "HEOS") -> dict[str, np.ndarr
             mu = (1 - q) * sat[S_MUL, ks] + q * sat[S_MUV, ks]
             x = q
         else:
-            gam = _safe(lambda: s_.cpmass() / s_.cvmass(), np.nan)
+            gam = _safe(lambda: _k_s(s_), np.nan)
             mu = _safe(s_.viscosity, np.nan)
             x = -1.0 if rho > rho_crit else 2.0
         return s_.p(), t, x, gam, mu, s_.umass()
@@ -269,6 +280,8 @@ def build_table(coolprop_name: str, backend: str = "HEOS") -> dict[str, np.ndarr
             tab[GAMMA, i, j] = sat[S_GAMV, ks]
             tab[MU, i, j] = sat[S_MUL, ks]
 
+    _choked_gamma(st, rhos, tab, t_crit)
+
     # ---- compressed-liquid table on (u, eta)
     ltab = np.full((N_PROP, N_UL, N_ETA), np.nan)
     etas = np.linspace(0.0, 1.0, N_ETA)
@@ -314,6 +327,110 @@ def build_table(coolprop_name: str, backend: str = "HEOS") -> dict[str, np.ndarr
         "molar_mass": np.array(st.molar_mass()),
         "backend": np.array(backend),
     }
+
+
+def _k_s(st) -> float:
+    """Isentropic exponent rho c^2 / p: what stands in for cp/cv in the gas orifice
+    formulas for a real gas (they are the same for an ideal one)."""
+    return st.rhomass() * st.speed_sound() ** 2 / st.p()
+
+
+def _ideal_choke(k):
+    """Choked mass flux of an ideal gas over sqrt(rho p) at exponent k."""
+    return np.sqrt(k * (2.0 / (k + 1.0)) ** ((k + 1.0) / (k - 1.0)))
+
+
+def _choked_gamma(st, rhos: np.ndarray, tab: np.ndarray, t_crit: float, every: int = 4) -> None:
+    """Fit each gas state's exponent so the ideal choked formula gives its real flux.
+
+    The real choked flux is the largest rho sqrt(2 (h0 - h)) along the isentrope from
+    the state. The exponent that makes the ideal-gas formula (with the real density
+    and pressure) match it is found on every ``every``-th point; its ratio to rho c^2/p
+    is interpolated across the rest. Dense GN2 near saturation or nitrous vapor choke
+    20 to 40 % lower than cp/cv says.
+    """
+    import CoolProp.CoolProp as CP
+
+    ks = np.linspace(1.0005, 3.0, 400)
+    fk = _ideal_choke(ks)
+    n_r, n_u = tab.shape[1], tab.shape[2]
+    ir = np.unique(np.r_[np.arange(0, n_r, every), n_r - 1])
+    ju = np.unique(np.r_[np.arange(0, n_u, every), n_u - 1])
+    ratio = np.ones((len(ir), len(ju)))
+    for a, i in enumerate(ir):
+        for b, j in enumerate(ju):
+            if not _gas_like(tab[X, i, j], tab[T, i, j], t_crit):
+                continue
+            try:
+                st.update(CP.DmassT_INPUTS, rhos[i], tab[T, i, j])
+                p0, h0, s0, k0 = st.p(), st.hmass(), st.smass(), _k_s(st)
+                pc = p0 * (2.0 / (k0 + 1.0)) ** (k0 / (k0 - 1.0))
+                g = []
+                ps = pc * np.array([0.8, 0.9, 1.0, 1.1, 1.2])
+                for p in ps:
+                    st.update(CP.PSmass_INPUTS, p, s0)
+                    g.append(st.rhomass() * np.sqrt(max(2.0 * (h0 - st.hmass()), 0.0)))
+            except ValueError:
+                continue
+            g = np.array(g)
+            m = int(np.clip(np.argmax(g), 1, 3))
+            # parabola through the best three
+            y0, y1, y2 = g[m - 1], g[m], g[m + 1]
+            den = y0 - 2.0 * y1 + y2
+            g_max = y1 - 0.125 * (y2 - y0) ** 2 / den if den < 0.0 else y1
+            target = g_max / np.sqrt(rhos[i] * p0)
+            k_eff = float(np.interp(target, fk, ks))
+            ratio[a, b] = k_eff / k0
+    # spread the ratio over the full grid (index space), then scale rho c^2/p by it
+    from scipy.interpolate import RegularGridInterpolator
+
+    full = RegularGridInterpolator((ir, ju), ratio)(np.stack(np.meshgrid(np.arange(n_r), np.arange(n_u),
+                                                                           indexing="ij"), axis=-1))
+    gas = _gas_like(tab[X], tab[T], t_crit)
+    tab[GAMMA][gas] = (tab[GAMMA] * full)[gas]
+
+
+def _gas_like(x, t, t_crit):
+    """States that flow through an orifice as a gas: vapor, or anything above critical."""
+    return (x > 1.0) | ((x < 0.0) & (t >= t_crit))
+
+
+def _hem_rows(st, t_sat: np.ndarray, sat: np.ndarray) -> None:
+    """Fill the HEM flux rows of ``sat``: a saturated mixture at each T and quality,
+    isentropic to r psat."""
+    import CoolProp.CoolProp as CP
+
+    q_hem = np.linspace(0.0, 1.0, N_HEM)  # sqrt(1 - r)
+    q_f = np.linspace(0.0, 1.0, 121)
+    p_low = P_MIN
+    try:
+        p_low = max(st.p_triple() * 1.05, P_MIN)
+    except ValueError:
+        pass
+    for k, tk in enumerate(t_sat):
+        st.update(CP.QT_INPUTS, 0.0, tk)
+        ps, hl, sl = st.p(), st.hmass(), st.smass()
+        st.update(CP.QT_INPUTS, 1.0, tk)
+        hv, sv = st.hmass(), st.smass()
+        for ix in range(N_HEMX):
+            x = (ix / (N_HEMX - 1)) ** 2
+            h1, s1 = hl + x * (hv - hl), sl + x * (sv - sl)
+            # the flux at each pressure on the way down, then the running maximum
+            # (an orifice chokes at the largest flux it reaches)
+            g = np.zeros_like(q_f)
+            for j, q in enumerate(q_f[1:], start=1):
+                p = ps * (1.0 - q * q)
+                if p < p_low:
+                    g[j] = g[j - 1]
+                    continue
+                try:
+                    st.update(CP.PSmass_INPUTS, p, s1)
+                    g[j] = st.rhomass() * np.sqrt(max(2.0 * (h1 - st.hmass()), 0.0))
+                except ValueError:
+                    g[j] = g[j - 1]
+            g = np.maximum.accumulate(g)
+            row = S_HEM + ix * N_HEM
+            sat[row:row + N_HEM, k] = np.interp(q_hem, q_f, g)
 
 
 def _fill_nans_2d(a: np.ndarray) -> None:

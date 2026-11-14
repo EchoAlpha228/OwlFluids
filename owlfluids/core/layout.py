@@ -3,6 +3,10 @@
 # ---- node integer columns
 N_KIND, N_FLUID, N_PARTNER, N_SX, N_WALL, N_GAS, N_GX = range(7)
 N_NI = 7
+# N_WALL: 0 for no wall, else how its heat capacity follows its temperature
+WALL_CONSTANT = 1
+WALL_SS304 = 2
+WALL_AL6061 = 3
 # N_GAS: the purge gas mixed into the node's own fluid (-1 for a node holding one fluid);
 # N_GX: index of its mass state (its energy follows), after the node's other states
 # node kinds
@@ -12,8 +16,12 @@ NODE_TANK_LIQUID = 2  # liquid region of a pressurized tank; pressure comes from
 
 # ---- node float columns
 (NF_VOL, NF_RHOREF, NF_AREA, NF_HA, NF_WALLMC, NF_HAAMB, NF_TAMB,
- NF_BP, NF_BT, NF_BRHO, NF_BU, NF_MREF) = range(12)
-N_NF = 12
+ NF_BP, NF_BT, NF_BRHO, NF_BU, NF_MREF, NF_IFC, NF_IFB, NF_IFS) = range(15)
+N_NF = 15
+# On a tank's liquid node, the liquid surface's conductances (W/K, coefficient times
+# area): NF_IFC for condensation onto it, NF_IFB for boiling off it, NF_IFS for heat
+# between the ullage and the liquid. A tank's wall and ambient heat (NF_HA, NF_WALLMC,
+# NF_HAAMB, NF_TAMB) sit on its liquid node too, shared by wetted area with the ullage.
 
 # ---- node outputs
 (O_P, O_T, O_X, O_RHO, O_H, O_M, O_TW, O_GAS) = range(8)

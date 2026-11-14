@@ -1,5 +1,6 @@
 """Two-phase tanks (LN2 dewar, nitrous) and line chilldown."""
 import CoolProp.CoolProp as CP
+import numpy as np
 import pytest
 
 from owlfluids.examples import ln2_wet_dress, n2o_blowdown
@@ -12,22 +13,27 @@ PSI = 6894.757
 BUDGET = 200
 
 
-@pytest.mark.slow
-def test_closed_ln2_dewar_self_pressurizes_along_saturation():
+def _dewar(**kw):
     s = System("dewar")
-    s.add("D", "tank", fluid="nitrogen", volume="180 L", fill=0.8, pressure="22 psi", heat_transfer=5.0)
+    s.add("D", "tank", fluid="nitrogen", volume="180 L", fill=0.8, pressure="22 psi", heat_transfer=5.0, **kw)
     s.add("V", "valve", cv=1.0)
     s.add("A", "boundary", fluid="nitrogen")
     s.connect("D.top", "V.in")
     s.connect("V.out", "A.port")
-    sim = Simulation(s, step_budget=BUDGET)
+    return Simulation(s, step_budget=BUDGET)
+
+
+@pytest.mark.slow
+def test_closed_ln2_dewar_self_pressurizes_along_saturation():
+    """With fast condensation at the surface it is the homogeneous (equilibrium) limit."""
+    sim = _dewar(condensation_coefficient=1e5)
     m0 = sim.mass("D")
     p_prev = sim.pressure("D")
     for _ in range(3):
         sim.run(60.0)
-        p, t = sim.pressure("D"), sim.temperature("D")
+        p, t = sim.pressure("D"), sim.temperature("D.bottom")
         assert p > p_prev
-        assert 0.0 < sim.quality("D") < 0.05
+        assert sim._level("D") == pytest.approx(0.8, abs=0.01)
         assert p == pytest.approx(CP.PropsSI("P", "T", t, "Q", 0, "Nitrogen"), rel=0.02)
         p_prev = p
     assert sim.mass("D") == pytest.approx(m0, rel=1e-9)
@@ -36,6 +42,18 @@ def test_closed_ln2_dewar_self_pressurizes_along_saturation():
     sim.run(10.0)
     assert sim.pressure("D") < p_prev
     assert sim.solver_stats()["forced_steps"] == 0
+
+
+@pytest.mark.slow
+def test_a_stratified_dewar_self_pressurizes_faster_than_the_equilibrium_limit():
+    """Heat into the vapor through the dry wall only slowly condenses on a calm liquid."""
+    fast, calm = _dewar(condensation_coefficient=1e5), _dewar()
+    fast.run(120.0)
+    calm.run(120.0)
+    t = calm.temperature("D.bottom")
+    assert calm.pressure("D") > fast.pressure("D") > 22 * PSI
+    assert calm.pressure("D") > CP.PropsSI("P", "T", t, "Q", 0, "Nitrogen")
+    assert calm.solver_stats()["forced_steps"] == 0
 
 
 @pytest.mark.slow
@@ -65,12 +83,12 @@ def test_tank_wall_keeps_a_draining_nitrous_bottle_warmer():
         s.connect("K.bottom", "V.in")
         s.connect("V.out", "A.port")
         sim = Simulation(s, step_budget=BUDGET)
-        if wall:
-            assert sim.x[sim.net.NI[0, 3] + 2] == pytest.approx(293.15)
+        if wall:  # on the liquid, which wets most of it
+            assert sim.x[sim.net.NI[sim.node("K.liquid"), 3] + 2] == pytest.approx(293.15)
         m0 = sim.mass("K")
         sim.open("V")
         sim.run(20.0)
-        t = sim.temperature("K")
+        t = sim.temperature("K.bottom")
         assert sim.pressure("K") == pytest.approx(CP.PropsSI("P", "T", t, "Q", 0, "NitrousOxide"), rel=0.02)
         out[wall] = (t, m0 - sim.mass("K"))
         assert sim.solver_stats()["forced_steps"] == 0
@@ -95,14 +113,23 @@ def test_ln2_chills_a_warm_line_until_liquid_reaches_the_end():
     sx = sim.net.NI[i_wall, 3] + 2
     assert sim.x[sx] == pytest.approx(293.15)
     sim.open("V1")
-    walls = []
-    for _ in range(8):
+    walls, tank = [], []
+    for _ in range(6):
         sim.run(5.0)
         walls.append(sim.x[sx])
+        tank.append(sim.mass("TK"))
+    quality = []
+    for _ in range(20):  # the last 10 s
+        sim.run(0.5)
+        quality.append(sim.quality("O1.in"))
+    walls.append(sim.x[sx])
+    tank.append(sim.mass("TK"))
     assert all(b < a for a, b in zip(walls, walls[1:], strict=False))  # the wall only cools
     assert walls[-1] < 130.0
-    assert sim.quality("O1.in") < 0.1  # liquid (or nearly) at the outlet by the end
-    assert sim.mass_flow("O1") > 0.2
+    assert np.mean(quality) < 0.1  # liquid (or nearly) at the outlet by the end
+    # the flow over the last 10 s: the outlet sputters as the liquid flashes, so one sample swings
+    # 0.08-0.21 kg/s; vapor alone would be ~0.03. The unpressed tank's warm GN2 ullage cools on the LN2
+    assert (tank[-2] - tank[-1]) / 10.0 > 0.13
     assert sim.solver_stats()["forced_steps"] < 60  # violent boiling in the first seconds
 
 
