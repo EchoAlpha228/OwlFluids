@@ -19,6 +19,7 @@ def _branches(**sense) -> System:
     """
     s = System("branches")
     s.settings["sensor_noise"] = "off"
+    s.settings["line_friction"] = "off"
     s.add("K", "tank", fluid="nitrogen", volume="20 L", pressure="100 bar", temperature="300 K")
     s.add("V", "valve", cv=0.5)
     s.add("TEE1", "tee")
@@ -54,7 +55,7 @@ def test_flow_meters_read_the_flow_along_their_line_wherever_they_sit():
     assert sim.read("F_O2") == pytest.approx(o2, rel=0.01)
     assert sim.read("F_BACK") == -sim.read("F_TT")
     assert sim.read("F_V") == pytest.approx(sim.read("F_TT") + sim.read("F_O2"), rel=0.01)  # mass balance
-    # lines have no friction: the pressure at their two ends differs only while they get flowing
+    # friction off: the pressure at their two ends differs only while they get flowing
     assert sim.read("P_TT") == sim.pressure("TEE1.a")  # reads the end it sits at (the first, with no place)
     assert sim.read("P_V") == sim.pressure("V.out")
     assert sim.read("P_TT") == pytest.approx(sim.read("P_V"), rel=0.01)

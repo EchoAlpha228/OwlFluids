@@ -173,7 +173,9 @@ class Tank(ComponentType):
         Param("temperature", "temperature", None,
               "initial temperature (of the liquid, with a pressurant: default the system initial temperature, "
               "or just below the boiling point at the tank pressure if that is colder)"),
-        Param("fill", None, None, "liquid volume fraction 0-1"),
+        Param("fill", None, None,
+              "liquid volume fraction 0-1. 0: an empty tank, its gas at the pressure and temperature given "
+              "(default: the system's initial ones, warm), which liquid filled in collects under"),
         Param("pressurant", "text", None,
               "a separate gas above the liquid, such as nitrogen or helium (blank: the tank holds one fluid, "
               "unless a gas can press it: a liquid tank a gas can be pushed into from a higher pressure, such "
@@ -195,10 +197,11 @@ class Tank(ComponentType):
             "gas at one shared pressure, and the bottom port passes ullage gas once the liquid runs out. "
             "Without one it holds a single fluid: with 'fill' saturated liquid (LOX, LN2, nitrous) under its own "
             "vapor, which boils off the liquid as it vents or drains and condenses back onto it, slowly, as an "
-            "unvented fill or a press squeezes it (see condensation_coefficient); otherwise a "
-            "gas or liquid at the given pressure and temperature. 'top' draws gas or vapor (the ullage gas, "
-            "with a pressurant), 'bottom' draws liquid while there is any. A 'wall_mass' gives a "
-            "single-fluid tank a shell that feeds heat into the boiling fluid.")
+            "unvented fill or a press squeezes it (see condensation_coefficient); fill 0 is an "
+            "empty tank of its warm gas that liquid pools in, boiling off until the tank is cold, and spills "
+            "out the top once full. Otherwise a gas or liquid at the given pressure and temperature. 'top' "
+            "draws gas or vapor (the ullage gas, with a pressurant), 'bottom' draws liquid while there is "
+            "any. A 'wall_mass' gives a single-fluid tank a shell that feeds heat into the boiling fluid.")
 
     @classmethod
     def _surface(cls, comp, vol):

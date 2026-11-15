@@ -8,7 +8,9 @@ from owlfluids.sim.simulation import Simulation
 
 
 def test_ideal_gas_choked_blowdown_matches_isentropic_solution(gas_blowdown):
-    sim = Simulation(gas_blowdown(model="ideal"))
+    s = gas_blowdown(model="ideal")
+    s.settings["line_friction"] = "off"  # the textbook solution is the orifice alone
+    sim = Simulation(s)
     fs = sim.net.fluids
     R, g = fs.par[0, 0], fs.par[0, 2]
     k = 5e-6 / 0.05 * math.sqrt(g * R * 300) * (2 / (g + 1)) ** ((g + 1) / (2 * (g - 1)))
@@ -50,6 +52,7 @@ def test_closed_system_equalizes_and_conserves_mass_and_energy():
 
 def test_torricelli_drain():
     s = System("drain")
+    s.settings["line_friction"] = "off"  # Torricelli: the orifice alone
     s.add("TK", "tank", fluid="water", pressurant="nitrogen", volume="1 m3", fill=0.9,
           pressure="1 atm", diameter="1 m")
     s.add("VENT", "orifice", cda="0.01 m2")

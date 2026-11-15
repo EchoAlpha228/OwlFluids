@@ -37,6 +37,9 @@ class SettingsDialog(QDialog):
         self.prime = QCheckBox("start lines filled from the tank they are open to")
         self.prime.setChecked(bool(system.setting("prime_lines")))
         form.addRow("prime lines", self.prime)
+        self.friction = QCheckBox("wall friction in lines (off: only the parts' own losses)")
+        self.friction.setChecked(str(system.setting("line_friction")).lower() not in ("off", "false", "0"))
+        form.addRow("line friction", self.friction)
         self.noise = QCheckBox("realistic noise and lag by sensor type (off: exact values)")
         self.noise.setChecked(str(system.setting("sensor_noise")).lower() != "off")
         self.noise.setToolTip("Applies only to what sensors read; the simulation itself is unchanged")
@@ -73,6 +76,7 @@ class SettingsDialog(QDialog):
             s[key] = ed.text().strip()
         s["backend"] = self.backend.currentText()
         s["prime_lines"] = self.prime.isChecked()
+        s["line_friction"] = "on" if self.friction.isChecked() else "off"
         s["sensor_noise"] = "realistic" if self.noise.isChecked() else "off"
         s["fluid_models"] = {n: b.currentText() for n, (b, d) in self.models.items() if b.currentText() != d}
         self.accept()

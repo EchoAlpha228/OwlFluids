@@ -41,6 +41,7 @@ DEFAULT_SETTINGS = {
     # the time a line takes to get flowing). "auto": the size of the valves and fittings it joins
     "line_length": "1 m",
     "line_diameter": "auto",
+    "line_friction": "on",
     "prime_lines": True,
     "backend": "HEOS",
     "fluid_models": {},

@@ -113,6 +113,7 @@ def test_saturated_tank_drains_at_dyer_flux(fluid, cpn, t):
 
     psat = CP.PropsSI("P", "T", t, "Q", 0, cpn)
     s = System("flash")
+    s.settings["line_friction"] = "off"  # Dyer's flux is the orifice's alone
     s.add("TK", "tank", fluid=fluid, volume="100 L", fill=0.8, pressure=f"{psat} Pa", temperature=f"{t} K",
           diameter="0.3 m")
     s.add("O", "orifice", cda="1 mm2")
@@ -222,6 +223,7 @@ def test_saturated_liquid_boundary_flashes_at_dyer_flux(cpn, t):
 
     psat = CP.PropsSI("P", "T", t, "Q", 0, cpn)
     s = System("flash")
+    s.settings["line_friction"] = "off"  # Dyer's flux is the orifice's alone
     s.add("UP", "boundary", fluid="nitrous", pressure=f"{psat} Pa", temperature=f"{t} K", phase="liquid")
     s.add("O", "orifice", cda="1 mm2")
     s.add("DN", "boundary", fluid="nitrous", pressure="1 atm", temperature="300 K")
@@ -284,3 +286,51 @@ def test_a_long_line_takes_time_to_get_flowing():
     short.open("V")
     short.run(0.05)
     assert short.mass_flow("V") / q_ss > 0.9
+
+
+def _empty_fill(**tank):
+    """35 psig saturated LN2 into a warm, empty 5 L tank with a steel shell, vented on top."""
+    s = System("fill")
+    s.settings["sensor_noise"] = "off"
+    s.add("D", "boundary", fluid="nitrogen", pressure="35 psig", phase="liquid", temperature="89.0 K")
+    s.add("FV", "valve", cv=0.2, actuator="solenoid")
+    s.add("R", "tank", fluid="nitrogen", volume="5 L", wall_mass="2 kg", wall_material="stainless",
+          diameter="0.15 m", **tank)
+    s.add("VENT", "orifice", cda="10 mm2")
+    s.add("ATM", "boundary", fluid="nitrogen")
+    s.connect("D.port", "FV.in")
+    s.connect("FV.out", "R.bottom")
+    s.connect("R.top", "VENT.in")
+    s.connect("VENT.out", "ATM.port")
+    s.sense("LV", "level", at="R")
+    return s
+
+
+def test_an_empty_warm_tank_fills_with_liquid_and_overflows_its_vent():
+    """fill 0 is an empty tank of warm gas: LN2 pools under it, boils off until the shell is
+    cold, collects, and once the tank is full spills out the vent as fast as it comes in.
+    It used to error (no liquid above 126 K), and a gas tank of the same start oscillated
+    between 12 and 88 psia once full."""
+    import CoolProp.CoolProp as CP
+
+    sim = Simulation(_empty_fill(fill=0), step_budget=200)  # forced steps the same on any machine
+    assert sim.read("LV") == 0.0 and sim.temperature("R.top") == pytest.approx(293.15, abs=0.1)
+    sim.open("FV")
+    sim.run(60.0)
+    assert 0.05 < sim.read("LV") < 0.5 and sim.temperature("R.top") > 110.0  # chilling, gas still warm
+    lowest = 1.0
+    for _ in range(170):
+        sim.run(1.0)
+        lowest = min(lowest, sim.mass_flow("VENT"))
+    assert lowest > 0.0  # the vent never draws air back in
+    # full: the liquid region takes the tank, at the density it holds liquid at (saturated
+    # at the tank's starting 1 atm; the warmer liquid it fills with would fit 4 % less)
+    rho_l = CP.PropsSI("D", "P", ATM, "Q", 0, "Nitrogen")
+    assert sim.mass("R") == pytest.approx(rho_l * 5e-3, rel=0.01)
+    assert sim.read("LV") > 0.99
+    assert sim.mass_flow("VENT") == pytest.approx(sim.mass_flow("FV"), rel=0.02)
+    assert sim.solver_stats()["forced_steps"] == 0
+    # a gas tank its own liquid can reach is made the same empty tank, with a note
+    gas = Simulation(_empty_fill(pressure="1 atm", temperature="293.15 K"))
+    assert any(w.startswith("R: nitrogen liquid can be filled into") for w in gas.net.warnings)
+    assert gas.net.comp_nodes["R"] == sim.net.comp_nodes["R"]

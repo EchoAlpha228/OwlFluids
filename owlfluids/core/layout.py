@@ -45,7 +45,9 @@ CTRL_REGULATOR = 4  # throttles to hold the downstream pressure at the setpoint
 CTRL_PUMP = 5  # fixed mass flow from its inlet while running; on below LF_P1, off above LF_P2 (LF_CDA: kg/s)
 CTRL_AIR = 6  # a pneumatic actuator's draw on its air supply (a); LF_CDA: pilot Cd*A, LF_P1/LF_P2: gauge
 # pressures where the valve starts to stroke and is fully stroked
-CTRL_LINE = 7  # a line: its mass flow q is a state, dq/dt = (A/L)(p_a - p_b) (LF_CDA: A/L)
+CTRL_LINE = 7  # a line: its mass flow q is a state, dq/dt = (A/L)(p_a - p_b - dp_friction) (LF_CDA: A/L,
+# LF_P1: L/D, 0 for a line without friction, LF_P2: its inner diameter D)
+LINE_ROUGHNESS = 1.5e-6  # m, drawn stainless or copper tubing
 
 # ---- link float columns
 LF_CDA, LF_P1, LF_P2, LF_LOCK, LF_LEAK, LF_SPE, LF_PREF, LF_RESET = range(8)
