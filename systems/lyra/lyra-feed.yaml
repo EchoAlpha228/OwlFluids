@@ -10,7 +10,7 @@
 # 1/4 x .035 -> 0.180 in, 3/8 x .035 -> 0.305 in, 1/2 x .049 -> 0.402 in, 3/4 x .065 -> 0.620 in).
 #
 # Starting state (PLACEHOLDER): ethanol loaded and unpressurized, the N2O run tank already filled and
-# sitting at about its vapor pressure under a little GN2, the purge bottle charged, everything
+# self-pressurized (saturated at 20 C, about 720 psig), the purge bottle charged, everything
 # closed. A typical run: open NI-F and NTI-O, press with FPV and OPV, then FMV and OMV to flow.
 name: Lyra feed system
 settings:
@@ -81,8 +81,11 @@ components:
 - {id: OPVV, type: valve, actuator: pneumatic, cv: 0.3, open_time: 100 ms, at: [2010, 1100]}                   # pneumatic NC; PLACEHOLDER cv, stroke
 - {id: VENT-OPVV, type: boundary, fluid: nitrogen, at: [2080, 1100]}                      # added
 - {id: OTFS, type: valve, actuator: solenoid, cv: 0.2, open_time: 30 ms, at: [1750, 1214], rotation: 180}  # PLACEHOLDER cv, stroke
-- {id: VENT-OTFS, type: boundary, fluid: nitrogen, at: [1690, 1214], rotation: 180}       # added; vents the run tank's ullage (GN2 in this model, see PLACEHOLDERS.md)
-- {id: N2O, type: tank, fluid: nitrous, pressurant: nitrogen, volume: 20 L, fill: 0.85, pressure: 760 psi, temperature: 20 C, diameter: 0.15 m, wall_mass: 8 kg, wall_material: aluminum, at: [1924, 1342]}  # run tank; PLACEHOLDER volume, fill, pressure, wall
+- {id: VENT-OTFS, type: boundary, fluid: nitrous, at: [1690, 1214], rotation: 180}        # added; vents the run tank's ullage (N2O vapor and any GN2)
+# run tank: saturated N2O whose ullage holds its own vapor and any GN2 pressed into it, so it boils to hold
+# its vapor pressure when vented and the GN2 adds its partial pressure when supercharged. To start empty
+# (for a fill), use fill: 0, pressure: 1 atm.
+- {id: N2O, type: tank, fluid: nitrous, volume: 20 L, fill: 0.85, temperature: 20 C, diameter: 0.15 m, wall_mass: 8 kg, wall_material: aluminum, at: [1924, 1342]}  # PLACEHOLDER volume, fill, temperature, wall
 
 # ------------------------------------------------------------------ oxidizer feed
 - {id: TEE-OB, type: tee, at: [1924, 1476]}                                               # added

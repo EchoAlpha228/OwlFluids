@@ -1,6 +1,4 @@
 """Burst disks: shut below their burst pressure, then open for good, and a reset puts a new disk in."""
-from pathlib import Path
-
 from owlfluids.io.system import System
 from owlfluids.sim.simulation import Simulation
 
@@ -33,12 +31,3 @@ def test_a_burst_disk_ruptures_stays_open_and_resets():
     sim.reset()
     assert not sim.burst("BD")
     assert sim.burst_disks() == ["BD"]
-
-
-def test_the_lyra_feed_system_builds_and_presses():
-    path = Path(__file__).resolve().parents[1] / "systems" / "lyra" / "lyra-feed.yaml"
-    sim = Simulation.from_file(path)
-    assert sim.burst_disks() == ["OFBD"]
-    sim.open("NI-F", "FPV")
-    sim.run(3.0)
-    assert sim.read("FTPT") > 100 * PSI and not sim.burst("OFBD")

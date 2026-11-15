@@ -19,7 +19,7 @@ walls); which valves are pneumatic (NC or NO), solenoid or manual.
 | FMV, OMV Cv | 3.0, 4.0 | Feed flow and the pressure drop to the injector |
 | Injector CdA (INJ-F, INJ-O) | 20 mm², 30 mm² | Mass flow and mixture ratio; with no combustion the "chamber" is the atmosphere |
 | ETH tank volume, fill, diameter | 15 L, 90 %, 0.15 m | Run time, ullage blowdown |
-| N2O run tank volume, fill, starting pressure, wall | 20 L, 85 %, 760 psi, 8 kg aluminum | Run time, ullage blowdown |
+| N2O run tank volume, fill, temperature, wall | 20 L, 85 %, 20 °C (about 720 psig), 8 kg aluminum | Run time, vapor pressure, how fast it cools as it boils |
 | Venturis FV, OV (permanent loss) | Cv 4, Cv 6 | Pressure drop through the flowmeters |
 | FPV, OPV Cv | 0.4, 0.6 | Press rate (the P&ID orifices FPO and OPO usually limit it anyway) |
 
@@ -35,8 +35,8 @@ walls); which valves are pneumatic (NC or NO), solenoid or manual.
 - **Valve stroke times:** solenoids 20-30 ms, pneumatic mains 150 ms, vents 100 ms, OFV 300 ms.
   Pneumatic valves use the default actuators (100 cc, stroke from 30 to 60 psig, pilot Cv 0.1).
 - **Line lengths:** all of them (flex hoses 1.5 m). Line diameters come from the P&ID.
-- **Starting state:** ethanol loaded and unpressurized; run tank loaded at about its vapor
-  pressure; NI-F, NTI-O, OFTV and every automated valve closed; ODV-M closed; AIV, IFTV and IOTV open.
+- **Starting state:** ethanol loaded and unpressurized; run tank loaded and self-pressurized at 20 °C
+  (`fill: 0, pressure: 1 atm` starts it empty for a fill); NI-F, NTI-O, OFTV and every automated valve closed; ODV-M closed; AIV, IFTV and IOTV open.
 
 ## Names added or changed
 
@@ -50,13 +50,13 @@ walls); which valves are pneumatic (NC or NO), solenoid or manual.
 - `FV` and `OV` are the venturis the flowmeters FFM and OFM read. FVPT-1/OVPT-1 read the inlet and
   FVPT-2/OVPT-2 the outlet: a lumped model has no throat pressure.
 
-## What the model can't do (yet)
+## Modelling notes and limits
 
-- **N2O vapor and GN2 in the same ullage.** A tank holds liquid under either its own vapor or
-  a pressurant, not both. The run tank is modelled as nitrous under GN2, so venting it (OTFS,
-  OTVV, OPVV) drops its pressure below the nitrous vapor pressure instead of the nitrous boiling
-  to hold it up, and the OTFS vent carries GN2. Pressing, flowing and topping off from a loaded
-  tank behave sensibly; a fill from empty does not. This is the biggest gap for Lyra.
+- **Run tank ullage.** It holds N2O vapor and any GN2 pressed in, at one temperature: venting it
+  boils the liquid to hold its vapor pressure (and cools it), and a supercharge adds the GN2's
+  partial pressure. GN2 does not dissolve in the liquid N2O. A fill from empty works, but this
+  solver needs a fresh Jacobian every step while the tank fills, so on a slow computer the status
+  bar counts forced steps then (they converge to the same answer).
 - **ODV-M is a 3-way valve with a DES port.** It is modelled as a hand valve from ODV to the
   vent; the DES path is left out until we know what it does.
 - **No combustion.** The injectors flow to the atmosphere, as on a cold flow, and the igniter
