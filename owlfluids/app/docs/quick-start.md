@@ -85,10 +85,11 @@ still (PAUSED) while you pan and zoom, and press it again to follow.
 - **Add parts** by dragging them from **Parts**. Drag from one port (the small
   circle) to another to connect them. The Cv of the valves, regulators, fittings
   and orifices sets every flow. Each line is 1 m of tubing by default, and its
-  fluid has inertia, so a fast close shows water hammer; click a line to set its
+  fluid has inertia and wall friction, so a fast close shows water hammer; click a line to set its
   `length` and inner `diameter` in **Properties** (`0` for parts bolted
   together), or the defaults for every line in **Edit > Settings…**.
-- **Edit** a selected part in **Properties**. Values take units: `3000 psi`,
+- **Edit** a selected part in **Properties**. A tank's **make it empty** button
+  starts it empty and warm, ready to fill. Values take units: `3000 psi`,
   `-196 C`, `0.5 in`, `49 L`. A value that can't be read turns red with the
   reason under it.
 - **R** rotates clockwise, **Shift+R** back, **Delete** removes, **F**

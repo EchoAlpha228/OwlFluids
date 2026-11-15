@@ -14,7 +14,7 @@ def _receiver(vent_cv=0.03):
     s.add("R", "volume", volume="20 L", fluid="air", pressure="1 atm", temperature="293 K")
     s.add("V", "valve", cv=vent_cv, open_time="50 ms")
     s.add("ATM", "boundary", fluid="air")
-    s.connect("C.out", "R.a")
+    s.connect("C.out", "R.a", length=0)  # on its receiver, so its switch reads the receiver
     s.connect("R.b", "V.in")
     s.connect("V.out", "ATM.port")
     s.sense("PT", "pressure", "R.a", units="psig")

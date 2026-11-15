@@ -234,10 +234,13 @@ connections:
 - [INJ.out, CH.a, {length: 0}]
 ```
 
-A line has no friction: the valves, orifices, regulators and fittings are the
-restrictions that matter on a stand, so their Cv sets every flow. Line friction is
-usually a few percent of a feed's pressure drop: the example stand's LOX flow comes out
-about 4 % higher than with friction modelled. The fluid a line holds sits at its ends:
+A line also has wall friction (Darcy, with Churchill's friction factor: laminar at low
+flow, then turbulent for drawn tubing's 1.5 um roughness), which damps a liquid column
+that would otherwise ring, such as a full tank overflowing through its vent. The valves,
+orifices, regulators and fittings are still the restrictions that matter on a stand:
+friction is usually a few percent of a feed's pressure drop. `line_friction: off` (a
+setting, or `friction: off` on one connection) leaves it out, for comparing an element
+with a hand calculation. The fluid a line holds sits at its ends:
 next to a valve, fitting or tee it adds to that point's volume (with
 `junction_volume`, 1 cc by default; valve and fitting bodies hold more), and next to a
 tank or volume it is part of the tank. A line of `length: 0` joins parts bolted straight
@@ -257,7 +260,13 @@ pressure and temperature (`prime_lines: false` turns this off).
 Saturated tanks (`tank` with `fill`) hold liquid and vapor in equilibrium, so a
 nitrous bottle's pressure follows its temperature as it empties and cools, and a run
 tank filled from the bottom while its vent is open settles on the vapor pressure of
-what it holds. `wall_mass` adds the tank shell, which warms the boiling nitrous;
+what it holds. `fill: 0` is an empty tank: its gas at the `pressure` and `temperature`
+given (by default the system's initial ones, so warm gas at 1 atm), which liquid filled
+in pools under. The liquid boils off while it chills the tank and its `wall_mass`, then
+collects, and once the tank is full it spills out the top port as fast as it comes in.
+A plain gas tank that its own liquid can be filled into (LN2 into a GN2 tank) is made
+this empty tank, with a note. In the app, **make it empty** on a tank's properties does
+the same. `wall_mass` adds the tank shell, which warms the boiling nitrous;
 `film_coefficient` (default 1000 W/m2K) sets how fast, and is the value to tune
 against test data.
 
@@ -401,6 +410,11 @@ the 60-component stand, purges included.
 - Property tables blend pressure within about one grid cell of saturated liquid,
   so a saturated tank filled above ~98 % can read a few percent high (up to ~13 % at
   99 %). States within a kelvin or so of the critical point are also approximate.
-- Lines have no friction, volume or inertia, so there is no water hammer and no
+- Each line is one lump: its fluid's inertia, wall friction and volume (at its ends),
+  not a wave travelling along it, so a fast close gives the Joukowsky surge but not the
+  surge's reflections along a long line. Lines have no steel of their own, so there is no
   line chilldown unless a line is drawn as a `volume` with a `wall_mass`. Wall heat
   transfer uses a fixed film coefficient.
+- A two-region tank holds its liquid at one density, the saturated liquid's at its
+  starting temperature, so liquid that warms or arrives warmer fills a few percent less
+  than it would (about 4 % for 86 K LN2 in a tank that started at 77 K).

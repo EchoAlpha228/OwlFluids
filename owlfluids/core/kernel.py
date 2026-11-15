@@ -76,6 +76,7 @@ from .layout import (
     LF_PREF,
     LF_RESET,
     LF_SPE,
+    LINE_ROUGHNESS,
     LO_MDOT,
     LO_OPEN,
     N_FLUID,
@@ -153,8 +154,12 @@ MIX_ITER = 40  # most iterations of each solve in a mixed node's state
 # is present (0) or not (1), its vapor pressure, the purge gas share of the volume
 # (shown), and the last three at the last accepted step, where each solve starts
 (W_P, W_T, W_X, W_RHO, W_U, W_H, W_G, W_MU, W_V, W_TW, W_S, W_HG, W_SG, W_Y, W_RHOM, W_LT,
- W_REG, W_PS, W_GF, W_U0, W_LT0, W_T0, W_REG0) = range(23)
-N_W = 23
+ W_REG, W_PS, W_GF, W_U0, W_LT0, W_T0, W_REG0, W_OV) = range(24)
+N_W = 24
+# W_OV: for a tank's ullage, the share of what leaves through its port that is the
+# liquid's, as the liquid comes up to the top (a tank filled until it overflows its vent)
+OV_FULL = 0.002  # ullage share of the tank at which only liquid leaves the top
+OV_START = 0.01  # ... and where liquid starts to leave with the gas
 
 # per-link flows: for each of 4 nodes, own-fluid mass, energy and purge-gas mass; then,
 # for a line, the rate of change of its flow state
@@ -350,6 +355,17 @@ def _mixed_one(i, x, NI, NF, fl, W):
     W[i, W_REG] = 0.0 if liquid else 1.0  # 0: what flows out is liquid-like
     W[i, W_PS] = ps
     W[i, W_GF] = p_g / p * y / vol if p > 0.0 else 0.0
+    W[i, W_OV] = _overflow(i, x, NI, NF)
+
+
+@inl
+def _overflow(i, x, NI, NF):
+    """The liquid's share of what leaves a tank ullage (node i) as the liquid reaches the top."""
+    pt = NI[i, N_PARTNER]
+    if pt < 0 or NI[pt, N_KIND] != NODE_TANK_LIQUID:
+        return 0.0
+    phi = 1.0 - max(x[NI[pt, N_SX]], 0.0) / NF[pt, NF_RHOREF] / NF[i, NF_VOL]
+    return 1.0 - _smooth01((phi - OV_FULL) / (OV_START - OV_FULL))
 
 
 @inl
@@ -415,6 +431,7 @@ def _node_one(i, x, NI, NF, fl, W):
     W[i, W_SG] = 0.0
     W[i, W_Y] = 1.0
     W[i, W_RHOM] = rho
+    W[i, W_OV] = _overflow(i, x, NI, NF)
 
 
 @inl
@@ -592,6 +609,14 @@ def _q_side(n, d, NI, W, fl):
         if NI[n, N_KIND] == NODE_TANK_LIQUID and W[n, W_S] < 0.5:
             rho, h_v, _, gam, liquid, psat = _draw(NI[n, N_PARTNER], DRAW_VAPOR, NI, W, fl)
         w_l = 1.0 if liquid else 0.0
+    if W[n, W_OV] > 0.0 and NI[n, N_KIND] == NODE_VOLUME:
+        # a full tank's ullage hands its outflow over to the liquid coming up to the top
+        rho_l, h_l, _, gam_l, liq_l, psat_l = _draw(NI[n, N_PARTNER], DRAW_LIQUID, NI, W, fl)
+        ov = W[n, W_OV]
+        w_l = ov * (1.0 if liq_l else 0.0) + (1.0 - ov) * w_l
+        rho = ov * rho_l + (1.0 - ov) * rho
+        if ov >= 0.5:
+            gam, psat = gam_l, psat_l
     s = W[n, W_S] if NI[n, N_KIND] == NODE_VOLUME else 1.0
     return rho, gam, w_l, psat, s, h, NI[n, N_FLUID], W[n, W_T]
 
@@ -640,6 +665,23 @@ def _exchange(src, d_src, dst, q, NI, NF, W, fl, fn, fv):
 
 
 @inl
+def _line_friction(q, l_d, dia, rho, mu):
+    """Pressure lost to wall friction by mass flow q along a line (signed with q).
+
+    Darcy, f*(L/D)*rho*v^2/2, with Churchill's friction factor: laminar 64/Re at low
+    flow, smooth through transition, Colebrook for the tubing's roughness above. Linear
+    in q near zero flow, so it damps a column that would otherwise ring.
+    """
+    area = 0.25 * math.pi * dia * dia
+    mu = max(mu, 1e-7)
+    re = abs(q) * dia / (area * mu) + 1e-9
+    aa = (2.457 * math.log(1.0 / ((7.0 / re) ** 0.9 + 0.27 * LINE_ROUGHNESS / dia))) ** 16
+    bb = (37530.0 / re) ** 16
+    f = 8.0 * ((8.0 / re) ** 12 + (aa + bb) ** -1.5) ** (1.0 / 12.0)
+    return f * l_d * q * abs(q) / (2.0 * max(rho, 1e-6) * area * area)
+
+
+@inl
 def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
     """Flows carried by link k.
 
@@ -665,7 +707,11 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
     qs = 0.0
     if ctrl == CTRL_LINE:
         qs = x[LI[k, L_SX]]
-        fv[12] = LF[k, LF_CDA] * (pa - pb)
+        dpf = 0.0
+        if LF[k, LF_P1] > 0.0:
+            dpf = _line_friction(qs, LF[k, LF_P1], LF[k, LF_P2], 0.5 * (W[a, W_RHO] + W[b, W_RHO]),
+                                 0.5 * (W[a, W_MU] + W[b, W_MU]))
+        fv[12] = LF[k, LF_CDA] * (pa - pb - dpf)
         o = 1.0
         fwd = qs >= 0.0
     else:
@@ -745,7 +791,22 @@ def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
         _deliver(dn, f_up, s_up * q, h, t_up, NI, NF, W, fl, fn, fv, 1)
         if s_up < 1.0:
             _deliver(dn, NI[pt, N_FLUID], (1.0 - s_up) * q, h_g, W[pt, W_T], NI, NF, W, fl, fn, fv, 1)
-    elif mixed:
+        return mdot, o
+    ov = W[up, W_OV] if up_kind == NODE_VOLUME else 0.0
+    if ov > 0.0:
+        # a full tank overflowing: the liquid's share leaves from the liquid region, and the
+        # ullage, taking the space it leaves, does the work of pushing it out
+        q_l = ov * q
+        h_l = _draw(pt, DRAW_LIQUID, NI, W, fl)[1]
+        fn[2] = pt
+        fv[6] -= q_l
+        fv[7] -= q_l * h_l
+        w = W[up, W_P] * q_l / NF[pt, NF_RHOREF]
+        fv[7] += w
+        fv[1] -= w
+        _deliver(dn, NI[pt, N_FLUID], q_l, h_l, W[pt, W_T], NI, NF, W, fl, fn, fv, 1)
+        q -= q_l
+    if mixed:
         q_g = (1.0 - y) * q
         h_g = W[up, W_HG]
         fn[0] = up

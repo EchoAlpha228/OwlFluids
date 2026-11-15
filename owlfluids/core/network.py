@@ -68,6 +68,7 @@ class _Node:
     iface: tuple = (0.0, 0.0, 0.0)  # tank liquid surface conductances (see layout.NF_IFC)
     gas_fill: bool = False  # a mixed node that starts full of its purge gas
     phase: str = "auto"  # a boundary exactly on its saturation line: liquid, vapor, or auto (vapor)
+    wall_t: float | None = None  # where its wall starts, if not at its own temperature (an empty tank's)
 
 
 @dataclass
@@ -449,7 +450,9 @@ class NetworkBuilder:
             junctions = [net for net, i in ((na, a), (nb, b)) if self.nodes[i].owner == ""]
             for net in junctions:
                 self.net_volume[net] += area * length / len(junctions)
+            friction = str(spec.get("friction", self.system.setting("line_friction"))).strip().lower()
             lk = _Link(f"{ra} -- {rb}", a, b, "", cda=area / length, ctrl=L.CTRL_LINE,
+                       p1=0.0 if friction in ("off", "false", "0") else length / dia, p2=dia,
                        draw_a=self.net_draw.get(na, L.DRAW_MIX), draw_b=self.net_draw.get(nb, L.DRAW_MIX),
                        nets=(na, nb), area=area)
             self.links.append(lk)
@@ -524,6 +527,11 @@ class NetworkBuilder:
             other, kind, t_liq = self.pressed[c.id]
             ct = get_type(c.type)
             own = canonical(ct.param(c, "fluid"))
+            if kind == "own_empty":
+                c.params["fill"] = 0.0
+                notes.append(f"{c.id}: {own} liquid can be filled into its {own} gas, so it is modelled as an empty "
+                             "tank the liquid collects in (set 'fill: 0' to choose this)")
+                continue
             if kind == "empty":
                 t_g = ct.param(c, "temperature")
                 c.params.update(fluid=other, pressurant=own, fill=0.0, gas_temperature=t_g)
@@ -572,15 +580,38 @@ class NetworkBuilder:
             f = fs.names.index(n.fluid)
             if fs.models[f] != "table":
                 continue  # no vapor of its own: it needs a gas to press it (``_find_pressed``)
+            tc = fs.critical_temperature(f)
+            if fill == 0.0 and (p is not None or t is None or t >= tc - 0.5):
+                self._resolve_empty(fs, n, f, p, t)
+                continue
             if t is None:
                 if p is None:
                     raise BuildError(f"{n.owner} needs temperature or pressure with its fill")
                 t = fs.saturation_temperature(f, p)
-            tc = fs.critical_temperature(f)
             if t >= tc - 0.5:
-                raise BuildError(f"{n.owner}: {n.fluid} has no liquid above {tc:.1f} K; lower its temperature")
+                raise BuildError(f"{n.owner}: {n.fluid} has no liquid above {tc:.1f} K; lower its temperature, "
+                                 "or give it a pressure for an empty tank of warm gas (fill 0)")
             n.init = ("tank_liquid", fs.saturation_pressure(f, t), t, fill)
             self.nodes[n.partner].init = ("satvap", t)
+
+    def _resolve_empty(self, fs: FluidSet, n: _Node, f: int, p, t) -> None:
+        """An empty tank (fill 0): its own gas at p and t (the system's initial pressure and
+        temperature by default), over a liquid region with nothing in it yet. Liquid filled
+        in pools at the bottom, boils off as it chills the tank, and collects."""
+        p = self.p_init if p is None else p
+        pc = fs.critical_pressure(f)
+        if p >= pc - 1e4:
+            raise BuildError(f"{n.owner}: an empty tank of {n.fluid} must start below its critical pressure "
+                             f"({units.to_psi(pc) - units.to_psi(units.ATM):.0f} psig) for liquid to collect in it")
+        ts = fs.saturation_temperature(f, p)
+        t = max(self.t_init, ts) if t is None else t
+        if t < ts - 0.05:
+            raise BuildError(f"{n.owner}: {n.fluid} gas at {t:.1f} K would be liquid at its pressure (it boils at "
+                             f"{ts:.1f} K); give it a warmer temperature, or a fill for a tank of liquid")
+        n.init = ("tank_liquid", p, ts, 0.0)
+        g = self.nodes[n.partner]
+        g.init = ("pt", p, t) if t > ts + 0.05 else ("satvap", ts)
+        n.wall_t = t
 
     def _resolve_tank_liquids(self, fs: FluidSet) -> None:
         """Fix each tank liquid's starting temperature, and check it is a liquid there.
@@ -801,6 +832,13 @@ class NetworkBuilder:
                 t = self.t_init if n.init[2] is None else n.init[2]
                 kind = "liquid" if liquid_at(f, p, t) else "gas"
             came = sources(i)
+            if (kind == "gas" and n.partner < 0 and n.init[0] == "pt" and fs.models[f] == "table"
+                    and p < fs.critical_pressure(f) - 1e4
+                    and any(g == n.fluid and liquid_source_t(s, g) is not None for g, s in came)):
+                # a tank of gas its own liquid can be filled into (LN2 into a warm GN2 tank): an
+                # empty two-region tank, so the liquid pools under the gas instead of mixing into it
+                self.pressed[n.owner] = (n.fluid, "own_empty", None)
+                continue
             gases = {g for g, s in came if g in PURGE_GASES and (g != n.fluid or kind != "gas")
                      and gas_source_p(s, g) > p + 0.5 * units.ATM}
             if kind == "gas" and n.partner < 0 and n.fluid in PURGE_GASES:
@@ -984,7 +1022,7 @@ class NetworkBuilder:
                 NF[i, L.NF_TAMB] = t_amb
                 # a volume primed from a tank has been sitting full, and a tank shell holds its
                 # contents: their walls are at the fluid's temperature
-                x0.append(t0 if n.primed or at_fluid else t_amb)
+                x0.append(n.wall_t if n.wall_t is not None else t0 if n.primed or at_fluid else t_amb)
                 xscale.append(100.0)
             if n.gas:
                 NI[i, L.N_GX] = len(x0)

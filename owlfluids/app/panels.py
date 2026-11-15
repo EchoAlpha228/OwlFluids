@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -191,6 +192,20 @@ class Properties(QScrollArea):
         for p in ct.params:
             form.addRow(_label(p.name), self._editor(p, comp, read_only))
         self._layout.addWidget(form_w)
+        if comp.type == "tank" and not read_only:
+            empty = QPushButton("make it empty")
+            empty.setToolTip("Start it empty (fill 0): its gas at room temperature and the pressure given (1 atm "
+                             "by default). Liquid filled in pools at the bottom, boils off as it chills the tank, "
+                             "and spills out the top once it is full.")
+
+            def make_empty():
+                comp.params["fill"] = 0.0
+                comp.params.pop("temperature", None)
+                self.edited.emit()
+                self.show_component(comp, system)
+
+            empty.clicked.connect(make_empty)
+            self._layout.addWidget(empty)
         self._layout.addWidget(_heading("Sensors"))
         for s in [s for s in system.sensors if s.at.split(".")[0] == comp.id]:  # its own, and any on a free port
             row = QWidget()
@@ -316,9 +331,9 @@ class Properties(QScrollArea):
         title.setFont(T.ui_font(12, bold=True))
         self._layout.addWidget(title)
         about = QLabel(f"Tubing from {a} to {b}. Its fluid has inertia: a long line takes time to get "
-                       "flowing, and a fast valve close on it shows water hammer. It has no friction (the "
-                       "valves, orifices and fittings set the flow). Length 0 joins parts bolted straight "
-                       "together into one point.")
+                       "flowing, and a fast valve close on it shows water hammer. Its wall friction damps "
+                       "it (the valves, orifices and fittings still set most of the flow). Length 0 joins "
+                       "parts bolted straight together into one point.")
         about.setWordWrap(True)
         about.setObjectName("hint")
         self._layout.addWidget(about)
@@ -338,6 +353,19 @@ class Properties(QScrollArea):
             ed.setReadOnly(read_only)
             ed.editingFinished.connect(lambda e=ed, k=key: self._set_line(a, b, k, e))
             form.addRow(key, ed)
+        on = str(spec.get("friction", system.setting("line_friction"))).lower() not in ("off", "false", "0")
+        friction = QCheckBox("wall friction")
+        friction.setChecked(on)
+        friction.setEnabled(not read_only)
+        friction.setToolTip("Darcy friction along the line (the line friction setting by default)")
+
+        def set_friction(checked):
+            default = str(system.setting("line_friction")).lower() not in ("off", "false", "0")
+            system.set_line_spec(a, b, "friction", None if checked == default else ("on" if checked else "off"))
+            self.edited.emit()
+
+        friction.toggled.connect(set_friction)
+        form.addRow("friction", friction)
         self._layout.addWidget(form_w)
 
     def _set_line(self, a: str, b: str, key: str, ed: QLineEdit) -> None:

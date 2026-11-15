@@ -479,6 +479,12 @@ def test_a_selected_line_edits_its_length_and_diameter(app, tmp_path):
     eds = {w.properties._layout.itemAt(2).widget().layout().labelForField(e).text(): e
            for e in w.properties.findChildren(QtWidgets.QLineEdit)}
     assert set(eds) == {"length", "diameter"}
+    friction = w.properties.findChild(QtWidgets.QCheckBox)
+    assert friction.isChecked()
+    friction.setChecked(False)
+    assert sc.system.line_spec("V-M.out", "INJ.in")["friction"] == "off"
+    friction.setChecked(True)  # back to the setting
+    assert "friction" not in sc.system.line_spec("V-M.out", "INJ.in")
     eds["length"].setText("3 m")
     eds["length"].editingFinished.emit()
     eds["diameter"].setText("-1 m")  # a bad size reads red and changes nothing
@@ -499,5 +505,22 @@ def test_a_selected_line_edits_its_length_and_diameter(app, tmp_path):
     path = tmp_path / "sized.yaml"
     sc.system.save(path)
     assert System.load(path).line_spec("V-MAIN.out", "INJ.in") == {"length": "3 m"}
+    w.dirty = False
+    w.close()
+
+
+@pytest.mark.gui
+def test_make_a_tank_empty_in_one_click(app):
+    w = MainWindow()
+    w.show()
+    w.load_example("ln2-wet-dress")
+    sc = w.scene
+    tank = next(c for c in sc.system.components if c.type == "tank")
+    sc.clearSelection()
+    sc.items_by_id[tank.id].setSelected(True)
+    button = next(b for b in w.properties.findChildren(QtWidgets.QPushButton) if b.text() == "make it empty")
+    button.click()
+    assert tank.params["fill"] == 0.0 and "temperature" not in tank.params
+    assert w.dirty
     w.dirty = False
     w.close()
