@@ -35,6 +35,7 @@ PART = {
     "regulator": "R",
     "tank": "T",
     "relief_valve": "RV",
+    "burst_disk": "BD",
     "orifice": "O",
     "air_pump": "P",
 }

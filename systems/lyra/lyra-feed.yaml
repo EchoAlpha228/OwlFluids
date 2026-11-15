@@ -1,0 +1,280 @@
+# Lyra feed system, built from the P&ID "Lyra Feed System Cleaner" (FRL, 11/8/2026, sheet "Lyra Feed System").
+#
+# Component and sensor ids are the P&ID tags. Parts the P&ID draws without a tag have ids of the
+# form XXX-YYY (tees, vents, the engine) and are marked "added".
+#
+# Every number marked PLACEHOLDER is a guess, chosen only so the system runs sensibly: volumes, Cv,
+# line lengths, supply pressures, setpoints and the starting state. PLACEHOLDERS.md lists them all.
+# Numbers from the P&ID itself are marked "P&ID": orifice sizes, relief, regulator and burst
+# settings shown on the drawing, and tube sizes (inner diameter from the drawing's standard walls:
+# 1/4 x .035 -> 0.180 in, 3/8 x .035 -> 0.305 in, 1/2 x .049 -> 0.402 in, 3/4 x .065 -> 0.620 in).
+#
+# Starting state (PLACEHOLDER): ethanol loaded and unpressurized, the N2O run tank already filled and
+# self-pressurized (saturated at 20 C, about 720 psig), the purge bottle charged, everything
+# closed. A typical run: open NI-F and NTI-O, press with FPV and OPV, then FMV and OMV to flow.
+name: Lyra feed system
+settings:
+  junction_volume: 5 cc            # PLACEHOLDER
+  line_length: 1 m                 # PLACEHOLDER default for lines without their own length
+components:
+# ------------------------------------------------------------------ pneumatics (the "A" header)
+- {id: AC, type: air_pump, flow: 3 g/s, start_pressure: 110 psig, stop_pressure: 125 psig, at: [960, 460]}   # added (P&ID: unlabelled compressor); PLACEHOLDER flow and switch pressures
+- {id: AR, type: tank, fluid: air, volume: 20 L, pressure: 120 psig, temperature: 20 C, at: [1180, 460], rotation: 90}  # added ("Air" receiver); PLACEHOLDER volume, charge
+- {id: APR, type: regulator, cv: 0.3, setpoint: 100 psig, droop: 10 psi, at: [1330, 460]}   # PLACEHOLDER cv, setpoint
+- {id: AIV, type: manual_valve, cv: 0.5, position: 1, at: [1440, 460]}                     # PLACEHOLDER cv; starts open
+- {id: A, type: pneumatic_supply, volume: 2 L, fluid: air, pressure: 100 psig, temperature: 20 C, at: [1600, 460]}  # added; PLACEHOLDER header volume
+
+# ------------------------------------------------------------------ fuel press (GN2)
+- {id: GN2-F, type: boundary, fluid: nitrogen, pressure: 700 psig, temperature: 20 C, at: [576, 340], rotation: 270}   # added (P&ID: "GN2" off-sheet supply); PLACEHOLDER pressure
+- {id: NI-F, type: manual_valve, cv: 0.3, at: [576, 450], rotation: 90}                   # PLACEHOLDER cv
+- {id: TEE-NF, type: tee, at: [576, 676]}                                                 # added
+- {id: NTV-F, type: manual_valve, cv: 0.3, at: [380, 676], rotation: 180}                # PLACEHOLDER cv
+- {id: VENT-NTVF, type: boundary, fluid: nitrogen, at: [310, 676], rotation: 180}         # added
+- {id: NF-F, type: orifice, cv: 1.0, at: [576, 726], rotation: 90}                        # filter; PLACEHOLDER cv
+- {id: TEE-FP, type: tee, at: [576, 876]}                                                 # added
+- {id: FPV, type: valve, actuator: solenoid, cv: 0.4, open_time: 30 ms, at: [576, 960], rotation: 90}  # PLACEHOLDER cv, stroke
+- {id: FPO, type: orifice, diameter: 0.082 in, cd: 0.7, at: [576, 1026], rotation: 90}    # P&ID 0.082"; PLACEHOLDER cd
+- {id: TEE-FT, type: tee, at: [576, 1124]}                                                # added
+- {id: FTVV, type: valve, actuator: pneumatic, cv: 0.3, open_time: 100 ms, at: [500, 1124], rotation: 180}    # pneumatic NC (as drawn); PLACEHOLDER cv, stroke
+- {id: VENT-FTVV, type: boundary, fluid: nitrogen, at: [430, 1124], rotation: 180}        # added
+- {id: FPRV, type: relief_valve, cv: 0.2, set_pressure: 1000 psi, at: [650, 1124]}        # P&ID 1000 psig; PLACEHOLDER cv. Vents to atmosphere.
+- {id: ETH, type: tank, fluid: ethanol, pressurant: nitrogen, volume: 15 L, fill: 0.9, pressure: 1 atm, temperature: 20 C, diameter: 0.15 m, at: [576, 1334]}  # PLACEHOLDER volume, fill, diameter, starting pressure
+
+# ------------------------------------------------------------------ fuel feed
+- {id: FV, type: orifice, cv: 4.0, at: [708, 1550]}                                       # added: the venturi that FFM, FVPT-1 and FVPT-2 read; PLACEHOLDER cv (its permanent loss)
+- {id: TEE-FD, type: tee, at: [800, 1550]}                                                # added
+- {id: FDV, type: manual_valve, cv: 0.5, at: [690, 1650], rotation: 180}                 # PLACEHOLDER cv
+- {id: VENT-FDV, type: boundary, fluid: ethanol, at: [620, 1650], rotation: 180}          # added
+- {id: FMV, type: valve, actuator: pneumatic, cv: 3.0, open_time: 150 ms, at: [900, 1550]}                     # pneumatic NC; PLACEHOLDER cv, stroke
+- {id: TEE-EPF, type: tee, at: [1000, 1550]}                                              # added (purge tie-in)
+- {id: INJ-F, type: orifice, cda: 20 mm2, at: [1175, 1680], rotation: 90}                # added: fuel injector; PLACEHOLDER CdA
+- {id: ATM-F, type: boundary, fluid: ethanol, at: [1175, 1780], rotation: 90}             # added: the chamber, cold flow to the atmosphere (combustion is not modelled)
+
+# ------------------------------------------------------------------ engine purge (GN2)
+- {id: EPPR, type: regulator, cv: 0.1, setpoint: 300 psig, droop: 20 psi, at: [790, 876]}  # PLACEHOLDER cv, setpoint (EPRV is at 375 psig)
+- {id: TEE-EP, type: tee, at: [906, 876]}                                                 # added
+- {id: EPRV, type: relief_valve, cv: 0.1, set_pressure: 375 psi, at: [906, 800], rotation: 270}  # P&ID 375 psig; PLACEHOLDER cv. Vents to atmosphere.
+- {id: GN2, type: tank, fluid: nitrogen, volume: 5 L, pressure: 300 psig, temperature: 20 C, at: [1176, 820]}  # purge bottle; PLACEHOLDER volume, charge
+- {id: EPS, type: valve, actuator: solenoid, cv: 0.2, open_time: 30 ms, at: [1176, 1124], rotation: 90}  # PLACEHOLDER cv, stroke
+- {id: TEE-EPS, type: tee, at: [1176, 1324]}                                              # added
+- {id: EPCV-F, type: check_valve, cv: 0.2, at: [1000, 1424], rotation: 90}               # PLACEHOLDER cv, cracking
+- {id: EPCV-O1, type: check_valve, cv: 0.2, at: [1376, 1376], rotation: 90}              # PLACEHOLDER cv, cracking
+- {id: EPCV-O2, type: check_valve, cv: 0.2, at: [1376, 1450], rotation: 90}              # PLACEHOLDER cv, cracking
+
+# ------------------------------------------------------------------ oxidizer press (GN2)
+- {id: GN2-O, type: boundary, fluid: nitrogen, pressure: 900 psig, temperature: 20 C, at: [1926, 340], rotation: 270}  # added (P&ID: "GN2" off-sheet supply); PLACEHOLDER pressure
+- {id: NTI-O, type: manual_valve, cv: 0.3, at: [1926, 454], rotation: 90}                # PLACEHOLDER cv
+- {id: TEE-NO, type: tee, at: [1926, 676]}                                                # added
+- {id: NTV-O, type: manual_valve, cv: 0.3, at: [1724, 676], rotation: 180}               # PLACEHOLDER cv
+- {id: VENT-NTVO, type: boundary, fluid: nitrogen, at: [1654, 676], rotation: 180}        # added
+- {id: NF-O, type: orifice, cv: 1.0, at: [1926, 726], rotation: 90}                       # filter; PLACEHOLDER cv
+- {id: TEE-OP, type: tee, at: [1926, 776]}                                                # added
+- {id: OPV, type: valve, actuator: solenoid, cv: 0.6, open_time: 30 ms, at: [1926, 846], rotation: 90}  # PLACEHOLDER cv, stroke
+- {id: OPO, type: orifice, diameter: 0.144 in, cd: 0.7, at: [1926, 920], rotation: 90}    # P&ID 0.144"; PLACEHOLDER cd
+- {id: OPCV, type: check_valve, cv: 0.6, at: [1926, 980], rotation: 90}                   # PLACEHOLDER cv, cracking
+- {id: TEE-OR, type: tee, at: [1926, 1030]}                                               # added
+- {id: OTRV, type: relief_valve, cv: 0.3, set_pressure: 1070 psi, at: [2020, 1030]}       # P&ID 1070 psig; PLACEHOLDER cv. Vents to atmosphere.
+- {id: TEE-OT, type: tee, at: [1926, 1100]}                                               # added
+- {id: OTVV, type: valve, actuator: pneumatic, cv: 0.3, open_time: 100 ms, at: [1850, 1100], rotation: 180}   # pneumatic NC (as drawn); PLACEHOLDER cv, stroke
+- {id: OTVO, type: orifice, diameter: 0.09375 in, cd: 0.7, at: [1786, 1100], rotation: 180}  # P&ID 3/32"; PLACEHOLDER cd
+- {id: VENT-OTVV, type: boundary, fluid: nitrogen, at: [1730, 1100], rotation: 180}       # added
+- {id: OPVV, type: valve, actuator: pneumatic, cv: 0.3, open_time: 100 ms, at: [2010, 1100]}                   # pneumatic NC; PLACEHOLDER cv, stroke
+- {id: VENT-OPVV, type: boundary, fluid: nitrogen, at: [2080, 1100]}                      # added
+- {id: OTFS, type: valve, actuator: solenoid, cv: 0.2, open_time: 30 ms, at: [1750, 1214], rotation: 180}  # PLACEHOLDER cv, stroke
+- {id: VENT-OTFS, type: boundary, fluid: nitrous, at: [1690, 1214], rotation: 180}        # added; vents the run tank's ullage (N2O vapor and any GN2)
+# run tank: saturated N2O whose ullage holds its own vapor and any GN2 pressed into it, so it boils to hold
+# its vapor pressure when vented and the GN2 adds its partial pressure when supercharged. To start empty
+# (for a fill), use fill: 0, pressure: 1 atm.
+- {id: N2O, type: tank, fluid: nitrous, volume: 20 L, fill: 0.85, temperature: 20 C, diameter: 0.15 m, wall_mass: 8 kg, wall_material: aluminum, at: [1924, 1342]}  # PLACEHOLDER volume, fill, temperature, wall
+
+# ------------------------------------------------------------------ oxidizer feed
+- {id: TEE-OB, type: tee, at: [1924, 1476]}                                               # added
+- {id: OV, type: orifice, cv: 6.0, at: [1820, 1550], rotation: 180}                       # added: the venturi that OFM, OVPT-1 and OVPT-2 read; PLACEHOLDER cv
+- {id: OYS, type: orifice, cv: 8.0, at: [1650, 1550], rotation: 180}                      # Y strainer; PLACEHOLDER cv
+- {id: TEE-OD, type: tee, at: [1574, 1550]}                                               # added
+- {id: OMV, type: valve, actuator: pneumatic, cv: 4.0, open_time: 150 ms, at: [1500, 1550], rotation: 180}     # pneumatic NC; PLACEHOLDER cv, stroke
+- {id: TEE-EPO, type: tee, at: [1376, 1550]}                                              # added (purge tie-in)
+- {id: INJ-O, type: orifice, cda: 30 mm2, at: [1250, 1680], rotation: 90}                # added: oxidizer injector; PLACEHOLDER CdA
+- {id: ATM-O, type: boundary, fluid: nitrous, at: [1250, 1780], rotation: 90}             # added: the chamber, cold flow to the atmosphere
+- {id: ODV, type: valve, actuator: pneumatic, cv: 0.5, normally: open, open_time: 100 ms, at: [1776, 1652]}    # pneumatic NO (as drawn); PLACEHOLDER cv, stroke
+- {id: ODV-M, type: manual_valve, cv: 0.5, at: [1924, 1652]}                             # 3-way on the P&ID, modelled as a hand valve to the vent (its DES port is left out); PLACEHOLDER cv; starts closed (tank loaded)
+- {id: VENT-ODV, type: boundary, fluid: nitrous, at: [2000, 1652]}                        # added
+
+# ------------------------------------------------------------------ N2O fill
+- {id: N2O-SUP, type: tank, fluid: nitrous, volume: 30 L, fill: 0.8, temperature: 20 C, wall_mass: 15 kg, wall_material: aluminum, at: [2350, 284]}  # added id (P&ID: "N2O" supply bottle); PLACEHOLDER volume, fill, temperature, wall
+- {id: OFTV, type: manual_valve, cv: 1.0, at: [2350, 410], rotation: 90}                  # PLACEHOLDER cv
+- {id: OF-1, type: orifice, cv: 2.0, at: [2350, 460], rotation: 90}                       # filter 25 um; PLACEHOLDER cv
+- {id: TEE-OF, type: tee, at: [2350, 724]}                                                # added
+- {id: TEE-BD, type: tee, at: [2350, 800]}                                                # added
+- {id: OFBD, type: burst_disk, cv: 1.0, burst_pressure: 1500 psi, at: [2420, 800]}       # P&ID 1500 psi; PLACEHOLDER cv. Vents to atmosphere.
+- {id: TEE-RV, type: tee, at: [2350, 850]}                                                # added
+- {id: OFRV, type: relief_valve, cv: 0.3, set_pressure: 940 psi, at: [2440, 850]}         # P&ID 940 psi; PLACEHOLDER cv. Vents to atmosphere.
+- {id: OFV, type: valve, actuator: pneumatic, cv: 1.0, open_time: 300 ms, at: [2350, 926], rotation: 90}       # pneumatic NC; PLACEHOLDER cv, stroke
+- {id: TEE-PG, type: tee, at: [2350, 1024]}                                               # added (purge tie-in)
+- {id: OF-2, type: orifice, cv: 2.0, at: [2350, 1250], rotation: 90}                      # filter 140 um; PLACEHOLDER cv
+- {id: OFCV, type: check_valve, cv: 1.0, at: [2350, 1500], rotation: 90}                  # PLACEHOLDER cv, cracking
+- {id: OPGS, type: valve, actuator: solenoid, cv: 0.2, open_time: 30 ms, at: [2076, 776]}  # PLACEHOLDER cv, stroke
+- {id: OPGCV, type: check_valve, cv: 0.2, at: [2200, 776]}                                # the P&ID tags this one OPCV too (two OPCVs); renamed. PLACEHOLDER cv, cracking
+
+# ------------------------------------------------------------------ igniter (GCH4 / GOX)
+- {id: GCH4, type: tank, fluid: methane, volume: 1 L, pressure: 1500 psi, temperature: 20 C, at: [450, 1984]}  # PLACEHOLDER volume, pressure
+- {id: IFTV, type: manual_valve, cv: 0.1, position: 1, at: [450, 1908], rotation: 270}   # PLACEHOLDER cv; starts open
+- {id: IFF, type: orifice, cv: 0.3, at: [520, 1850]}                                      # filter; PLACEHOLDER cv
+- {id: IFPR, type: regulator, cv: 0.05, setpoint: 150 psig, droop: 10 psi, at: [644, 1850]}  # PLACEHOLDER cv, setpoint
+- {id: IFS, type: valve, actuator: solenoid, cv: 0.1, open_time: 20 ms, at: [850, 1850]}  # PLACEHOLDER cv, stroke
+- {id: IFO, type: orifice, diameter: 0.04 in, cd: 0.7, at: [950, 1850]}                   # P&ID 0.04"; PLACEHOLDER cd
+- {id: IFCV, type: check_valve, cv: 0.1, at: [1050, 1850]}                                # PLACEHOLDER cv, cracking
+- {id: IGN-F, type: boundary, fluid: methane, at: [1120, 1850], rotation: 0}             # added: the igniter's methane port (combustion is not modelled)
+- {id: GOX, type: tank, fluid: oxygen, volume: 1 L, pressure: 1500 psi, temperature: 20 C, at: [2000, 1984]}  # PLACEHOLDER volume, pressure
+- {id: IOTV, type: manual_valve, cv: 0.1, position: 1, at: [2000, 1906], rotation: 270}  # PLACEHOLDER cv; starts open
+- {id: IOF, type: orifice, cv: 0.3, at: [1928, 1850], rotation: 180}                      # filter; PLACEHOLDER cv
+- {id: IOPR, type: regulator, cv: 0.05, setpoint: 150 psig, droop: 10 psi, at: [1750, 1850], rotation: 180}  # PLACEHOLDER cv, setpoint
+- {id: IOS, type: valve, actuator: solenoid, cv: 0.1, open_time: 20 ms, at: [1524, 1850], rotation: 180}  # PLACEHOLDER cv, stroke
+- {id: IOO, type: orifice, diameter: 0.035 in, cd: 0.7, at: [1416, 1850], rotation: 180}  # P&ID 0.035"; PLACEHOLDER cd
+- {id: IOCV, type: check_valve, cv: 0.1, at: [1324, 1850], rotation: 180}                 # PLACEHOLDER cv, cracking
+- {id: IGN-O, type: boundary, fluid: oxygen, at: [1250, 1850], rotation: 180}            # added: the igniter's oxygen port
+
+connections:
+# pneumatics
+- [AC.out, AR.top, {length: 0.5 m}]
+- [AR.bottom, APR.in, {length: 0.5 m}]
+- [APR.out, AIV.in, {length: 0.3 m}]
+- [AIV.out, A.a, {length: 1 m}]
+# fuel press: 3/8" tube (P&ID), lengths PLACEHOLDER
+- [GN2-F.port, NI-F.in, {length: 0}]
+- [NI-F.out, TEE-NF.a, {length: 1.5 m, diameter: 0.305 in}]          # flex hose
+- [TEE-NF.b, NTV-F.in, {length: 0.3 m, diameter: 0.305 in}]
+- [NTV-F.out, VENT-NTVF.port, {length: 0}]
+- [TEE-NF.c, NF-F.in, {length: 0.1 m, diameter: 0.305 in}]
+- [NF-F.out, TEE-FP.a, {length: 0.5 m, diameter: 0.305 in}]
+- [TEE-FP.b, FPV.in, {length: 0.3 m, diameter: 0.305 in}]
+- [FPV.out, FPO.in, {length: 0.1 m, diameter: 0.305 in}]
+- [FPO.out, TEE-FT.a, {length: 0.3 m, diameter: 0.305 in}]
+- [TEE-FT.b, ETH.top, {length: 0.3 m, diameter: 0.305 in}]
+- [TEE-FT.c, FTVV.in, {length: 0.2 m, diameter: 0.305 in}]
+- [FTVV.out, VENT-FTVV.port, {length: 0}]
+- [TEE-FT.d, FPRV.in, {length: 0.2 m, diameter: 0.305 in}]
+# fuel feed: 1/2" (P&ID)
+- [ETH.bottom, FV.in, {length: 0.5 m, diameter: 0.402 in}]
+- [FV.out, TEE-FD.a, {length: 0.3 m, diameter: 0.402 in}]
+- [TEE-FD.b, FDV.in, {length: 0.5 m, diameter: 0.305 in}]           # 3/8" (P&ID)
+- [FDV.out, VENT-FDV.port, {length: 0}]
+- [TEE-FD.c, FMV.in, {length: 0.3 m, diameter: 0.402 in}]
+- [FMV.out, TEE-EPF.a, {length: 0.3 m, diameter: 0.402 in}]
+- [TEE-EPF.b, INJ-F.in, {length: 1.5 m, diameter: 0.402 in}]        # flex hose to the engine
+- [INJ-F.out, ATM-F.port, {length: 0}]
+# engine purge: 1/4" (P&ID)
+- [TEE-FP.c, EPPR.in, {length: 0.5 m, diameter: 0.18 in}]
+- [EPPR.out, TEE-EP.a, {length: 0.3 m, diameter: 0.18 in}]
+- [TEE-EP.b, EPRV.in, {length: 0.1 m, diameter: 0.18 in}]
+- [TEE-EP.c, GN2.top, {length: 1 m, diameter: 0.18 in}]
+- [GN2.bottom, EPS.in, {length: 0.5 m, diameter: 0.18 in}]
+- [EPS.out, TEE-EPS.a, {length: 0.5 m, diameter: 0.18 in}]
+- [TEE-EPS.b, EPCV-F.in, {length: 0.5 m, diameter: 0.18 in}]
+- [EPCV-F.out, TEE-EPF.c, {length: 0.3 m, diameter: 0.18 in}]
+- [TEE-EPS.c, EPCV-O1.in, {length: 0.5 m, diameter: 0.18 in}]
+- [EPCV-O1.out, EPCV-O2.in, {length: 0.1 m, diameter: 0.18 in}]
+- [EPCV-O2.out, TEE-EPO.c, {length: 0.3 m, diameter: 0.18 in}]
+# oxidizer press: 3/8" (P&ID)
+- [GN2-O.port, NTI-O.in, {length: 0}]
+- [NTI-O.out, TEE-NO.a, {length: 1.5 m, diameter: 0.305 in}]        # flex hose
+- [TEE-NO.b, NTV-O.in, {length: 0.3 m, diameter: 0.305 in}]
+- [NTV-O.out, VENT-NTVO.port, {length: 0}]
+- [TEE-NO.c, NF-O.in, {length: 0.1 m, diameter: 0.305 in}]
+- [NF-O.out, TEE-OP.a, {length: 0.1 m, diameter: 0.305 in}]
+- [TEE-OP.b, OPV.in, {length: 0.2 m, diameter: 0.305 in}]
+- [OPV.out, OPO.in, {length: 0.1 m, diameter: 0.305 in}]
+- [OPO.out, OPCV.in, {length: 0.1 m, diameter: 0.305 in}]
+- [OPCV.out, TEE-OR.a, {length: 0.3 m, diameter: 0.305 in}]
+- [TEE-OR.b, OTRV.in, {length: 0.1 m, diameter: 0.305 in}]
+- [TEE-OR.c, TEE-OT.a, {length: 0.2 m, diameter: 0.305 in}]
+- [TEE-OT.b, N2O.top, {length: 0.3 m, diameter: 0.305 in}]
+- [TEE-OT.c, OTVV.in, {length: 0.2 m, diameter: 0.305 in}]
+- [OTVV.out, OTVO.in, {length: 0.1 m, diameter: 0.305 in}]
+- [OTVO.out, VENT-OTVV.port, {length: 0}]
+- [TEE-OT.d, OPVV.in, {length: 0.2 m, diameter: 0.305 in}]
+- [OPVV.out, VENT-OPVV.port, {length: 0}]
+- [N2O.top, OTFS.in, {length: 0.5 m, diameter: 0.305 in}]
+- [OTFS.out, VENT-OTFS.port, {length: 0}]
+# oxidizer feed: 3/4" (P&ID)
+- [N2O.bottom, TEE-OB.a, {length: 0.2 m, diameter: 0.62 in}]
+- [TEE-OB.b, OV.in, {length: 0.3 m, diameter: 0.62 in}]
+- [OV.out, OYS.in, {length: 0.3 m, diameter: 0.62 in}]
+- [OYS.out, TEE-OD.a, {length: 0.2 m, diameter: 0.62 in}]
+- [TEE-OD.b, OMV.in, {length: 0.2 m, diameter: 0.62 in}]
+- [OMV.out, TEE-EPO.a, {length: 0.3 m, diameter: 0.62 in}]
+- [TEE-EPO.b, INJ-O.in, {length: 1 m, diameter: 0.62 in}]
+- [INJ-O.out, ATM-O.port, {length: 0}]
+- [TEE-OD.c, ODV.in, {length: 0.5 m, diameter: 0.18 in}]            # 1/4" (P&ID)
+- [ODV.out, ODV-M.in, {length: 0.3 m, diameter: 0.18 in}]
+- [ODV-M.out, VENT-ODV.port, {length: 0}]
+# N2O fill: 3/8" (P&ID)
+- [N2O-SUP.bottom, OFTV.in, {length: 0.1 m, diameter: 0.305 in}]
+- [OFTV.out, OF-1.in, {length: 0.1 m, diameter: 0.305 in}]
+- [OF-1.out, TEE-OF.a, {length: 1.5 m, diameter: 0.305 in}]         # flex hose
+- [TEE-OF.b, TEE-BD.a, {length: 0.1 m, diameter: 0.305 in}]
+- [TEE-BD.b, OFBD.in, {length: 0.05 m, diameter: 0.305 in}]
+- [TEE-BD.c, TEE-RV.a, {length: 0.1 m, diameter: 0.305 in}]
+- [TEE-RV.b, OFRV.in, {length: 0.1 m, diameter: 0.305 in}]
+- [TEE-RV.c, OFV.in, {length: 0.1 m, diameter: 0.305 in}]
+- [OFV.out, TEE-PG.a, {length: 0.3 m, diameter: 0.305 in}]
+- [TEE-PG.b, OF-2.in, {length: 1.5 m, diameter: 0.305 in}]          # flex hose
+- [OF-2.out, OFCV.in, {length: 1.5 m, diameter: 0.305 in}]          # flex hose
+- [OFCV.out, TEE-OB.c, {length: 1.5 m, diameter: 0.305 in}]
+- [TEE-OP.c, OPGS.in, {length: 0.5 m, diameter: 0.18 in}]           # 1/4" (P&ID)
+- [OPGS.out, OPGCV.in, {length: 0.3 m, diameter: 0.18 in}]
+- [OPGCV.out, TEE-PG.c, {length: 1 m, diameter: 0.18 in}]
+# igniter: 1/4" (P&ID)
+- [GCH4.top, IFTV.in, {length: 0.1 m, diameter: 0.18 in}]
+- [IFTV.out, IFF.in, {length: 0.2 m, diameter: 0.18 in}]
+- [IFF.out, IFPR.in, {length: 0.2 m, diameter: 0.18 in}]
+- [IFPR.out, IFS.in, {length: 0.5 m, diameter: 0.18 in}]
+- [IFS.out, IFO.in, {length: 0.1 m, diameter: 0.18 in}]
+- [IFO.out, IFCV.in, {length: 0.1 m, diameter: 0.18 in}]
+- [IFCV.out, IGN-F.port, {length: 0.3 m, diameter: 0.18 in}]
+- [GOX.top, IOTV.in, {length: 0.1 m, diameter: 0.18 in}]
+- [IOTV.out, IOF.in, {length: 0.2 m, diameter: 0.18 in}]
+- [IOF.out, IOPR.in, {length: 0.2 m, diameter: 0.18 in}]
+- [IOPR.out, IOS.in, {length: 0.5 m, diameter: 0.18 in}]
+- [IOS.out, IOO.in, {length: 0.1 m, diameter: 0.18 in}]
+- [IOO.out, IOCV.in, {length: 0.1 m, diameter: 0.18 in}]
+- [IOCV.out, IGN-O.port, {length: 0.3 m, diameter: 0.18 in}]
+
+sensors:
+# pneumatics
+- {id: APT, type: pressure, line: [AIV.out, A.a], units: psig}
+# fuel press
+- {id: FPG, type: pressure, line: [TEE-NF.b, NTV-F.in], along: 0.2, units: psig}      # gauge
+- {id: FPPT, type: pressure, line: [TEE-NF.b, NTV-F.in], along: 0.1, units: psig}
+- {id: FTPT, type: pressure, line: [TEE-FT.b, ETH.top], units: psig}
+- {id: EPPG, type: pressure, line: [TEE-FP.c, EPPR.in], along: 0.9, units: psig}     # gauge
+- {id: EPPT, type: pressure, line: [TEE-EP.c, GN2.top], units: psig}
+# fuel feed
+- {id: FVPT-1, type: pressure, line: [ETH.bottom, FV.in], along: 1.0, units: psig}   # venturi inlet
+- {id: FVPT-2, type: pressure, line: [FV.out, TEE-FD.a], along: 0.0, units: psig}    # venturi outlet (the model has no throat; see PLACEHOLDERS.md)
+- {id: FFM, type: mass_flow, line: [FV.out, TEE-FD.a], units: kg/s}
+- {id: FPT, type: pressure, line: [TEE-EPF.b, INJ-F.in], along: 0.1, units: psig}
+# oxidizer press
+- {id: OPG, type: pressure, line: [TEE-NO.b, NTV-O.in], along: 0.2, units: psig}     # gauge
+- {id: OPPT, type: pressure, line: [TEE-NO.b, NTV-O.in], along: 0.1, units: psig}
+- {id: OTPT, type: pressure, line: [N2O.top, OTFS.in], units: psig}
+# oxidizer feed
+- {id: OTTC, type: temperature, line: [N2O.bottom, TEE-OB.a], units: F}
+- {id: OVPT-1, type: pressure, line: [TEE-OB.b, OV.in], along: 1.0, units: psig}     # venturi inlet
+- {id: OVPT-2, type: pressure, line: [OV.out, OYS.in], along: 0.0, units: psig}      # venturi outlet
+- {id: OFM, type: mass_flow, line: [OV.out, OYS.in], units: kg/s}
+- {id: OPT, type: pressure, line: [TEE-EPO.b, INJ-O.in], along: 0.1, units: psig}
+- {id: OT, type: temperature, line: [TEE-EPO.b, INJ-O.in], along: 0.2, units: F}
+# N2O fill
+- {id: OFPT, type: pressure, line: [OF-1.out, TEE-OF.a], along: 1.0, units: psig}
+- {id: OFTC, type: temperature, line: [OF-1.out, TEE-OF.a], along: 0.95, units: F}
+# igniter (the P&ID's four igniter gauges have no tags; IFPG-1/2 and IOPG-1/2 are added names)
+- {id: IFPG-1, type: pressure, line: [IFF.out, IFPR.in], units: psig}
+- {id: IFPG-2, type: pressure, line: [IFPR.out, IFS.in], along: 0.1, units: psig}
+- {id: IFPT, type: pressure, line: [IFPR.out, IFS.in], along: 0.5, units: psig}
+- {id: IOPG-1, type: pressure, line: [IOF.out, IOPR.in], units: psig}
+- {id: IOPG-2, type: pressure, line: [IOPR.out, IOS.in], along: 0.1, units: psig}
+- {id: IOPT, type: pressure, line: [IOPR.out, IOS.in], along: 0.5, units: psig}
+# tank levels and valve positions
+- {id: ETH-LVL, type: level, at: ETH}
+- {id: N2O-LVL, type: level, at: N2O}

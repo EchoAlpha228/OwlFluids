@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from .. import units
 from ..core.layout import (
+    CTRL_BURST,
     CTRL_CHECK,
     CTRL_REGULATOR,
     CTRL_RELIEF,
@@ -516,6 +517,31 @@ class ReliefValve(ComponentType):
                       p1=cls.require(comp, "set_pressure"), p2=max(cls.param(comp, "overpressure"), 100.0))
 
 
+class BurstDisk(ComponentType):
+    type_name = "burst_disk"
+    label = "Burst disk"
+    category = "Flow control"
+    ports = ("in", "out")
+    params = AREA_PARAMS + (
+        Param("burst_pressure", "pressure", None, "inlet-minus-outlet pressure where the disk ruptures"),
+        Param("open_time", "time", "2 ms", "time for the ruptured disk to clear its full flow area"),
+    )
+    help = ("Rupture disk: shut until the inlet exceeds the outlet by the burst pressure, then open for good "
+            "(it does not reseat; a reset of the run puts a new disk in). With nothing connected to its outlet "
+            "it vents to the atmosphere.")
+
+    @classmethod
+    def build(cls, b, comp):
+        if b.port_open(comp, "out"):
+            b.vent_port(comp, "out")
+        if b.port_open(comp, "in"):
+            b.warnings.append(f"{comp.id}: nothing is connected to its inlet, so it never bursts")
+        rate = 1.0 / max(cls.param(comp, "open_time"), 1e-6)
+        b.add_orifice(comp, "", "in", "out", cda=_flow_area(cls, comp), ctrl=CTRL_BURST,
+                      p1=cls.require(comp, "burst_pressure"), valve=(0.0, rate, rate))
+        b.bursts[comp.id] = b.comp_links[comp.id][-1]
+
+
 def flag(raw) -> bool:
     """An on/off parameter: on/off, yes/no, true/false or 1/0 (YAML reads a bare on/off as a bool)."""
     if isinstance(raw, str):
@@ -619,13 +645,14 @@ class AirPump(ComponentType):
 TYPES: dict[str, type[ComponentType]] = {
     c.type_name: c
     for c in (Tank, Boundary, Volume, PneumaticSupply, Tee, Fitting, Orifice, Valve, ManualValve,
-              CheckValve, ReliefValve, Regulator, AirPump)
+              CheckValve, ReliefValve, BurstDisk, Regulator, AirPump)
 }
 ALIASES = {"source": "boundary", "vent": "boundary", "ambient": "boundary", "injector": "orifice",
            "solenoid": "valve", "ball_valve": "valve", "needle_valve": "manual_valve",
            "hand_valve": "manual_valve",
            "manifold": "volume", "cross": "tee", "junction": "tee", "compressor": "air_pump",
-           "pump": "air_pump", "pneumatic": "pneumatic_supply", "air_supply": "pneumatic_supply"}
+           "pump": "air_pump", "rupture_disk": "burst_disk", "filter": "orifice", "strainer": "orifice",
+           "pneumatic": "pneumatic_supply", "air_supply": "pneumatic_supply"}
 
 
 def get_type(name: str) -> type[ComponentType]:
