@@ -313,7 +313,7 @@ def test_an_empty_warm_tank_fills_with_liquid_and_overflows_its_vent():
     between 12 and 88 psia once full."""
     import CoolProp.CoolProp as CP
 
-    sim = Simulation(_empty_fill(fill=0))
+    sim = Simulation(_empty_fill(fill=0), step_budget=200)  # forced steps the same on any machine
     assert sim.read("LV") == 0.0 and sim.temperature("R.top") == pytest.approx(293.15, abs=0.1)
     sim.open("FV")
     sim.run(60.0)
