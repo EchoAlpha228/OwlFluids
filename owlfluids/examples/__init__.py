@@ -11,8 +11,8 @@ def gn2_blowdown() -> System:
     s.add("K1", "tank", fluid="nitrogen", volume="49 L", pressure="2400 psi", temperature="20 C", at=[0, 0])
     s.add("V1", "valve", cv=0.3, open_time="50 ms", at=[150, 0])
     s.add("ATM", "boundary", fluid="nitrogen", at=[300, 0])
-    s.connect("K1.top", "V1.in")
-    s.connect("V1.out", "ATM.port")
+    s.connect("K1.top", "V1.in", length="0.5 m")
+    s.connect("V1.out", "ATM.port", length=0)  # straight out to the atmosphere
     s.sense("PT-K1", "pressure", line=("K1.top", "V1.in"), units="psi")
     s.sense("TC-K1", "temperature", line=("K1.top", "V1.in"), units="F")
     s.sense("FM-V1", "mass_flow", line=("V1.out", "ATM.port"), units="kg/s")
@@ -30,12 +30,14 @@ def lox_feed() -> System:
     s.add("V-M", "valve", cv=6, open_time="150 ms", at=[300, 150])
     s.add("INJ", "orifice", cda="60 mm2", at=[600, 150])
     s.add("AMB", "boundary", fluid="oxygen", at=[750, 150])
-    for a, b in [("K-N2.top", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "TK.top"), ("TK.bottom", "F1.in"),
-                 ("F1.out", "V-M.in"), ("V-M.out", "INJ.in"), ("INJ.out", "AMB.port")]:
-        s.connect(a, b)
+    # line lengths in m; the injector faces straight into the chamber (here the atmosphere)
+    for a, b, length in [("K-N2.top", "REG.in", 0.3), ("REG.out", "V-P.in", 0.5), ("V-P.out", "TK.top", 1),
+                         ("TK.bottom", "F1.in", 0.5), ("F1.out", "V-M.in", 1), ("V-M.out", "INJ.in", 1),
+                         ("INJ.out", "AMB.port", 0)]:
+        s.connect(a, b, length=length)
     s.sense("PT-TK", "pressure", line=("V-P.out", "TK.top"), units="psi")
-    s.sense("PT-INJ", "pressure", line=("V-M.out", "INJ.in"), units="psi")
-    s.sense("TC-INJ", "temperature", line=("V-M.out", "INJ.in"), units="F")
+    s.sense("PT-INJ", "pressure", line=("V-M.out", "INJ.in"), along=1.0, units="psi")
+    s.sense("TC-INJ", "temperature", line=("V-M.out", "INJ.in"), along=1.0, units="F")
     s.sense("FM-LOX", "mass_flow", line=("V-M.out", "INJ.in"), units="kg/s")
     s.sense("M-LOX", "mass", "TK", units="kg")
     s.sense("LL-LOX", "level", "TK", units="%")
@@ -45,7 +47,8 @@ def lox_feed() -> System:
 def lox_purge() -> System:
     """LOX feed with a helium purge: flow, close the main valve, then purge the line clear.
 
-    Helium, nitrogen or air can purge; change the purge bottle's fluid.
+    The purge comes in just below the main valve, so it pushes the whole feed line out through
+    the injector. Helium, nitrogen or air can purge; change the purge bottle's fluid.
     """
     s = lox_feed()
     s.name = "LOX feed with helium purge"
@@ -53,12 +56,12 @@ def lox_purge() -> System:
     s.add("REG-PG", "regulator", cv=0.2, setpoint="150 psi", droop="10 psi", at=[450, 300])
     s.add("V-PG", "valve", cv=0.2, open_time="50 ms", at=[600, 300])
     s.add("CK-PG", "check_valve", cv=0.2, at=[600, 230])
-    for a, b in [("K-HE.top", "REG-PG.in"), ("REG-PG.out", "V-PG.in"), ("V-PG.out", "CK-PG.in"),
-                 ("CK-PG.out", "INJ.in")]:
-        s.connect(a, b)
+    for a, b, length in [("K-HE.top", "REG-PG.in", 0.3), ("REG-PG.out", "V-PG.in", 0.5),
+                         ("V-PG.out", "CK-PG.in", 0.1), ("CK-PG.out", "V-M.out", 0.3)]:
+        s.connect(a, b, length=length)
     s.sense("PT-PG", "pressure", line=("V-PG.out", "CK-PG.in"), units="psi")
-    s.sense("FM-PG", "mass_flow", line=("CK-PG.out", "INJ.in"), units="kg/s")
-    s.sense("PF-INJ", "purge_fraction", line=("V-M.out", "INJ.in"), units="%")
+    s.sense("FM-PG", "mass_flow", line=("CK-PG.out", "V-M.out"), units="kg/s")
+    s.sense("PF-INJ", "purge_fraction", line=("V-M.out", "INJ.in"), along=1.0, units="%")
     return s
 
 
@@ -103,16 +106,17 @@ def nitrous_fill() -> System:
     s.add("ACF", "orifice", cv=0.8, at=[450, 340])
     s.add("OPGS", "valve", cv=0.3, open_time="50 ms", at=[470, 180])
     s.add("OPGCV", "check_valve", cv=0.3, at=[470, 90])
-    for a, b in [("NOS.bottom", "OFTV.in"), ("OFTV.out", "OFF.in"), ("OFF.out", "OFV.in"),
-                 ("OFF.out", "OFRV-1.in"), ("OFRV-1.out", "ATM-1.port"),
-                 ("OFV.out", "OFCV.in"), ("OFCV.out", "OFIF.in"), ("OFCV.out", "ODV.in"), ("ODV.out", "ATM-2.port"),
-                 ("OFCV.out", "OFRV-2.in"), ("OFRV-2.out", "ATM-3.port"), ("OFIF.out", "OQD.in"),
-                 ("OQD.out", "RFCV.in"), ("RFCV.out", "RT.bottom"), ("RT.top", "RTV.in"),
-                 ("RTV.out", "ATM-4.port"),
-                 ("AC.out", "AR.top"), ("AR.top", "APRV.in"), ("APRV.out", "ATM-A.port"), ("AR.top", "APR.in"),
-                 ("APR.out", "AIV.in"), ("AIV.out", "ACF.in"), ("ACF.out", "OPGS.in"),
-                 ("OPGS.out", "OPGCV.in"), ("OPGCV.out", "OFV.out")]:
-        s.connect(a, b)
+    # line lengths in m: vents and reliefs exhaust straight to the atmosphere, the fill hose is 3 m
+    for a, b, length in [("NOS.bottom", "OFTV.in", 0.3), ("OFTV.out", "OFF.in", 0.5), ("OFF.out", "OFV.in", 1),
+                         ("OFF.out", "OFRV-1.in", 0.1), ("OFRV-1.out", "ATM-1.port", 0),
+                         ("OFV.out", "OFCV.in", 0.2), ("OFCV.out", "OFIF.in", 0.5), ("OFCV.out", "ODV.in", 0.3),
+                         ("ODV.out", "ATM-2.port", 0), ("OFCV.out", "OFRV-2.in", 0.1), ("OFRV-2.out", "ATM-3.port", 0),
+                         ("OFIF.out", "OQD.in", 3), ("OQD.out", "RFCV.in", 0.3), ("RFCV.out", "RT.bottom", 0.5),
+                         ("RT.top", "RTV.in", 0.3), ("RTV.out", "ATM-4.port", 0),
+                         ("AC.out", "AR.top", 0.5), ("AR.top", "APRV.in", 0.1), ("APRV.out", "ATM-A.port", 0),
+                         ("AR.top", "APR.in", 0.5), ("APR.out", "AIV.in", 0.3), ("AIV.out", "ACF.in", 0.3),
+                         ("ACF.out", "OPGS.in", 1), ("OPGS.out", "OPGCV.in", 0.1), ("OPGCV.out", "OFV.out", 0.3)]:
+        s.connect(a, b, length=length)
     s.sense("OFPT", "pressure", line=("OFF.out", "OFV.in"), units="psig")
     s.sense("OFT", "temperature", line=("OFF.out", "OFV.in"), units="F")
     s.sense("OIPT", "pressure", line=("OFIF.out", "OQD.in"), units="psig")
@@ -121,7 +125,7 @@ def nitrous_fill() -> System:
     s.sense("FM-OF", "mass_flow", line=("OFF.out", "OFV.in"), units="kg/s")
     s.sense("M-RT", "mass", "RT", units="kg")
     s.sense("LL-RT", "level", "RT", units="%")
-    s.sense("PF-OF", "purge_fraction", line=("OFIF.out", "OQD.in"), units="%")
+    s.sense("PF-OF", "purge_fraction", line=("OFV.out", "OFCV.in"), units="%")  # where the purge sweeps
     s.sense("AC-ON", "valve_position", "AC")
     return s
 
@@ -144,14 +148,15 @@ def ln2_wet_dress() -> System:
     s.add("ATM-B", "boundary", fluid="nitrogen", at=[600, 260])
     s.add("INJ", "orifice", cda="25 mm2", at=[600, 160])
     s.add("ATM", "boundary", fluid="nitrogen", at=[750, 160])
-    for a, b in [("K-N2.top", "REG.in"), ("REG.out", "V-P.in"), ("V-P.out", "TK.top"), ("TK.top", "V-V.in"),
-                 ("V-V.out", "ATM-V.port"), ("TK.bottom", "V-M.in"), ("V-M.out", "L-F.a"),
-                 ("L-F.b", "TEE.a"), ("TEE.b", "INJ.in"), ("INJ.out", "ATM.port"), ("TEE.d", "V-B.in"),
-                 ("V-B.out", "ATM-B.port")]:
-        s.connect(a, b)
+    # line lengths in m; the feed line is the volume L-F, so its ends are joined straight on
+    for a, b, length in [("K-N2.top", "REG.in", 0.3), ("REG.out", "V-P.in", 0.5), ("V-P.out", "TK.top", 1),
+                         ("TK.top", "V-V.in", 0.3), ("V-V.out", "ATM-V.port", 0), ("TK.bottom", "V-M.in", 0.5),
+                         ("V-M.out", "L-F.a", 0), ("L-F.b", "TEE.a", 0), ("TEE.b", "INJ.in", 0.3),
+                         ("INJ.out", "ATM.port", 0), ("TEE.d", "V-B.in", 0.3), ("V-B.out", "ATM-B.port", 0)]:
+        s.connect(a, b, length=length)
     s.sense("PT-TK", "pressure", line=("V-P.out", "TK.top"), units="psi")
-    s.sense("PT-INJ", "pressure", line=("TEE.b", "INJ.in"), units="psi")
-    s.sense("TC-INJ", "temperature", line=("TEE.b", "INJ.in"), units="F")
+    s.sense("PT-INJ", "pressure", line=("TEE.b", "INJ.in"), along=1.0, units="psi")
+    s.sense("TC-INJ", "temperature", line=("TEE.b", "INJ.in"), along=1.0, units="F")
     s.sense("TC-LINE", "wall_temperature", "L-F", units="F")
     s.sense("FM-LN2", "mass_flow", line=("V-M.out", "L-F.a"), units="kg/s")
     s.sense("M-LN2", "mass", "TK", units="kg")
@@ -166,12 +171,12 @@ def n2o_blowdown() -> System:
     s.add("V", "valve", cv=0.3, open_time="20 ms", at=[150, 50])
     s.add("INJ", "orifice", cda="10 mm2", at=[300, 50])
     s.add("ATM", "boundary", fluid="nitrous", at=[450, 50])
-    s.connect("K.bottom", "V.in")
-    s.connect("V.out", "INJ.in")
-    s.connect("INJ.out", "ATM.port")
+    s.connect("K.bottom", "V.in", length="0.3 m")
+    s.connect("V.out", "INJ.in", length="0.5 m")
+    s.connect("INJ.out", "ATM.port", length=0)
     s.sense("PT-K", "pressure", line=("K.bottom", "V.in"), units="psi")
     s.sense("TC-K", "temperature", line=("K.bottom", "V.in"), units="F")
-    s.sense("PT-INJ", "pressure", line=("V.out", "INJ.in"), units="psi")
+    s.sense("PT-INJ", "pressure", line=("V.out", "INJ.in"), along=1.0, units="psi")
     s.sense("FM-N2O", "mass_flow", line=("INJ.out", "ATM.port"), units="kg/s")
     s.sense("M-N2O", "mass", "K", units="kg")
     s.sense("LL-N2O", "level", "K", units="%")
@@ -189,9 +194,9 @@ def pneumatic_valves() -> System:
     s.add("TK", "volume", volume="20 L", fluid="nitrogen", pressure="1 atm", temperature="20 C", at=[300, 0])
     s.add("V-VENT", "valve", cv=0.3, normally="open", at=[450, 0])
     s.add("ATM", "boundary", fluid="nitrogen", at=[600, 0])
-    for a, b in [("C.out", "A.a"), ("K.top", "V-FILL.in"), ("V-FILL.out", "TK.a"), ("TK.b", "V-VENT.in"),
-                 ("V-VENT.out", "ATM.port")]:
-        s.connect(a, b)
+    for a, b, length in [("C.out", "A.a", 0.5), ("K.top", "V-FILL.in", 0.3), ("V-FILL.out", "TK.a", 1),
+                         ("TK.b", "V-VENT.in", 0.3), ("V-VENT.out", "ATM.port", 0)]:
+        s.connect(a, b, length=length)
     s.sense("PT-A", "pressure", line=("C.out", "A.a"), units="psig")
     s.sense("PT-TK", "pressure", line=("V-FILL.out", "TK.a"), units="psi")
     s.sense("ZS-FILL", "valve_position", "V-FILL")

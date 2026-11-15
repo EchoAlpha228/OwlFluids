@@ -420,7 +420,7 @@ class Scene(QGraphicsScene):
 
     changed_system = Signal()  # any edit
     valve_clicked = Signal(str)  # run mode
-    component_selected = Signal(object)  # Component, Sensor (on a line) or None
+    component_selected = Signal(object)  # Component, Sensor (on a line), a line's (port, port), or None
     renamed = Signal()  # a part or sensor took a new default name as the fluid reaching it changed
     rename_wanted = Signal()  # a part or sensor was double-clicked while editing
 
@@ -906,8 +906,8 @@ class Scene(QGraphicsScene):
         return s
 
     def line_flow_readable(self, w: WireItem) -> bool:
-        """A flow meter on ``w`` reads a flow of its own (the line is not in a loop of lines)."""
-        return Lines(self.system).flow_side(w.a, w.b) is not None
+        """A flow meter on ``w`` reads a flow (see core/lines.py)."""
+        return Lines(self.system).flow_readable(w.a, w.b)
 
     def remove_sensor(self, s: Sensor) -> None:
         if s in self.system.sensors:
@@ -984,6 +984,8 @@ class Scene(QGraphicsScene):
 
     def _remove_wire(self, w: WireItem) -> None:
         self.system.routes.pop(w.key, None)
+        self.system.line_specs.pop(w.key, None)
+        self.system.line_specs.pop(f"{w.b} -- {w.a}", None)
         self._detach_sensors(w)
         if (w.a, w.b) in self.system.connections:
             self.system.connections.remove((w.a, w.b))
@@ -1021,11 +1023,12 @@ class Scene(QGraphicsScene):
             s.at = fix(s.at)
             if s.line:
                 s.line = (fix(s.line[0]), fix(s.line[1]))
-        routes = {}
-        for k, v in sysm.routes.items():
-            a, _, b = k.partition(" -- ")
-            routes[f"{fix(a)} -- {fix(b)}"] = v
-        sysm.routes = routes
+        for attr in ("routes", "line_specs"):
+            out = {}
+            for k, v in getattr(sysm, attr).items():
+                a, _, b = k.partition(" -- ")
+                out[f"{fix(a)} -- {fix(b)}"] = v
+            setattr(sysm, attr, out)
         sysm.renamed(old, new)
         for w in self.wires:
             w.a, w.b = fix(w.a), fix(w.b)
@@ -1087,10 +1090,11 @@ class Scene(QGraphicsScene):
             self.renamed.emit()
 
     def _on_selection(self) -> None:
-        sel = [i for i in self.selectedItems() if isinstance(i, (ComponentItem, SensorItem))]
+        sel = [i for i in self.selectedItems() if isinstance(i, (ComponentItem, SensorItem, WireItem))]
         one = sel[0] if len(sel) == 1 else None
         self.component_selected.emit(one.comp if isinstance(one, ComponentItem) else
-                                     one.sensor if isinstance(one, SensorItem) else None)
+                                     one.sensor if isinstance(one, SensorItem) else
+                                     (one.a, one.b) if isinstance(one, WireItem) else None)
 
     def sync_sensor_labels(self) -> None:
         """After a sensor is renamed or removed in the properties panel: its label, tooltip and key."""

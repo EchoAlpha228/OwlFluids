@@ -86,6 +86,7 @@ def test_mass_flow_on_a_line_reads_at_either_kind_of_end():
     s.settings["sensor_noise"] = "off"
     s.sense("F-OUT", "mass_flow", "TK.bottom")  # leaving the tank
     s.sense("F-VM", "mass_flow", "V-M.out")  # through the main valve, in to out
+    s.sense("F-INJ", "mass_flow", "INJ.out")  # out of the injector, straight into the atmosphere
     s.sense("F-VENT", "mass_flow", "AMB.port")  # leaving the vent: negative while it takes flow
     sim = Simulation(s)
     sim.open("V-M")
@@ -93,6 +94,8 @@ def test_mass_flow_on_a_line_reads_at_either_kind_of_end():
     assert sim.read("F-VM") == pytest.approx(sim.mass_flow("V-M"))
     assert sim.read("F-VM") > 1.0
     assert sim.read("F-OUT") == pytest.approx(sim.read("F-VM"), rel=0.05)
+    assert sim.read("F-OUT") == sim.mass_flow("TK.bottom -- F1.in")  # the line's own flow
+    assert sim.read("F-INJ") == pytest.approx(sim.mass_flow("INJ"))
     assert sim.read("F-VENT") == pytest.approx(-sim.mass_flow("INJ"))
 
 

@@ -15,7 +15,7 @@ def _stand(supply="100 psig", **valve):
     s.add("A", "pneumatic_supply", volume="2 L", fluid="air", pressure=supply, temperature="293 K")
     s.add("V-DUMP", "valve", cv=0.5, actuator="solenoid")  # empties the supply
     s.add("ATM-A", "boundary", fluid="air")
-    s.connect("A.a", "V-DUMP.in")
+    s.connect("A.a", "V-DUMP.in", length=0)  # the supply's own outlet
     s.connect("V-DUMP.out", "ATM-A.port")
     s.add("N2", "boundary", fluid="nitrogen", pressure="500 psig")
     s.add("NC", "valve", cv=1, **valve)

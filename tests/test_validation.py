@@ -1,5 +1,7 @@
 """Regression checks from the fluids validation batch (expected values from hand
 calculations, NIST data or published flow models; see each test)."""
+import math
+
 import pytest
 
 from owlfluids.io.system import System
@@ -26,18 +28,22 @@ def _dead_headed(fluid, t, vol):
 @pytest.mark.parametrize("fluid,t,vol", [("water", 293.15, "0.4 L"), ("water", 293.15, "5 L"),
                                          ("oxygen", 90.0, "0.4 L"), ("ethanol", 293.15, "0.4 L")])
 def test_dead_headed_liquid_line_equalizes(fluid, t, vol):
-    """A liquid volume behind a shut valve comes up to its supply within milliseconds.
+    """A liquid volume behind a shut valve comes up to its supply, and stays there.
 
-    A stiff liquid needs only micrograms to move tens of psi, so it settles in well
-    under a step; it used to sit 70 psi low 50 ms after the close, with a phantom flow.
+    It used to sit 70 psi low 50 ms after the close, with a phantom flow: a stiff liquid
+    needs only micrograms to move tens of psi. Now the moving column first slams into the
+    shut valve (water hammer), then rings down against the volume and the supply line.
     """
     sim = _dead_headed(fluid, t, vol)
     sim.open("V")
     sim.run(0.5)
     sim.close("V")
-    sim.run(0.05)
-    assert (sim.pressure("L") - ATM) / PSI == pytest.approx(500.0, abs=1.0)
-    sim.run(0.45)
+    peak = 0.0
+    for _ in range(50):
+        sim.run(0.001)
+        peak = max(peak, sim.pressure("V.in"))
+    assert (peak - ATM) / PSI > 2000.0
+    sim.run(0.95)
     assert abs(sim.mass_flow("TUBE")) < 1e-4
     assert (sim.pressure("L") - ATM) / PSI == pytest.approx(500.0, abs=0.05)
 
@@ -82,8 +88,6 @@ def test_helium_warms_through_a_regulator():
 
 def _dyer_hem(cpn, t, p_up, p_dn=ATM):
     """Dyer's blend of incompressible flow and the true (isentropic, choked) HEM flux, kg/s/m2."""
-    import math
-
     import CoolProp.CoolProp as CP
     import numpy as np
 
@@ -127,8 +131,6 @@ def test_saturated_tank_drains_at_dyer_flux(fluid, cpn, t):
 
 def _real_choked_flux(cpn, p0, t0):
     """Largest rho sqrt(2 (h0 - h)) along the isentrope from (p0, T0): the real choked flux."""
-    import math
-
     import CoolProp.CoolProp as CP
     import numpy as np
 
@@ -180,8 +182,6 @@ def test_wall_gives_up_nist_heat_from_room_to_lox_temperature(material, cp_room,
 
 def test_tank_without_a_diameter_has_liquid_head():
     """A tank with no diameter is a cylinder four diameters long, liquid head included."""
-    import math
-
     s = System("head")
     s.add("TK", "tank", fluid="water", pressurant="nitrogen", volume="100 L", fill=0.5, pressure="50 psi",
           temperature="293.15 K")
@@ -228,7 +228,59 @@ def test_saturated_liquid_boundary_flashes_at_dyer_flux(cpn, t):
     s.connect("UP.port", "O.in")
     s.connect("O.out", "DN.port")
     sim = Simulation(s)
-    sim.run(0.01)
+    sim.run(1.0)  # the line to it gets flowing, flashing as it does
     assert sim.mass_flow("O") / 1e-6 == pytest.approx(_dyer_hem(cpn, t, psat), rel=0.06)
     s.component("UP").params["phase"] = "auto"
     assert any("vapor pressure" in w for w in Simulation(s).net.warnings)
+
+
+def _water_line(length="10 m"):
+    """100 psig water through 10 m of 10 mm bore tubing to a fast valve that dumps to the air."""
+    s = System("hammer")
+    s.add("SUP", "boundary", fluid="water", pressure="100 psig", temperature="293.15 K")
+    s.add("V", "valve", diameter="8 mm", cd=0.9, actuator="solenoid", open_time="1 ms", close_time="1 ms")
+    s.add("A", "boundary", fluid="water", temperature="293.15 K")
+    s.connect("SUP.port", "V.in", length=length, diameter="10 mm")
+    s.connect("V.out", "A.port", length=0)
+    return Simulation(s)
+
+
+def test_fast_close_on_a_long_water_line_surges_to_joukowsky():
+    """Shutting a valve faster than a wave crosses the line (L/c = 6.7 ms here) stops the
+    column against it: the surge is rho*c*v (Joukowsky), about 4600 psi at 21 m/s."""
+    import CoolProp.CoolProp as CP
+
+    sim = _water_line()
+    sim.open("V")
+    sim.run(1.0)
+    p0 = sim.pressure("V.in")
+    rho = CP.PropsSI("D", "T", 293.15, "P", p0, "Water")
+    c = CP.PropsSI("A", "T", 293.15, "P", p0, "Water")
+    v = sim.mass_flow("V") / rho / (math.pi * 0.01**2 / 4)
+    sim.close("V")
+    peak = 0.0
+    for _ in range(60):
+        sim.run(0.0005)
+        peak = max(peak, sim.pressure("V.in"))
+    # the lumped line (one mass of fluid, its volume at the valve) gives rho*c*v exactly;
+    # backward Euler and the 1 ms close take a little off
+    assert 0.8 < (peak - p0) / (rho * c * v) < 1.05
+
+
+def test_a_long_line_takes_time_to_get_flowing():
+    """Opening onto 10 m of still water: the supply's pressure has to accelerate the whole
+    column, so the flow rises as v_ss*tanh(t/tau), tau = rho*L*v_ss/dp = 0.31 s here."""
+    sim = _water_line()
+    sim.open("V")
+    sim.run(2.0)
+    q_ss = sim.mass_flow("V")
+    tau = 998.2 * 10.0 * (q_ss / 998.2 / (math.pi * 0.01**2 / 4)) / (sim.pressure("SUP") - ATM)
+    sim = _water_line()
+    sim.open("V")
+    for t in (0.05, 0.1, 0.2):
+        sim.run(0.05 if t < 0.2 else 0.1)
+        assert sim.mass_flow("V") / q_ss == pytest.approx(math.tanh(t / tau), rel=0.03)
+    short = _water_line("0.5 m")
+    short.open("V")
+    short.run(0.05)
+    assert short.mass_flow("V") / q_ss > 0.9

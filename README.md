@@ -190,12 +190,11 @@ During a run they can be switched from a script (`sim.set_regulator_behavior("RE
 fail a regulator seat partway through a test. Synnax never switches them.
 
 A sensor sits on a line: `line` names the two ports the line joins, and `along` (0 to 1, from
-the first) is where on it the sensor is drawn (left out, sensors spread along the line). A line
-has no friction or volume of its own, so every point on the lines joining a set of ports reads
-the same pressure, temperature, density, quality and purge gas: that point's. A `mass_flow`
-sensor reads the flow along its own line, positive from the first port toward the second, found
-by mass balance: what the parts beyond it take in (a line between two tees has a flow of its
-own; a line in a loop of lines has none and reads nothing, with a warning). A sensor can also
+the first) is where on it the sensor is drawn (left out, sensors spread along the line). A
+pressure, temperature, density, quality or purge sensor reads the end of its line it sits nearer
+(`along` below or above 0.5; left out, the end at a tank or volume). A `mass_flow` sensor reads
+the line's own flow, positive from the first port toward the second; on a line of length 0 it
+reads the flow element at one of its ends. A sensor can also
 read a tank's or volume's port with no line on it (`at: TK.top`), and one on no line keeps its
 place (`pos: [x, y]`) and reads nothing until it is put on one. `level`, `mass`,
 `valve_position` and `wall_temperature` belong to a part (`at: TK`) and are added from its
@@ -219,18 +218,34 @@ still line reads 0), and a level reading jitters as the level moves. Give a sens
 for a given `noise_seed` setting. It changes only what sensors read, never the
 simulation.
 
-Lines are not modelled and are not components: connect component ports directly
-(`[V1.out, INJ.in]`), and in the app a line is the wire between two ports. The
-valves, orifices, regulators and fittings are the restrictions that matter on a
-stand, so their Cv sets every flow; tubing adds no pressure drop, volume or
-inertia. A file from before October 2026 that still has `pipe` components loads
+Lines are not components: connect component ports directly (`[V1.out, INJ.in]`),
+and in the app a line is the wire between two ports. Each line is a length of tubing
+(`length`, inner `diameter`; the `line_length` setting, 1 m by default, and
+`line_diameter`, `auto` by default) whose fluid has inertia: its mass flow is a state the
+pressure difference between its ends accelerates, so a fast valve close gives water
+hammer (the Joukowsky surge, rho·c·v) and a long feed line takes time to get flowing. An
+`auto` diameter is the largest bore of the parts at either end (at least 1/4 in tubing's
+4.6 mm). In the app, click a line to set its own in **Properties**, and change the
+defaults for every line in **Edit > Settings…**. In a file they are a connection's third item:
+
+```yaml
+connections:
+- [TK-OX.bottom, V-OXM.in, {length: 3 m, diameter: 12 mm}]
+- [INJ.out, CH.a, {length: 0}]
+```
+
+A line has no friction: the valves, orifices, regulators and fittings are the
+restrictions that matter on a stand, so their Cv sets every flow. Line friction is
+usually a few percent of a feed's pressure drop: the example stand's LOX flow comes out
+about 4 % higher than with friction modelled. The fluid a line holds sits at its ends:
+next to a valve, fitting or tee it adds to that point's volume (with
+`junction_volume`, 1 cc by default; valve and fitting bodies hold more), and next to a
+tank or volume it is part of the tank. A line of `length: 0` joins parts bolted straight
+together (an injector on its chamber, a vent on the atmosphere) into one point, with no
+flow of its own. A file from before October 2026 that still has `pipe` components loads
 with each one folded into a direct connection (with a warning; save it to keep the
-change), and a sensor on a pipe moves to a port at the same point. Each point where components meet holds a small volume (`junction_volume`,
-1 cc by default; valve and fitting bodies hold more, and a flashing liquid such as
-nitrous runs smoother with about 20 cc). To keep a line's volume or its steel (for
-a chilldown), draw it as a `volume`. Line friction is usually a few percent of a
-feed's pressure drop: the example stand's LOX flow comes out about 4 % higher than
-with friction modelled.
+change), and a sensor on a pipe moves to a port at the same point. To keep a line's
+steel (for a chilldown), draw it as a `volume`.
 
 Lines start in equilibrium with the tank or volume they are open to: a feed line
 on a LOX tank starts full of LOX at tank pressure, a regulated line starts at its

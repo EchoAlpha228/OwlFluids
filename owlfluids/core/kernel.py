@@ -54,6 +54,7 @@ from ..fluids.registry import (
 from .layout import (
     CTRL_AIR,
     CTRL_CHECK,
+    CTRL_LINE,
     CTRL_PUMP,
     CTRL_REGULATOR,
     CTRL_RELIEF,
@@ -66,6 +67,7 @@ from .layout import (
     L_CTRL,
     L_DRAWA,
     L_DRAWB,
+    L_SX,
     LF_CDA,
     LF_LEAK,
     LF_LOCK,
@@ -154,8 +156,9 @@ MIX_ITER = 40  # most iterations of each solve in a mixed node's state
  W_REG, W_PS, W_GF, W_U0, W_LT0, W_T0, W_REG0) = range(23)
 N_W = 23
 
-# per-link flows: for each of 4 nodes, own-fluid mass, energy and purge-gas mass
-N_FV = 12
+# per-link flows: for each of 4 nodes, own-fluid mass, energy and purge-gas mass; then,
+# for a line, the rate of change of its flow state
+N_FV = 13
 
 
 @jit
@@ -637,12 +640,14 @@ def _exchange(src, d_src, dst, q, NI, NF, W, fl, fn, fv):
 
 
 @inl
-def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
+def _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, fn, fv):
     """Flows carried by link k.
 
     ``fn[0..3]`` are the nodes it changes (upstream, downstream, and the ullage
     partners of either when it is tank liquid; -1 for none) and ``fv[3s..3s + 2]``
-    their own-fluid mass, energy and purge-gas mass rates.
+    their own-fluid mass, energy and purge-gas mass rates. A line's flow is its own
+    state in ``x``; ``fv[12]`` is its rate of change: the pressure difference along the
+    line accelerates the fluid in it, dq/dt = (A/L)(p_a - p_b).
     Returns (signed mass flow, opening).
     """
     model, par, tab, grid, ltab, lgrid, rhol, sat, satg = fl
@@ -657,14 +662,29 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
     b = LI[k, L_B]
     pa = W[a, W_P]
     pb = W[b, W_P]
-    o = _opening(k, LI, LF, LV, pa, pb)
-    # a pump always moves fluid from its inlet (a) to its outlet, an actuator from its supply
-    fwd = pa >= pb or ctrl == CTRL_PUMP or ctrl == CTRL_AIR
+    qs = 0.0
+    if ctrl == CTRL_LINE:
+        qs = x[LI[k, L_SX]]
+        fv[12] = LF[k, LF_CDA] * (pa - pb)
+        o = 1.0
+        fwd = qs >= 0.0
+    else:
+        o = _opening(k, LI, LF, LV, pa, pb)
+        # a pump always moves fluid from its inlet (a) to its outlet, an actuator from its supply
+        fwd = pa >= pb or ctrl == CTRL_PUMP or ctrl == CTRL_AIR
     up = a if fwd else b
     dn = b if fwd else a
     mixed = NI[up, N_GX] >= 0
     d_up = LI[k, L_DRAWA] if fwd else LI[k, L_DRAWB]
-    side = _q_side(up, d_up, NI, W, fl)
+    if ctrl == CTRL_LINE:
+        # a line needs only what it carries: the enthalpy of what leaves (no flow law)
+        h_line = W[up, W_H]
+        if not mixed and d_up != DRAW_MIX and NI[up, N_KIND] == NODE_VOLUME and 0.0 < W[up, W_X] < 1.0:
+            h_line = _draw(up, d_up, NI, W, fl)[1]
+        s_line = W[up, W_S] if NI[up, N_KIND] == NODE_VOLUME else 1.0
+        side = (0.0, 0.0, 0.0, 0.0, s_line, h_line, NI[up, N_FLUID], W[up, W_T])
+    else:
+        side = _q_side(up, d_up, NI, W, fl)
     s_up = W[up, W_S]
     up_kind = NI[up, N_KIND]
     pt = NI[up, N_PARTNER]
@@ -679,6 +699,9 @@ def _link_flux(k, NI, NF, LI, LF, LV, fl, W, fn, fv):
         cda = 0.0  # no near-zero-flow blending: its flow does not follow the pressures
     elif ctrl == CTRL_AIR:
         q = LV[k, V_Q]  # set for the step by _actuate (negative: air returning to a starved supply)
+        cda = 0.0
+    elif ctrl == CTRL_LINE:
+        q = abs(qs) * side[4]  # what it carries out of a volume pumped near vacuum is throttled
         cda = 0.0
     else:
         q = _q_orifice(cda, p_up, p_dn, side, fl)
@@ -874,7 +897,9 @@ def _surface_source(i, NI, NF, W, ns, fl):
 
 
 @inl
-def _scatter_link(NI, fn, fv, out, sign):
+def _scatter_link(NI, fn, fv, out, sign, lx):
+    if lx >= 0:
+        out[lx] += sign * fv[12]
     for s in range(4):
         i = fn[s]
         if i >= 0:
@@ -907,10 +932,10 @@ def rhs(x, xdot, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS):
     xdot[:] = 0.0
     _node_props(x, NI, NF, fl, W)
     for k in range(LI.shape[0]):
-        mdot, o = _link_flux(k, NI, NF, LI, LF, LV, fl, W, FN[k], FV[k])
+        mdot, o = _link_flux(k, x, NI, NF, LI, LF, LV, fl, W, FN[k], FV[k])
         lout[k, LO_MDOT] = mdot
         lout[k, LO_OPEN] = o
-        _scatter_link(NI, FN[k], FV[k], xdot, 1.0)
+        _scatter_link(NI, FN[k], FV[k], xdot, 1.0, LI[k, L_SX])
     n = NI.shape[0]
     for i in range(n):
         _node_source(i, x, NI, NF, W, NS[i])
@@ -982,6 +1007,8 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
             j = color_cols[q]
             xp[j] = x[j] + 1e-7 * max(abs(x[j]), xscale[j])
             o = sowner[j]
+            if o < 0:
+                continue  # a line's flow: only the line itself changes (below)
             for i in (o, NI[o, N_PARTNER]):
                 if i >= 0 and stn[i] != g:
                     stn[i] = g
@@ -998,15 +1025,22 @@ def _jacobian(x, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals):
                     stl[k] = g
                     ll[nk] = k
                     nk += 1
+        for q in range(color_ptr[c], color_ptr[c + 1]):
+            o = sowner[color_cols[q]]
+            if o < 0 and stl[-o - 1] != g:
+                stl[-o - 1] = g
+                ll[nk] = -o - 1
+                nk += 1
         for d in range(nd):
             i = dl[d]
             if NI[i, N_KIND] == NODE_TANK_LIQUID:
                 _tank_liquid_p(i, NI, NF, W)
         for d in range(nk):
             k = ll[d]
-            _scatter_link(NI, FN[k], FV[k], dfp, -1.0)
-            _link_flux(k, NI, NF, LI, LF, LV, fl, W, fnt, fvt)
-            _scatter_link(NI, fnt, fvt, dfp, 1.0)
+            lx = LI[k, L_SX]
+            _scatter_link(NI, FN[k], FV[k], dfp, -1.0, lx)
+            _link_flux(k, xp, NI, NF, LI, LF, LV, fl, W, fnt, fvt)
+            _scatter_link(NI, fnt, fvt, dfp, 1.0, lx)
         for d in range(nd):
             i = dl[d]
             _scatter_node(i, NI, NS[i], dfp, -1.0)
@@ -1108,6 +1142,12 @@ def _chop(xk, bvec, iperm, NI, NF, fl, xscale, W):
                 a = 0.8 * mg0 / -dmg
             if m0 > TRACE * xscale[sx] and m0 + a * dm < 0.2 * m0:
                 a = 0.8 * m0 / -dm
+            # nor may the two together: a line pulling on a node holding traces of both
+            # (its column parting, the node near vacuum) would empty it
+            mt0 = max(m0, 0.0) + max(mg0, 0.0)
+            dmt = dm + dmg
+            if mt0 > 0.0 and mt0 + a * dmt < 0.2 * mt0:
+                a = 0.8 * mt0 / -dmt
             g = NI[i, N_GAS]
             ug = par[g, I_CV] * W[i, W_T] + par[g, P_OFF]
             if not m0 > TRACE * xscale[sx]:
@@ -1220,7 +1260,7 @@ def _factor(h, NI, jvals, col_ptr, col_rows, iperm, kl, ku, ab, piv):
 # fixed work budget (see ``advance``).
 NEWTON_MAX = 8
 NEWTON_TOL = 1e-4  # scaled Newton update that counts as converged
-NEWTON_REJAC = 1.0  # first-update size above which the Jacobian is rebuilt at the iterate
+NEWTON_REJAC = 10.0  # first-update size above which the Jacobian is rebuilt at the iterate
 ACCEPT_TOL = 1e-2  # an unconverged step is still taken if its last update was this small
 JAC_MAX_AGE = 10  # steps a Jacobian may be reused while Newton converges quickly
 JAC_COST = 5.0  # a Jacobian plus factorization, in right-hand-side evaluations
@@ -1242,6 +1282,22 @@ def _slow(raw, err_prev):
     return math.log(NEWTON_TOL / raw) / math.log(raw / err_prev) > 2.0
 
 
+@inl
+def _line_scales(h, NI, LI, xscale, cscale):
+    """Convergence scale of each line's flow: what moves the mass of a node at its ends by
+    that node's scale over the step, so a line is held to its ends' accuracy (a scale by
+    velocity would hold a gas line far tighter than the gas it fills)."""
+    for k in range(LI.shape[0]):
+        lx = LI[k, L_SX]
+        if lx < 0:
+            continue
+        s = math.inf
+        for i in (LI[k, L_A], LI[k, L_B]):
+            if NI[i, N_KIND] != NODE_BOUNDARY:
+                s = min(s, cscale[NI[i, N_SX]])
+        cscale[lx] = s / h if math.isfinite(s) else xscale[lx]
+
+
 @jit
 def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             st, sc, iperm, kl, ku, jvals, fk, ab, piv, bvec, ctl):
@@ -1257,6 +1313,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
     n = x.shape[0]
     nn = NI.shape[0]
     cscale = sc[11]
+    sowner = st[4]
     if ctl[4] > 0.0:
         ctl[8] += JAC_COST + 1.0
         rhs(x, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
@@ -1266,6 +1323,7 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
         ctl[3] = 0.0
         ctl[4] = 0.0
         ctl[1] = -1.0
+    _line_scales(h, NI, LI, xscale, cscale)
     if ctl[1] != h:
         if not _factor(h, NI, jvals, st[0], st[1], iperm, kl, ku, ab, piv):
             return False
@@ -1290,10 +1348,13 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
                 return False  # before touching xk, so it is never left half-updated
         # the size of the full update measures how Newton converges, before any chop
         raw = 0.0
-        for i in range(n):
+        raw_nodes = 0.0  # without the lines' flows: their own law is linear, so a big change
+        for i in range(n):  # of one is no reason for a new Jacobian
             e = abs(bvec[iperm[i]]) / cscale[i]
             if e > raw:
                 raw = e
+            if e > raw_nodes and sowner[i] >= 0:
+                raw_nodes = e
         chopped = _chop(xk, bvec, iperm, NI, NF, fl, xscale, W)
         if it >= 1 and raw >= ACCEPT_TOL:
             if raw > 0.9 * err_prev:
@@ -1332,11 +1393,12 @@ def _newton(x, h, xk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS, xscale,
             ctl[6] += 1.0
             converged = True
             break
-        if it + 1 < limit and ((it == 0 and raw > NEWTON_REJAC) or (it >= 1 and _slow(raw, err_prev))):
+        if it + 1 < limit and ((it == 0 and raw_nodes > NEWTON_REJAC) or (it >= 1 and _slow(raw, err_prev))):
             # a huge first update, or slow convergence: re-linearize at the current iterate
             ctl[8] += JAC_COST + 1.0
             rhs(xk, fk, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS)
             _jacobian(xk, NI, NF, LI, LF, LV, fl, W, FN, FV, NS, xscale, st, sc, jvals)
+            _line_scales(h, NI, LI, xscale, cscale)
             ctl[0] = 1.0
             ctl[5] += 1.0
             ctl[3] = 0.0

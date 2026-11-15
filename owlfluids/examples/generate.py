@@ -16,7 +16,13 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     """
     s = System("LOX/ethanol test stand")
     s.settings["dt"] = "1 ms"
-    add, con = s.add, s.connect
+    add = s.add
+
+    def con(a, b, length=None):
+        s.connect(a, b, length=length)
+
+    # line lengths (m): runs of tubing get lengths; parts bolted together or venting
+    # straight to the atmosphere are joined with length 0
 
     # GN2 supply: two bottles into a manifold
     add("GN2-K1", "tank", fluid="nitrogen", volume="49 L", pressure="4500 psi", temperature="20 C")
@@ -24,52 +30,52 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
     add("V-K1", "valve", cv=0.6, normally="open")
     add("V-K2", "valve", cv=0.6, normally="open")
     add("MAN-HP", "volume", volume="0.2 L")
-    con("GN2-K1.top", "V-K1.in"), con("V-K1.out", "MAN-HP.a")
-    con("GN2-K2.top", "V-K2.in"), con("V-K2.out", "MAN-HP.b")
+    con("GN2-K1.top", "V-K1.in", "0.3 m"), con("V-K1.out", "MAN-HP.a", "1 m")
+    con("GN2-K2.top", "V-K2.in", "0.3 m"), con("V-K2.out", "MAN-HP.b", "1 m")
     add("PT-HP-RV", "relief_valve", cv=0.2, set_pressure="4800 psi")
     add("ATM-HP", "boundary", fluid="nitrogen")
-    con("MAN-HP.c", "PT-HP-RV.in"), con("PT-HP-RV.out", "ATM-HP.port")
+    con("MAN-HP.c", "PT-HP-RV.in", "0.1 m"), con("PT-HP-RV.out", "ATM-HP.port", 0)
 
     def press_leg(tag, setpoint):
         add(f"REG-{tag}", "regulator", cv=0.4, setpoint=setpoint, droop="30 psi")
         add(f"V-{tag}P", "valve", cv=0.5)
         add(f"CV-{tag}", "check_valve", cv=0.5)
         add(f"F-{tag}1", "fitting", kind="elbow90", diameter="8 mm")
-        con(f"REG-{tag}.out", f"V-{tag}P.in"), con(f"V-{tag}P.out", f"CV-{tag}.in")
-        con(f"CV-{tag}.out", f"F-{tag}1.in")
+        con(f"REG-{tag}.out", f"V-{tag}P.in", "0.5 m"), con(f"V-{tag}P.out", f"CV-{tag}.in", "0.2 m")
+        con(f"CV-{tag}.out", f"F-{tag}1.in", "1 m")
 
     add("TEE-HP", "tee")
-    con("MAN-HP.d", "TEE-HP.a")
+    con("MAN-HP.d", "TEE-HP.a", "0.5 m")
     press_leg("OX", "600 psi")
     press_leg("FU", "650 psi")
-    con("TEE-HP.b", "REG-OX.in"), con("TEE-HP.c", "REG-FU.in")
+    con("TEE-HP.b", "REG-OX.in", "1 m"), con("TEE-HP.c", "REG-FU.in", "1 m")
 
     def prop_tank(tag, liquid, t_liq):
         add(f"TK-{tag}", "tank", fluid=liquid, pressurant="nitrogen", volume="60 L", fill=0.85,
             pressure="80 psi", temperature=t_liq, diameter="0.3 m")
         add(f"TEE-{tag}U", "tee")
-        con(f"F-{tag}1.out", f"TEE-{tag}U.a"), con(f"TEE-{tag}U.b", f"TK-{tag}.top")
+        con(f"F-{tag}1.out", f"TEE-{tag}U.a", "1 m"), con(f"TEE-{tag}U.b", f"TK-{tag}.top", "0.5 m")
         add(f"V-{tag}V", "valve", cv=0.8, normally="open")
         add(f"ATM-{tag}", "boundary", fluid="nitrogen")
-        con(f"TEE-{tag}U.c", f"V-{tag}V.in")
-        con(f"V-{tag}V.out", f"ATM-{tag}.port")
+        con(f"TEE-{tag}U.c", f"V-{tag}V.in", "0.3 m")
+        con(f"V-{tag}V.out", f"ATM-{tag}.port", 0)
         add(f"RV-{tag}", "relief_valve", cv=0.5, set_pressure="750 psi")
         add(f"ATM-{tag}R", "boundary", fluid="nitrogen")
-        con(f"TEE-{tag}U.d", f"RV-{tag}.in"), con(f"RV-{tag}.out", f"ATM-{tag}R.port")
+        con(f"TEE-{tag}U.d", f"RV-{tag}.in", "0.1 m"), con(f"RV-{tag}.out", f"ATM-{tag}R.port", 0)
         # feed line
         add(f"F-{tag}F1", "fitting", kind="elbow90", diameter="19 mm")
         add(f"V-{tag}M", "valve", cv=6.0, open_time="150 ms")
         add(f"F-{tag}F2", "fitting", kind="tee_run", diameter="19 mm")
         add(f"INJ-{tag}", "orifice", cda="60 mm2")
-        con(f"TK-{tag}.bottom", f"F-{tag}F1.in"), con(f"F-{tag}F1.out", f"V-{tag}M.in")
-        con(f"V-{tag}M.out", f"F-{tag}F2.in"), con(f"F-{tag}F2.out", f"INJ-{tag}.in")
+        con(f"TK-{tag}.bottom", f"F-{tag}F1.in", "0.5 m"), con(f"F-{tag}F1.out", f"V-{tag}M.in", "1 m")
+        con(f"V-{tag}M.out", f"F-{tag}F2.in", "1 m"), con(f"F-{tag}F2.out", f"INJ-{tag}.in", "0.5 m")
         # drain / dump
         add(f"V-{tag}D", "valve", cv=1.0)
         add(f"DUMP-{tag}", "boundary", fluid=liquid)
         add(f"TEE-{tag}D", "tee")
-        con(f"V-{tag}M.in", f"TEE-{tag}D.a")  # shares the junction ahead of the main valve
-        con(f"TEE-{tag}D.b", f"V-{tag}D.in")
-        con(f"V-{tag}D.out", f"DUMP-{tag}.port")
+        con(f"V-{tag}M.in", f"TEE-{tag}D.a", 0)  # shares the junction ahead of the main valve
+        con(f"TEE-{tag}D.b", f"V-{tag}D.in", "0.3 m")
+        con(f"V-{tag}D.out", f"DUMP-{tag}.port", 0)
 
     prop_tank("OX", "oxygen", "90 K")
     prop_tank("FU", "ethanol", "20 C")
@@ -79,9 +85,9 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
         add(f"CH-{tag}", "volume", volume="0.5 L")
         add(f"NOZ-{tag}", "orifice", cda="200 mm2")
         add(f"ATM-C{tag}", "boundary", fluid=fl)
-        con(f"INJ-{tag}.out", f"CH-{tag}.a")
-        con(f"CH-{tag}.b", f"NOZ-{tag}.in")
-        con(f"NOZ-{tag}.out", f"ATM-C{tag}.port")
+        con(f"INJ-{tag}.out", f"CH-{tag}.a", 0)
+        con(f"CH-{tag}.b", f"NOZ-{tag}.in", 0)
+        con(f"NOZ-{tag}.out", f"ATM-C{tag}.port", 0)
 
     # GN2 purges (own GN2 supplies) through check valves into each feed line below the
     # main valve, then into each injector manifold
@@ -91,21 +97,21 @@ def engine_test_stand(n_purge: int = 4, pneumatic: bool = False) -> System:
         add(f"K-{tag}", "tank", fluid="nitrogen", volume="10 L", pressure="1000 psi", temperature="20 C")
         add(f"V-{tag}", "valve", cv=0.1)
         add(f"CK-{tag}", "check_valve", cv=0.1)
-        con(f"K-{tag}.top", f"V-{tag}.in"), con(f"V-{tag}.out", f"CK-{tag}.in")
-        con(f"CK-{tag}.out", targets[i % len(targets)])
+        con(f"K-{tag}.top", f"V-{tag}.in", "0.3 m"), con(f"V-{tag}.out", f"CK-{tag}.in", "0.2 m")
+        con(f"CK-{tag}.out", targets[i % len(targets)], "1 m")
 
     if pneumatic:
         add("REG-PN", "regulator", cv=0.1, setpoint="100 psig", droop="10 psi")
         add("PN", "pneumatic_supply", volume="2 L", pressure="100 psig")
-        con("MAN-HP.d", "REG-PN.in"), con("REG-PN.out", "PN.a")
+        con("MAN-HP.d", "REG-PN.in", "0.5 m"), con("REG-PN.out", "PN.a", "1 m")
 
     _place(s, n_purge)
 
     s.sense("PT-HP", "pressure", line=("V-K1.out", "MAN-HP.a"), units="psi")
     s.sense("PT-OX", "pressure", line=("TEE-OXU.b", "TK-OX.top"), units="psi")
     s.sense("PT-FU", "pressure", line=("TEE-FUU.b", "TK-FU.top"), units="psi")
-    s.sense("PT-OXI", "pressure", line=("F-OXF2.out", "INJ-OX.in"), units="psi")
-    s.sense("PT-FUI", "pressure", line=("F-FUF2.out", "INJ-FU.in"), units="psi")
+    s.sense("PT-OXI", "pressure", line=("F-OXF2.out", "INJ-OX.in"), along=1.0, units="psi")
+    s.sense("PT-FUI", "pressure", line=("F-FUF2.out", "INJ-FU.in"), along=1.0, units="psi")
     s.sense("TC-OX", "temperature", line=("TK-OX.bottom", "F-OXF1.in"))
     s.sense("FM-OX", "mass_flow", line=("V-OXM.out", "F-OXF2.in"))
     s.sense("FM-FU", "mass_flow", line=("V-FUM.out", "F-FUF2.in"))

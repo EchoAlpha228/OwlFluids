@@ -31,7 +31,7 @@ def test_engine_stand_runs_faster_than_real_time():
     run(1.0)
     sim.close("V-OXM", "V-FUM")
     run(0.3)
-    shut = sim.read("FM-OX")
+    shut = sim.mass_flow("V-OXM")  # the line below it still rings: the column parts and slams back
     sim.open("V-P1", "V-P2", "V-P3", "V-P4")  # GN2 purges of both feeds and the chambers
     run(1.0)
     t = np.array(times) / 0.01  # wall seconds per simulated second
@@ -109,7 +109,9 @@ def test_lox_main_shuts_at_every_budget():
 
     Small liquid junctions downstream used to stall on a chord Newton that accepted
     updates tens of psi wide (the tolerance was a share of their whole mass), and the
-    meter read up to +-5 kg/s through the shut valve at some budgets.
+    meter read up to +-5 kg/s through the shut valve at some budgets. The line into the
+    valve is checked: still, at the tank's pressure. (The line below it rings for a while:
+    its column of LOX parts from the shut valve and slams back.)
     """
     bad = []
     for budget in range(12, 41, 2):
@@ -123,7 +125,8 @@ def test_lox_main_shuts_at_every_budget():
         sim.run(1.0)
         sim.close("V-OXM", "V-FUM")
         sim.run(0.3)
-        v = sim.read("FM-OX")
-        if abs(v) > 0.05:
-            bad.append((budget, round(v, 2)))
-    assert not bad, f"flow through the shut LOX main (budget, kg/s): {bad}"
+        v = sim.mass_flow("F-OXF1.out -- V-OXM.in")  # the line into the shut valve
+        dp = (sim.pressure("V-OXM.in") - sim.pressure("TK-OX.bottom")) / 6894.757
+        if abs(v) > 0.05 or abs(dp) > 0.5:
+            bad.append((budget, round(v, 2), round(dp, 1)))
+    assert not bad, f"line into the shut LOX main (budget, kg/s, psi off the tank): {bad}"

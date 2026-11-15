@@ -16,7 +16,7 @@ def regulated(tank="50 L", **reg):
     s.add("MV", "manual_valve", cv=0.3, open_time="0.1 s")
     s.add("AMB", "boundary", fluid="nitrogen", pressure="1 bar")
     s.connect("TK.top", "REG.in")
-    s.connect("REG.out", "VOL.a")
+    s.connect("REG.out", "VOL.a", length=0)  # it senses the volume itself, no line between
     s.connect("VOL.b", "MV.in")
     s.connect("MV.out", "AMB.port")
     s.sense("PT-OUT", "pressure", "VOL.a", noise=0.0, lag=0.0)

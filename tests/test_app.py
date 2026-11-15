@@ -465,3 +465,39 @@ def test_quick_start_guide_names_real_menus_and_examples():
     src = (Path(__file__).parents[1] / "owlfluids" / "app" / "window.py").read_text(encoding="utf-8")
     for item in ("Synnax setup…", "Connect to Synnax…", "Check for updates…", "Update settings…", "Quick start guide"):
         assert item in src and item in text, item
+
+
+@pytest.mark.gui
+def test_a_selected_line_edits_its_length_and_diameter(app, tmp_path):
+    w = MainWindow()
+    w.show()
+    w.load_example("lox-feed")
+    sc = w.scene
+    wire = next(x for x in sc.wires if {x.a, x.b} == {"V-M.out", "INJ.in"})
+    sc.clearSelection()
+    wire.setSelected(True)
+    eds = {w.properties._layout.itemAt(2).widget().layout().labelForField(e).text(): e
+           for e in w.properties.findChildren(QtWidgets.QLineEdit)}
+    assert set(eds) == {"length", "diameter"}
+    eds["length"].setText("3 m")
+    eds["length"].editingFinished.emit()
+    eds["diameter"].setText("-1 m")  # a bad size reads red and changes nothing
+    eds["diameter"].editingFinished.emit()
+    assert "diameter" not in sc.system.line_spec("V-M.out", "INJ.in")
+    eds["diameter"].setText("12 mm")
+    eds["diameter"].editingFinished.emit()
+    assert sc.system.line_spec("INJ.in", "V-M.out") == {"length": "3 m", "diameter": "12 mm"}
+    assert w.dirty
+    sc.rename("V-M", "V-MAIN")  # the line keeps its size under the part's new name
+    assert sc.system.line_spec("V-MAIN.out", "INJ.in") == {"length": "3 m", "diameter": "12 mm"}
+    sc.clearSelection()
+    wire.setSelected(True)
+    eds = dict(zip(("length", "diameter"), w.properties.findChildren(QtWidgets.QLineEdit), strict=True))
+    assert eds["diameter"].text() == "12 mm"
+    eds["diameter"].setText("")  # blank goes back to the line_diameter setting
+    eds["diameter"].editingFinished.emit()
+    path = tmp_path / "sized.yaml"
+    sc.system.save(path)
+    assert System.load(path).line_spec("V-MAIN.out", "INJ.in") == {"length": "3 m"}
+    w.dirty = False
+    w.close()
