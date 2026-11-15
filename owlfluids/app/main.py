@@ -12,10 +12,13 @@ def main(path: str | None = None) -> int:
         print("The desktop app needs PySide6 and pyqtgraph: pip install owlfluids[app]", file=sys.stderr)
         return 1
     from ..examples import EXAMPLES
+    from .appicon import app_icon, set_windows_app_id
     from .window import MainWindow
 
+    set_windows_app_id()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("OwlFluids")
+    app.setWindowIcon(app_icon())
     w = MainWindow()
     if path:
         if path in EXAMPLES:
