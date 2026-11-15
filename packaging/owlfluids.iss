@@ -52,10 +52,12 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\OwlFluids"; Filename: "{app}\owlfluids-app.exe"
+; AppUserModelID matches owlfluids/app/appicon.py, so the shortcut and the running
+; window share one taskbar button instead of grouping under Python
+Name: "{group}\OwlFluids"; Filename: "{app}\owlfluids-app.exe"; AppUserModelID: "FRL.OwlFluids"
 Name: "{group}\OwlFluids examples"; Filename: "{app}\examples"
 Name: "{group}\Uninstall OwlFluids"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\OwlFluids"; Filename: "{app}\owlfluids-app.exe"; Tasks: desktopicon
+Name: "{autodesktop}\OwlFluids"; Filename: "{app}\owlfluids-app.exe"; AppUserModelID: "FRL.OwlFluids"; Tasks: desktopicon
 
 [Run]
 ; compile the solver for this PC now, under the progress bar, rather than on the first run

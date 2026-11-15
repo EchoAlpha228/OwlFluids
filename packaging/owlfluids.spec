@@ -24,6 +24,9 @@ for pkg in ("CoolProp", "pyqtgraph", "synnax"):
 
 # the desktop app's bundled fonts (Lato, Roboto Mono, Barlow Semi Condensed; all OFL)
 datas.append((str(ROOT / "owlfluids" / "app" / "fonts"), "owlfluids/app/fonts"))
+# window and taskbar icon (the exe's own icon is packaging/owlfluids.ico, below)
+if (ROOT / "owlfluids" / "app" / "icons").is_dir():
+    datas.append((str(ROOT / "owlfluids" / "app" / "icons"), "owlfluids/app/icons"))
 # Help > Quick start guide reads its Markdown at run time
 datas.append((str(ROOT / "owlfluids" / "app" / "docs"), "owlfluids/app/docs"))
 
