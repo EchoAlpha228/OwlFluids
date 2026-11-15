@@ -47,6 +47,8 @@ CTRL_AIR = 6  # a pneumatic actuator's draw on its air supply (a); LF_CDA: pilot
 # pressures where the valve starts to stroke and is fully stroked
 CTRL_LINE = 7  # a line: its mass flow q is a state, dq/dt = (A/L)(p_a - p_b - dp_friction) (LF_CDA: A/L,
 # LF_P1: L/D, 0 for a line without friction, LF_P2: its inner diameter D)
+CTRL_BURST = 8  # a burst disk: shut until upstream exceeds downstream by LF_P1, then open for good
+# (it opens at its V_RATE_OPEN and its V_CMD latches at 1)
 LINE_ROUGHNESS = 1.5e-6  # m, drawn stainless or copper tubing
 
 # ---- link float columns

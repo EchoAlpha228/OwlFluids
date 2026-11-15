@@ -125,6 +125,7 @@ class Network:
     warnings: list[str] = field(default_factory=list)
     mix_init: np.ndarray = field(repr=False, default=None)
     pumps: dict[str, int] = field(default_factory=dict)  # component id -> its link
+    bursts: dict[str, int] = field(default_factory=dict)  # burst disk id -> its link
     actuators: dict[str, int] = field(default_factory=dict)  # pneumatic valve id -> its actuator link
     # "COMP.port" -> [(link, sign), ...]: the flow along the line at that port is the sum of sign * mdot
     port_flows: dict[str, list[tuple[int, float]]] = field(default_factory=dict)
@@ -157,6 +158,7 @@ class NetworkBuilder:
         self.comp_links: dict[str, list[int]] = defaultdict(list)
         self.valves: dict[str, int] = {}
         self.pumps: dict[str, int] = {}
+        self.bursts: dict[str, int] = {}  # burst disk -> its link
         self.actuators: dict[str, int] = {}
         self.exhausts: dict[int, int] = {}  # air supply node -> where its actuators' air goes
         self.assumed_pneumatic: dict[str, list[str]] = defaultdict(list)  # supply -> valves not set either way
@@ -1061,7 +1063,7 @@ class NetworkBuilder:
                       [n.name for n in self.nodes], [lk.name for lk in self.links],
                       [n.owner for n in self.nodes], [lk.owner for lk in self.links],
                       port_nodes, dict(self.comp_nodes), dict(self.comp_links), dict(self.valves),
-                      warnings=self.warnings, mix_init=mix_init, pumps=dict(self.pumps),
+                      warnings=self.warnings, mix_init=mix_init, pumps=dict(self.pumps), bursts=dict(self.bursts),
                       actuators=dict(self.actuators), port_flows=self._port_flows(),
                       line_flows=self._line_flows())
         _structure(net)

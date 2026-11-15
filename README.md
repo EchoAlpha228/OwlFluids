@@ -151,7 +151,7 @@ as one, their `gas` and `liquid` ports becoming `top` and `bottom`), `boundary`,
 (also takes `wall_mass`, for example to chill down a cryogenic line), `tee`, `fitting`,
 `orifice`, `valve`, `manual_valve` (a hand valve the operator opens, closes or throttles from the
 valve panel; Synnax never commands it, and old `throttle_valve` parts load as one),
-`check_valve`, `relief_valve`, `regulator` (its setpoint can be turned from the valve panel during a run),
+`check_valve`, `relief_valve`, `burst_disk` (shut until the pressure across it reaches `burst_pressure`, then open for good until a reset; `sim.burst("OFBD")` says whether it has gone), `regulator` (its setpoint can be turned from the valve panel during a run),
 `air_pump` (a compressor with a pressure switch: `flow`, `start_pressure`,
 `stop_pressure`; a `valve_position` sensor on it reads 1 while it runs),
 `pneumatic_supply` (the "A" air or GN2 header pneumatic valves run on; feed it from an

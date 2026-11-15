@@ -39,6 +39,7 @@ SHAPES: dict[str, tuple[tuple[float, float], dict[str, tuple[float, float]]]] = 
     "manual_valve": ((56, 46), {"in": (-28, 0), "out": (28, 0)}),
     "check_valve": ((40, 34), {"in": (-20, 0), "out": (20, 0)}),  # ports on the seats' line
     "relief_valve": ((50, 50), {"in": (-25, 0), "out": (25, 0)}),
+    "burst_disk": ((34, 34), {"in": (-17, 0), "out": (17, 0)}),
     "regulator": ((50, 40), {"in": (-25, 0), "out": (25, 0)}),
     "air_pump": ((44, 44), {"out": (22, -18)}),  # the tip of the discharge arrow
     "pneumatic_supply": ((30, 30), {"a": (-15, 0), "b": (15, 0), "c": (0, -15), "d": (0, 15)}),
@@ -226,6 +227,20 @@ def paint(p: QPainter, type_name: str, size, state: dict) -> None:
         s_path.cubicTo(QPointF(-10, -10), QPointF(-8, 0), QPointF(0, 0))
         s_path.cubicTo(QPointF(8, 0), QPointF(10, 10), QPointF(-6, 8))
         p.drawPath(s_path)
+    elif type_name == "burst_disk":
+        # burst disk: a domed disk held between two flanges, bulging downstream; it takes the
+        # open colour once it has ruptured
+        fx, fh = 5.0, 12.0
+        p.drawLine(QPointF(-w / 2, 0), QPointF(-fx, 0))
+        p.drawLine(QPointF(fx, 0), QPointF(w / 2, 0))
+        p.drawLine(QPointF(-fx, -fh), QPointF(-fx, fh))
+        p.drawLine(QPointF(fx, -fh), QPointF(fx, fh))
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(_state_colour(state, LINE), 2.4))
+        dome = QPainterPath(QPointF(-1, -fh + 1))
+        dome.quadTo(QPointF(5, 0), QPointF(-1, fh - 1))
+        p.drawPath(dome)
+        p.setPen(QPen(LINE, 1.6))
     elif type_name == "regulator":
         # pressure regulator as on the reference NPR: an in-line body flanged at both ends with a
         # filled dot at its centre; the sensing line rises from the dot and runs downstream

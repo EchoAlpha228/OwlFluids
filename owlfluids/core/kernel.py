@@ -53,6 +53,7 @@ from ..fluids.registry import (
 )
 from .layout import (
     CTRL_AIR,
+    CTRL_BURST,
     CTRL_CHECK,
     CTRL_LINE,
     CTRL_PUMP,
@@ -516,7 +517,7 @@ def _reg_target(k, LF, pa):
 @inl
 def _opening(k, LI, LF, LV, pa, pb):
     c = LI[k, L_CTRL]
-    if c == CTRL_VALVE or c == CTRL_PUMP:
+    if c == CTRL_VALVE or c == CTRL_PUMP or c == CTRL_BURST:
         return LV[k, V_POS]
     if c == CTRL_CHECK or c == CTRL_RELIEF:
         return _soft_unit((pa - pb - LF[k, LF_P1]) / LF[k, LF_P2])
@@ -1595,14 +1596,17 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
     held = False  # a step held its state: the scratch W is the rejected iterate's
     has_air = False
     has_reset = False
+    has_burst = False
     for k in range(nl):
+        if LI[k, L_CTRL] == CTRL_BURST:
+            has_burst = True
         if LI[k, L_CTRL] == CTRL_AIR:
             has_air = True
         if LI[k, L_CTRL] == CTRL_REGULATOR and LF[k, LF_RESET] > 0.0:
             has_reset = True
     for s in range(n_steps):
-        if held and (has_air or has_reset):
-            # the scratch holds the rejected iterate: actuators read their supply from the kept state
+        if held and (has_air or has_reset or has_burst):
+            # the scratch holds the rejected iterate: actuators (and burst disks) read pressures from the kept state
             _node_props(x, NI, NF, fl, W)
             held = False
         if has_air:
@@ -1631,7 +1635,12 @@ def advance(x, n_steps, dt, NI, NF, LI, LF, LV, fl, W, nout, lout, FN, FV, NS,
                     LV[k, V_CMD] = 0.0
                 elif LV[k, V_CMD] < 0.5 and p_out <= LF[k, LF_P1]:
                     LV[k, V_CMD] = 1.0
-            if c == CTRL_VALVE or c == CTRL_PUMP:
+            if c == CTRL_BURST and LV[k, V_CMD] < 0.5:
+                # a burst disk ruptures once the pressure across it reaches its burst pressure,
+                # and stays open: nothing closes it again but a reset
+                if W[LI[k, L_A], W_P] - W[LI[k, L_B], W_P] >= LF[k, LF_P1]:
+                    LV[k, V_CMD] = 1.0
+            if c == CTRL_VALVE or c == CTRL_PUMP or c == CTRL_BURST:
                 # a pneumatic valve goes where its actuator's air drives it, not straight to its command
                 d = (LV[k, V_CMD] if LV[k, V_AIR] < 0.0 else LV[k, V_TGT]) - LV[k, V_POS]
                 if d > 0:

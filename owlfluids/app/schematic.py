@@ -1234,6 +1234,7 @@ NEW_DEFAULTS = {
     "manual_valve": {"cv": 0.5},
     "check_valve": {"cv": 0.5},
     "relief_valve": {"cv": 0.3, "set_pressure": "500 psi"},
+    "burst_disk": {"cv": 0.5, "burst_pressure": "1500 psi"},
     "regulator": {"cv": 0.3, "setpoint": "300 psi"},
 }
 REQUIRED: dict[str, tuple] = {}

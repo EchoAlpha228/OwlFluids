@@ -340,6 +340,16 @@ class Simulation:
         k = self.net.actuators.get(valve)
         return 0.0 if k is None else float(self.LV[k, L.V_Q])
 
+    def burst_disks(self) -> list[str]:
+        return list(self.net.bursts)
+
+    def burst(self, disk: str) -> bool:
+        """Whether a burst disk has ruptured (it stays open until a reset)."""
+        k = self.net.bursts.get(disk)
+        if k is None:
+            raise KeyError(f"no burst disk {disk!r}; burst disks: {', '.join(self.net.bursts)}")
+        return bool(self.LV[k, L.V_CMD] > 0.5)
+
     def pumps(self) -> list[str]:
         return list(self.net.pumps)
 
