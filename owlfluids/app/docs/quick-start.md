@@ -39,10 +39,10 @@ Copy-Item "$env:LOCALAPPDATA\Programs\OwlFluids\examples" C:\FRL\OwlFluids -Recu
 ```
 
 **From source** (to develop OwlFluids, or `import owlfluids` from your own
-Python), with Python 3.12 or newer:
+Python), with Python 3.13 (the newest Synnax client needs it; 3.12 gets client 0.61):
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[app,hdf5,synnax]"
 owlfluids tables
@@ -137,17 +137,19 @@ Synnax gives you two ways to run a Core, and OwlFluids works with both.
 
 | Your Synnax | Pick as the core | Login |
 | --- | --- | --- |
-| **Synnax Desktop 1.1 or newer** on this PC (Core 0.61) | *Synnax Desktop on this computer* | None: OwlFluids reads Desktop's API key |
+| **Synnax Desktop 1.1 or newer** on this PC (Desktop 1.2 runs Core 0.62) | *Synnax Desktop on this computer* | None: OwlFluids reads Desktop's API key |
 | A **standalone Core** (`synnax start`, or the stand's server) | *a Synnax Core at an address* | Username and password, default `synnax` / `seldon` |
 
 ### Synnax Desktop (easiest)
 
 Synnax Desktop runs its own Core inside the app with a random password it never
-saves. Desktop 1.1 and newer share that Core with programs on the same PC by
-writing its address and an API key to `~/.synnax/desktop.json` each time it
-opens. OwlFluids reads that file at every connect.
+saves. Desktop 1.1 and newer share that Core with programs on the same PC
+through `~/.synnax/desktop.json`, which Desktop writes each time it opens: 1.1
+puts an API key in it, and 1.2 and newer keep the key in Windows' credential
+store and name a small program (`synnax-desktop-key`) that hands it over.
+OwlFluids reads that file, and gets the key, at every connect.
 
-1. Install **Synnax Desktop 1.1** or newer from the
+1. Install **Synnax Desktop 1.2** (or 1.1) from the
    [Synnax docs](https://docs.synnaxlabs.com) and open it. Wait for its
    workspace to load.
 2. In OwlFluids, open your system (for example **File > Examples > lox-feed**),
@@ -331,6 +333,8 @@ If you list any sensors or valves, only the listed ones are connected.
 | *Synnax Desktop hasn't shared its Core* (no `desktop.json`) | Desktop 1.0 or older, or Desktop never opened | Update to Synnax Desktop 1.1 or newer and open it |
 | *Synnax Desktop isn't running* | Desktop is closed; its file stays behind | Open Desktop, wait for the workspace, try again |
 | *turned down the API key* | **Reset key** was pressed in Desktop | Connect again to read the new key |
+| *names no API key* | A Desktop newer than this OwlFluids, or a damaged file | Update OwlFluids and Synnax Desktop, and open Desktop |
+| *key program … is gone* / *failed* | Desktop was moved or uninstalled, or you aren't logged in to it | Open Synnax Desktop, log in, and connect again |
 | *cannot reach the Synnax Core* | Core not running, or wrong host or port | Start it, and use the host and port the Console connects to |
 | Login error | Wrong username, password or TLS setting | Match what the Console uses |
 | Warning: Core and client *differ in major.minor* | OwlFluids' bundled client and the Core are on different releases | Upgrade the side the warning names; Help > Check for updates brings the newest client |

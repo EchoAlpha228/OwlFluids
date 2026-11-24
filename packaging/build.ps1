@@ -1,11 +1,11 @@
 # Build the Windows installer locally (CI does the same in .github/workflows/release.yml).
 #   powershell -ExecutionPolicy Bypass -File packaging\build.ps1
-# Needs Python 3.12 and Inno Setup 6 (winget install JRSoftware.InnoSetup).
+# Needs Python 3.13 (the newest Synnax client, 0.62+, needs it) and Inno Setup 6 (winget install JRSoftware.InnoSetup).
 # Output: dist\OwlFluids-Setup-<version>.exe
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-$py = if ($env:PYTHON) { $env:PYTHON } else { "py -3.12" }
+$py = if ($env:PYTHON) { $env:PYTHON } else { "py -3.13" }
 if (-not (Test-Path .build-venv)) { Invoke-Expression "$py -m venv .build-venv" }
 $vpy = ".build-venv\Scripts\python.exe"
 & $vpy -m pip install --upgrade pip
