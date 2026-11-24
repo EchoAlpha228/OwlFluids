@@ -314,15 +314,15 @@ class SynnaxDialog(QDialog):
             self.desktop_note.hide()
             return
         try:
-            d = sx.desktop_options()
+            d = sx.desktop_options(key=False)  # where its Core is; the key is read only on connect
             self.host.setText(d["host"])
             self.port.setText(str(d["port"]))
             where = f"{d['host']}:{d['port']}"
             running = sx.reachable(d["host"], d["port"], 0.3)
-            note = (f"Synnax Desktop's Core is on {where}; OwlFluids logs in with the API key Desktop saved in "
-                    f"{sx.desktop_file()}, so no username or password is needed." if running
+            note = (f"Synnax Desktop's Core is on {where}; OwlFluids logs in with the API key Desktop shares "
+                    f"({sx.desktop_file()}), so no username or password is needed." if running
                     else f"Synnax Desktop isn't running (its Core uses {where} while it runs). Open it before "
-                    "connecting; OwlFluids logs in with the API key it saved, so no username or password is needed.")
+                    "connecting; OwlFluids logs in with the API key it shares, so no username or password is needed.")
         except RuntimeError as e:
             note = str(e)[0].upper() + str(e)[1:] + "."
         self.desktop_note.setText(note)

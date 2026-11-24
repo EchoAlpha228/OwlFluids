@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0  # the tags, to pick the next version
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"  # Synnax client 0.62+ needs 3.13; on 3.12 pip would bundle 0.61
       - name: Package version
         id: version
         shell: pwsh

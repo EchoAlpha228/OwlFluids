@@ -411,11 +411,67 @@ def test_desktop_reads_its_connection_file_at_each_connect(old_core):
         desktop_options()
     _desktop_file(old_core)
     cfg = SynnaxConfig(desktop=True, host="ignored", port=1, secure=True)
-    assert cfg.address() == ("127.0.0.1", old_core, False, "syk_test_key")
+    assert cfg.address() == ("127.0.0.1", old_core, False, "syk_test_key", "")
     _desktop_file(1)  # Desktop closed: its port answers nothing
     with pytest.raises(RuntimeError, match="isn't running"):
         cfg.address()
-    assert SynnaxConfig(host="h", port=5).address() == ("h", 5, False, "")
+    assert SynnaxConfig(host="h", port=5).address() == ("h", 5, False, "", "")
+
+
+def _key_helper(tmp_path, key="syk_test_key", code=0):
+    """A stand-in for Synnax Desktop 1.2's synnax-desktop-key: prints the key (or fails); returns its path."""
+    import sys
+
+    script = tmp_path / "key_helper.py"
+    script.write_text("import sys\n" + (f"print({key!r})\n" if code == 0 else
+                                         f"print('keychain says no', file=sys.stderr)\nsys.exit({code})\n"))
+    if sys.platform == "win32":
+        helper = tmp_path / "synnax-desktop-key.cmd"
+        helper.write_text(f'@"{sys.executable}" "{script}"\r\n')
+    else:
+        helper = tmp_path / "synnax-desktop-key"
+        helper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{script}'\n")
+        helper.chmod(0o755)
+    return str(helper)
+
+
+def _desktop_file_12(port, helper):
+    """Write a desktop.json like Synnax Desktop 1.2's: the address and a key program, no key."""
+    import json
+
+    from owlfluids.drivers.synnax import desktop_file
+
+    desktop_file().write_text(json.dumps({"host": "127.0.0.1", "port": port, "secure": False,
+                                          "api_key_helper": helper}))
+
+
+def test_desktop_12_key_comes_from_its_key_program(old_core, tmp_path):
+    from owlfluids.drivers.synnax import desktop_options
+
+    _desktop_file_12(old_core, _key_helper(tmp_path))
+    assert desktop_options(key=False)["api_key"] == ""  # showing where the Core is never runs the program
+    assert desktop_options()["api_key"] == "syk_test_key"
+    cfg = SynnaxConfig(desktop=True)
+    assert cfg.address() == ("127.0.0.1", old_core, False, "syk_test_key", "")
+    _desktop_file_12(old_core, str(tmp_path / "gone"))
+    with pytest.raises(RuntimeError, match="key program .* is gone"):
+        cfg.address()
+    _desktop_file_12(old_core, _key_helper(tmp_path, code=3))
+    with pytest.raises(RuntimeError, match="keychain says no"):
+        cfg.address()
+    _desktop_file_12(1, str(tmp_path / "gone"))  # Desktop closed: says so before running the program
+    with pytest.raises(RuntimeError, match="isn't running"):
+        cfg.address()
+
+
+def test_desktop_file_without_a_key_says_to_update_desktop():
+    import json
+
+    from owlfluids.drivers.synnax import desktop_file, desktop_options
+
+    desktop_file().write_text(json.dumps({"host": "127.0.0.1", "port": 9090}))
+    with pytest.raises(RuntimeError, match="names no API key"):
+        desktop_options(key=False)
 
 
 def test_desktop_key_refused_says_to_reopen_desktop(old_core):
@@ -484,6 +540,22 @@ def test_real_client_logs_in_to_synnax_desktop_with_its_api_key(desktop_core):
     _desktop_file(port, key="stale")
     with pytest.raises(RuntimeError, match="API key"):
         SynnaxLink(SynnaxConfig(desktop=True))
+
+
+def test_real_client_logs_in_to_synnax_desktop_12_with_its_key_program(desktop_core, tmp_path):
+    pytest.importorskip("synnax")
+    from owlfluids.drivers.synnax import client_version
+
+    if tuple(int(x) for x in client_version().split(".")[:2]) < (0, 60):
+        pytest.skip("API keys and session logins came with the 0.60 client")
+    port, seen = desktop_core
+    _desktop_file_12(port, _key_helper(tmp_path))
+    link = SynnaxLink(SynnaxConfig(desktop=True))
+    try:
+        logins = [b for p, b in seen if p.endswith("/auth/session/create")]
+        assert logins == [{"proof": {"method": "api_key", "key": "syk_test_key"}}]
+    finally:
+        link.disconnect()
 
 
 def test_latest_passes_n_by_keyword():

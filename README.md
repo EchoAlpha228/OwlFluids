@@ -72,10 +72,11 @@ or tests are not released, except edits to the in-app quick start guide (`owlflu
 
 ### From source
 
-Python 3.12 is recommended (the Synnax client needs 3.12+).
+Python 3.13 is recommended: the newest Synnax client (0.62, for Core 0.62 and Synnax
+Desktop 1.2) needs 3.13, and on 3.12 pip installs client 0.61.
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[app,hdf5,synnax]"
 owlfluids tables                 # build property tables once (~5 s per fluid)
@@ -321,16 +322,18 @@ the same window while running, with **Connect**. **Load file…** and **Save fil
 read and write the YAML files the command line uses.
 
 **Synnax Desktop.** Pick *Synnax Desktop on this computer* as the core. Desktop
-runs its own Core with a random root password it never saves; Desktop 1.1 and newer
-share that Core with programs on the same computer by writing its address and an API
-key to `~/.synnax/desktop.json` (Synnax docs, *Connect to Synnax Desktop*). OwlFluids
-reads that file at each connect and logs in with the key, so there is no username or
-password to enter. Desktop writes the file each time it opens, so open Desktop before
-connecting; it leaves the file when it quits, and OwlFluids then says Desktop isn't
-running. *Reset key* in Desktop's *Connect from code* window ends OwlFluids' session:
-connect again to pick up the new key. Desktop 1.0.x and older write no such file, and
-their Core can't be reached from outside the app: update to Synnax Desktop 1.1 or newer, or run a
-standalone Core.
+runs its own Core with a random root password it never saves, and shares that Core
+with programs on the same computer through `~/.synnax/desktop.json` (Synnax docs,
+*Connect to Synnax Desktop*). Desktop 1.1 writes the Core's address and an API key
+there; Desktop 1.2 and newer keep the key in the OS keychain and write the path of a
+small program, `synnax-desktop-key`, that prints it. OwlFluids reads the file at each
+connect (and runs that program, for Desktop 1.2) and logs in with the key, so there is
+no username or password to enter. Desktop writes the file each time it opens, so open
+Desktop before connecting; it leaves the file when it quits, and OwlFluids then says
+Desktop isn't running. *Reset key* in Desktop's *Connect from code* window ends
+OwlFluids' session: connect again to pick up the new key. Desktop 1.0.x and older
+write no such file, and their Core can't be reached from outside the app: update to
+Synnax Desktop 1.1 or newer, or run a standalone Core.
 `desktop: true` in a `synnax:` section does the same on the command line.
 
 On the command line, `--synnax` alone uses the system file's `synnax:` section;

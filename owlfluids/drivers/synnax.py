@@ -83,28 +83,72 @@ def desktop_file() -> Path:
     return Path(override) if override else Path.home() / ".synnax" / "desktop.json"
 
 
-def desktop_options() -> dict:
-    """Synnax Desktop's Core as it shares it: host, port, secure and api_key. Raises RuntimeError if it doesn't.
+def desktop_options(key: bool = True) -> dict:
+    """Synnax Desktop's Core as it shares it: host, port, secure, ca_cert, api_key. Raises RuntimeError if not.
 
-    Synnax Desktop runs its own Core with a random root password it never saves. Desktop 1.1
-    and newer write the Core's address and an API key for scripts on the same computer
-    to ``~/.synnax/desktop.json`` (Synnax docs: Connect to Synnax Desktop), which the
-    synnax client reads too. Desktop 1.0.x and older write nothing: their Core can't be
-    reached from outside the app.
+    Synnax Desktop runs its own Core with a random root password it never saves, and
+    shares that Core with scripts on the same computer through ``~/.synnax/desktop.json``
+    (Synnax docs: Connect to Synnax Desktop), which the synnax client reads too:
+
+    - Desktop 1.1 writes the Core's address and an API key in the file.
+    - Desktop 1.2 and newer keep the key in the OS keychain and write, in place of it,
+      ``api_key_helper``: the path of a program (``synnax-desktop-key``) that prints it.
+
+    Desktop 1.0.x and older write nothing: their Core can't be reached from outside the
+    app. With ``key=False`` the helper is not run (``api_key`` is then '' for Desktop 1.2),
+    for showing where the Core is without touching the keychain.
     """
     import json
 
     path = desktop_file()
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
-        return {"host": str(d.get("host") or "127.0.0.1"), "port": int(d["port"]), "secure": bool(d.get("secure")),
-                "api_key": str(d["api_key"])}
+        out = {"host": str(d.get("host") or "127.0.0.1"), "port": int(d["port"]), "secure": bool(d.get("secure")),
+               "ca_cert": str(d.get("ca_cert") or ""), "api_key": str(d.get("api_key") or ""),
+               "api_key_helper": str(d.get("api_key_helper") or "")}
     except FileNotFoundError:
         raise RuntimeError(f"Synnax Desktop hasn't shared its Core with programs on this computer (no {path}). "
                            "Synnax Desktop 1.0 and older don't: update to Synnax Desktop 1.1 or newer, "
                            "open it, and try again") from None
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
         raise RuntimeError(f"can't read Synnax Desktop's connection file {path}: {e}") from None
+    if not out["api_key"] and not out["api_key_helper"]:
+        raise RuntimeError(f"Synnax Desktop's connection file {path} names no API key: update Synnax Desktop, "
+                           "open it, and try again")
+    if key and not out["api_key"]:
+        out["api_key"] = desktop_key(out["api_key_helper"])
+    return out
+
+
+DESKTOP_KEY_TIMEOUT = 60.0  # a locked keychain can keep Desktop's key program waiting for a password
+
+
+def desktop_key(helper: str, timeout: float = DESKTOP_KEY_TIMEOUT) -> str:
+    """The API key that Synnax Desktop 1.2+'s key program prints. Raises RuntimeError if it can't be had."""
+    import subprocess
+    import sys
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0  # no console flash
+    try:
+        r = subprocess.run([helper], stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, check=False, creationflags=flags)
+    except FileNotFoundError:
+        raise RuntimeError(f"Synnax Desktop's key program {helper} is gone: open Synnax Desktop (or reinstall it) "
+                           "and try again") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Synnax Desktop's key program didn't answer in {timeout:g} s: unlock your computer's "
+                           "keychain and try again") from None
+    except OSError as e:
+        raise RuntimeError(f"can't run Synnax Desktop's key program {helper}: {e.strerror or e}") from None
+    if r.returncode != 0:
+        line = (r.stderr or "").strip().splitlines()
+        raise RuntimeError("Synnax Desktop's key program failed (" + (line[-1] if line else f"exit code {r.returncode}")
+                           + "): open Synnax Desktop, log in, and try again")
+    key = (r.stdout or "").strip()
+    if not key:
+        raise RuntimeError("Synnax Desktop's key program printed no API key: open Synnax Desktop, log in, "
+                           "and try again")
+    return key
 
 
 def reachable(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -204,8 +248,8 @@ def explain_connect_error(err: BaseException, cfg, client: str, host: str | None
     refused = any(c.__name__ == "AuthError" for c in type(err).__mro__) or any(
         w in raw.lower() for w in ("credential", "password", "username", "unauthorized", "authenticat"))
     if cfg.desktop and refused:
-        return ("Synnax Desktop's Core turned down the API key in its connection file. Open Synnax Desktop "
-                f"(it writes a fresh file) and try again; Reset key in Connect from code also changes it ({raw})")
+        return ("Synnax Desktop's Core turned down the API key it shared. Open Synnax Desktop "
+                f"(it shares a fresh key) and try again; Reset key in Connect from code also changes it ({raw})")
     core = core_version(host, port, cfg.secure and not cfg.desktop)
     if core is None:
         if "Method Not Allowed" in raw or "404" in raw:
@@ -285,15 +329,16 @@ class SynnaxConfig:
             raise ValueError(f"unknown synnax settings: {', '.join(d)}")
         return cls(**known)
 
-    def address(self) -> tuple[str, int, bool, str]:
-        """(host, port, secure, api_key) to connect to now; with ``desktop``, what Synnax Desktop shares."""
+    def address(self) -> tuple[str, int, bool, str, str]:
+        """(host, port, secure, api_key, ca_cert) to connect to now; with ``desktop``, what Synnax Desktop shares."""
         if not self.desktop:
-            return self.host, int(self.port), self.secure, ""
-        d = desktop_options()
+            return self.host, int(self.port), self.secure, "", ""
+        d = desktop_options(key=False)
         if not reachable(d["host"], d["port"]):
             raise RuntimeError(f"Synnax Desktop isn't running (its Core listens on {d['host']}:{d['port']} while it "
                                "runs): open it and wait for the workspace, then try again")
-        return d["host"], d["port"], d["secure"], d["api_key"]
+        key = d["api_key"] or desktop_key(d["api_key_helper"])  # the keychain only once the Core is up
+        return d["host"], d["port"], d["secure"], key, d["ca_cert"]
 
     def to_dict(self) -> dict:
         """The settings that differ from the defaults, as a ``synnax:`` section holds them."""
@@ -345,15 +390,16 @@ class SynnaxConfig:
 _KEY_LOCK = threading.Lock()
 
 
-def _connect_with_key(sy, host: str, port: int, secure: bool, key: str):
+def _connect_with_key(sy, host: str, port: int, secure: bool, key: str, ca_cert: str = ""):
     """A client logged in with an API key (Synnax Desktop's).
 
     Clients after 0.60.1 take ``api_key``. 0.60.x clients log in only with a password, so
     for them the client's auth is given a subclass that presents the key instead, with
     the same session request newer clients send (a proof with ``method: api_key``).
     """
+    tls = {"ca_cert": ca_cert} if ca_cert else {}  # a CA Desktop names; clients before 0.60 have no ca_cert
     try:
-        return sy.Synnax(host=host, port=port, secure=secure, api_key=key)
+        return sy.Synnax(host=host, port=port, secure=secure, api_key=key, **tls)
     except TypeError as e:
         if "api_key" not in str(e):
             raise
@@ -393,13 +439,13 @@ class SynnaxLink:
         try:
             import synnax as sy
         except ImportError as e:  # pragma: no cover - depends on the environment
-            raise RuntimeError("the Synnax driver needs the synnax package (Python 3.12+): "
+            raise RuntimeError("the Synnax driver needs the synnax package (Python 3.12+; 3.13 for 0.62+): "
                                "pip install owlfluids[synnax]") from e
         self.sy = sy
-        host, port, secure, key = cfg.address()
+        host, port, secure, key, ca_cert = cfg.address()
         try:
             if key:
-                self.client = _connect_with_key(sy, host, port, secure, key)
+                self.client = _connect_with_key(sy, host, port, secure, key, ca_cert)
             else:
                 self.client = sy.Synnax(host=host, port=port, username=cfg.username, password=cfg.password,
                                         secure=secure)
